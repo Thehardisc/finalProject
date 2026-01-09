@@ -1,0 +1,134 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - emotion_net
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: emotion_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - emotion_net
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U user -d emotion_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ingestion_service:
+    build:
+      context: .
+      dockerfile: ingestion_service/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+  preprocessing_service:
+    build:
+      context: .
+      dockerfile: preprocessing_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+  emotion_analysis_service:
+    build:
+      context: .
+      dockerfile: emotion_analysis_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+  aggregation_service:
+    build:
+      context: .
+      dockerfile: aggregation_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+  persistence_service:
+    build:
+      context: .
+      dockerfile: persistence_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      DB_HOST: db
+
+  api_service:
+    build:
+      context: .
+      dockerfile: api_service/Dockerfile
+    ports:
+      - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+
+  frontend_service:
+    build:
+      context: ./frontend_service
+    ports:
+      - "5173:80"
+    depends_on:
+      - api_service
+    networks:
+      - emotion_net
+
+networks:
+  emotion_net:
+    driver: bridge
+
+volumes:
+  postgres_data:

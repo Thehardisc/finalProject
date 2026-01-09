@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Emotion Dashboard</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            padding: 20px;
+        }
+
+        .card {
+            border: 1px solid #ccc;
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 8px;
+        }
+
+        .mood-Ecstatic {
+            color: #006400;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+
+        .mood-Positive {
+            color: green;
+            font-weight: bold;
+        }
+
+        .mood-Slightly-Positive {
+            color: #90EE90;
+            font-weight: bold;
+        }
+
+        .mood-Neutral {
+            color: gray;
+            font-weight: bold;
+        }
+
+        .mood-Slightly-Negative {
+            color: #F08080;
+            font-weight: bold;
+        }
+
+        .mood-Negative {
+            color: red;
+            font-weight: bold;
+        }
+
+        .mood-Hostile {
+            color: #8B0000;
+            font-weight: bold;
+            font-size: 1.2em;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Conversation Emotion Monitor</h1>
+
+    <div class="card">
+        <h3>Input Message</h3>
+        <input type="text" id="convIdInput" placeholder="Conversation ID" value="conv-1">
+        <br><br>
+        <textarea id="messageInput" placeholder="Type a message..." rows="3" style="width: 100%"></textarea>
+        <br><br>
+        <button onclick="sendMessage()">Send Message</button>
+    </div>
+
+    <div class="card">
+        <h3>Live State</h3>
+        <div id="stateDisplay">Loading...</div>
+        <button onclick="fetchState()">Refresh State</button>
+    </div>
+
+    <script>
+        const INGESTION_URL = "http://localhost:8000/messages"; // This assumes running locally or exposed port. 
+        // In docker network, browser can't access container names. We map ports to localhost.
+        // Ingestion mapped to 8000. API mapped to 8001 (we will configure).
+
+        async function sendMessage() {
+            const convId = document.getElementById('convIdInput').value;
+            const text = document.getElementById('messageInput').value;
+            const userId = "user-1";
+
+            try {
+                const response = await fetch('http://localhost:8000/messages', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        conversation_id: convId,
+                        user_id: userId,
+                        text: text
+                    })
+                });
+                const res = await response.json();
+                console.log(res);
+                document.getElementById('messageInput').value = '';
+                setTimeout(fetchState, 1000); // Wait a bit for processing
+            } catch (e) {
+                alert("Error sending message: " + e);
+            }
+        }
+
+        async function fetchState() {
+            const convId = document.getElementById('convIdInput').value;
+            try {
+                // We are serving this HTML from the API service, so relative path works if proxying,
+                // but direct fetch to API port 8001
+                const response = await fetch(`http://localhost:8001/conversation/${convId}/state`);
+                if (response.ok) {
+                    const data = await response.json();
+                    let html = `
+                        <p><strong>Message Count:</strong> ${data.message_count || 0}</p>
+                        <p><strong>Overall Mood:</strong> <span class="mood-${data.overall_mood.replace(' ', '-') || 'Unknown'}">${data.overall_mood || 'Unknown'}</span></p>
+                        <p><strong>Dominant Emotion (BERT):</strong> ${data.dominant_emotion || 'None'} (${(parseFloat(data.dominant_emotion_score || 0) * 100).toFixed(1)}%)</p>
+                        <p><strong>Avg Valence:</strong> ${parseFloat(data.average_valence || 0).toFixed(4)}</p>
+                        <p><strong>Last Updated:</strong> ${new Date(parseFloat(data.last_updated) * 1000).toLocaleString()}</p>
+                    `;
+                    document.getElementById('stateDisplay').innerHTML = html;
+                } else {
+                    document.getElementById('stateDisplay').innerText = "Conversation not found or errored.";
+                }
+            } catch (e) {
+                document.getElementById('stateDisplay').innerText = "Error fetching state: " + e;
+            }
+        }
+    </script>
+</body>
+
+</html>
