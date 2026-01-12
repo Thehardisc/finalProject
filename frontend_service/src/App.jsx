@@ -41,7 +41,8 @@ function App() {
                     ...msg,
                     user_id: msg.sender_id,
                     emotions: typeof msg.emotions === 'string' ? JSON.parse(msg.emotions) : msg.emotions,
-                    reasoning: msg.reasoning ? (typeof msg.reasoning === 'string' ? JSON.parse(msg.reasoning) : msg.reasoning) : null
+                    reasoning: msg.reasoning ? (typeof msg.reasoning === 'string' ? JSON.parse(msg.reasoning) : msg.reasoning) : null,
+                    pipeline_log: msg.pipeline_log ? (typeof msg.pipeline_log === 'string' ? JSON.parse(msg.pipeline_log) : msg.pipeline_log) : null
                 }));
 
                 setHistory(messages.reverse());

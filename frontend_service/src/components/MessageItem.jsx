@@ -12,6 +12,7 @@ const EmotionBar = ({ label, score, color }) => (
 );
 
 const MessageItem = ({ message, isOwn }) => {
+    const [showLog, setShowLog] = useState(false);
     const [expanded, setExpanded] = useState(false);
 
     // Parse emotions
@@ -136,7 +137,48 @@ const MessageItem = ({ message, isOwn }) => {
                                 <span>💡</span> {message.reasoning.type}
                             </div>
                         )}
+
+                        {/* Debug Log Button */}
+                        {message.pipeline_log && (
+                            <button
+                                onClick={() => setShowLog(!showLog)}
+                                style={{
+                                    fontSize: '0.75rem',
+                                    padding: '2px 6px',
+                                    borderRadius: '12px',
+                                    background: showLog ? 'rgba(255, 255, 255, 0.2)' : 'transparent',
+                                    color: 'rgba(255,255,255,0.5)',
+                                    border: '1px solid rgba(255,255,255,0.2)',
+                                    cursor: 'pointer',
+                                    marginLeft: 'auto'
+                                }}>
+                                📜 Log
+                            </button>
+                        )}
                     </div>
+
+                    {/* Expanded Debug View */}
+                    {showLog && message.pipeline_log && (
+                        <div style={{
+                            marginTop: '0.5rem',
+                            padding: '0.5rem',
+                            background: 'rgba(0,0,0,0.3)',
+                            borderRadius: '8px',
+                            fontSize: '0.7rem',
+                            fontFamily: 'monospace',
+                            color: '#ccc',
+                            whiteSpace: 'pre-wrap'
+                        }}>
+                            <div style={{ fontWeight: 'bold', color: '#fff' }}>INPUTS:</div>
+                            <div>Raw: {message.pipeline_log.inputs.raw}</div>
+                            <div>Demojized: {message.pipeline_log.inputs.demojized}</div>
+
+                            <div style={{ fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>MODELS:</div>
+                            <div>VADER: {JSON.stringify(message.pipeline_log.models.vader, null, 1)}</div>
+                            <div>GoEmotions: {JSON.stringify(message.pipeline_log.models.goemotions_final, null, 1)}</div>
+                            <div>Basic BERT: {JSON.stringify(message.pipeline_log.models.bert_basic, null, 1)}</div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Integrated Analysis Section (Collapsible?) - No glass panel, just darker bg */}

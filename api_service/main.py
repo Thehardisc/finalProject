@@ -66,7 +66,8 @@ async def get_conversation_messages(conversation_id: str, limit: int = 50):
         # Fetch messages with their latest analysis
         # We join messages with emotion_analysis
         query = """
-            SELECT m.message_id as id, m.text as content, m.timestamp, m.user_id as sender_id, a.emotions_json as emotions
+            SELECT m.message_id as id, m.text as content, m.timestamp, m.user_id as sender_id, 
+                   a.emotions_json as emotions, a.reasoning_json as reasoning, a.pipeline_log_json as pipeline_log
             FROM messages m
             LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
             WHERE m.conversation_id = $1

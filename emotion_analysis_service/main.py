@@ -9,6 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from shared.utils.redis_client import RedisClient
 from emotion_analysis_service.analyzers.vader_analyzer import VaderAnalyzer
 from emotion_analysis_service.analyzers.go_emotions_analyzer import GoEmotionsAnalyzer
+from emotion_analysis_service.analyzers.bert_basic_analyzer import BasicBertAnalyzer
 from emotion_analysis_service.analyzers.sentiment_analyzer import SentimentAnalyzer
 from emotion_analysis_service.analyzers.rule_analyzer import RuleBasedAnalyzer
 
@@ -19,7 +20,8 @@ CONSUMER_NAME = "worker_1"
 OUTPUT_STREAM = "emotion_stream"
 
 vader = VaderAnalyzer()
-bert = GoEmotionsAnalyzer()
+go_emotions = GoEmotionsAnalyzer()
+basic_bert = BasicBertAnalyzer()
 sentiment = SentimentAnalyzer()
 rules = RuleBasedAnalyzer()
 
@@ -67,8 +69,12 @@ async def main():
                         vader_scores = vader.analyze(text_raw)
                         
                         # BERT models (GoEmotions, Sentiment) prefer text-aliases
-                        # BERT models (GoEmotions, Sentiment) prefer text-aliases
-                        bert_scores = bert.analyze(text_demojized)
+                        # GoEmotions (28 labels)
+                        go_scores = go_emotions.analyze(text_demojized)
+                        
+                        # Basic BERT (7 labels)
+                        basic_bert_scores = basic_bert.analyze(text_demojized)
+                        
                         sentiment_scores = sentiment.analyze(text_demojized)
                         
                         # --- CONTEXTUAL CONFLICT RESOLUTION (The "Fusion" Layer) ---
@@ -146,18 +152,54 @@ async def main():
                                 
                             return output, reasoning
 
-                        bert_scores, resolution_reasoning = resolve_context_conflict(bert_scores, vader_scores, text_demojized)
+                        # Apply resolution to GoEmotions mainly, as that's our detailed map
+                        go_scores, resolution_reasoning = resolve_context_conflict(go_scores, vader_scores, text_demojized)
+                        
+                        # Note: We aren't applying conflict resolution to 'basic_bert' yet, but we could.
+                        # For now, let's assume GoEmotions is the 'smart' one we adjust.
+                        
                         # -----------------------
-                        sentiment_scores = sentiment.analyze(text_demojized)
                         
                         rule_scores = rules.analyze(text_raw, original_text=original_text)
                         
                         # Merge Results
-                        combined_emotions = {**bert_scores, **sentiment_scores, **rule_scores} # We used updated bert_scores
+                        # We merge basic_bert in. If keys overlap (e.g. 'joy'), we could average them.
+                        # For simplicity in this step, we just unpack them. unique keys will be added, duplicates overwritten by the last one.
+                        # To preserve both, we might want to average.
+                        
+                        combined_emotions = go_scores.copy()
+                        for k, v in basic_bert_scores.items():
+                            if k in combined_emotions:
+                                combined_emotions[k] = (combined_emotions[k] + v) / 2 # Consensus averaging
+                            else:
+                                combined_emotions[k] = v
+                                
+                        combined_emotions.update(sentiment_scores)
+                        combined_emotions.update(rule_scores)
+                        
+                        # --- DEBUG / LOGGING METADATA ---
+                        # Capture the full lifecycle of the message for the frontend "Log" view
+                        pipeline_log = {
+                            "inputs": {
+                                "raw": text_raw,
+                                "demojized": text_demojized,
+                                "original": original_text
+                            },
+                            "models": {
+                                "vader": vader_scores, # Raw VADER output
+                                "goemotions_initial": go_emotions.analyze(text_demojized), # capture raw state 
+                                "goemotions_final": go_scores,
+                                "bert_basic": basic_bert_scores,
+                                "sentiment": sentiment_scores,
+                                "rules": rule_scores
+                            },
+                            "context_resolution": resolution_reasoning
+                        }
                         
                         # Prepare output event
                         output_event = data.copy()
                         output_event["emotions"] = json.dumps(combined_emotions)
+                        output_event["pipeline_log"] = json.dumps(pipeline_log)
                         if resolution_reasoning:
                             output_event["reasoning"] = json.dumps(resolution_reasoning)
                         
