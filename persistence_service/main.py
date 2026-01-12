@@ -27,6 +27,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # We wait for DB to be ready in docker-compose, but retries here are good.
 def init_db():
     try:
+        # Run blind migrations first to ensure schema matches code
+        run_migrations()
         Base.metadata.create_all(bind=engine)
         print("Database tables created.")
     except Exception as e:
@@ -57,9 +59,27 @@ async def process_emotion_event(session, data):
     # We store the analysis result
     analysis = EmotionAnalysis(
         message_id=data.get("message_id"),
-        emotions_json=data.get("emotions", "{}")
+        emotions_json=data.get("emotions", "{}"),
+        reasoning_json=data.get("reasoning"),
+        pipeline_log_json=data.get("pipeline_log")
     )
     session.add(analysis)
+
+# "Poor Man's Migration" to ensure columns exist without wiping DB
+def run_migrations():
+    try:
+        with engine.connect() as conn:
+            from sqlalchemy import text
+            conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS reasoning_json TEXT;"))
+            conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS pipeline_log_json TEXT;"))
+            # Depending on sqlalchemy version / driver, we might need to commit
+            try:
+                conn.commit()
+            except:
+                pass # Auto-commit in some drivers
+            print("Transformations/Migrations applied successfully.")
+    except Exception as e:
+        print(f"Migration / Column addition warning: {e}")
 
 async def process_state_event(session, data):
     # Update conversation state
