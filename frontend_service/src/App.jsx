@@ -4,6 +4,7 @@ import EmotionRadarChart from './components/EmotionRadarChart';
 import MessageItem from './components/MessageItem';
 import SystemLog from './components/SystemLog';
 import Modal from './components/Modal';
+import EmojiPicker from 'emoji-picker-react';
 
 const API_URL = 'http://localhost:8001';
 
@@ -15,6 +16,7 @@ function App() {
     const [history, setHistory] = useState([]);
     const [logs, setLogs] = useState([]); // System logs
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
     const scrollContainerRef = useRef(null);
     const bottomRef = useRef(null);
@@ -38,7 +40,8 @@ function App() {
                 const messages = response.data.map(msg => ({
                     ...msg,
                     user_id: msg.sender_id,
-                    emotions: typeof msg.emotions === 'string' ? JSON.parse(msg.emotions) : msg.emotions
+                    emotions: typeof msg.emotions === 'string' ? JSON.parse(msg.emotions) : msg.emotions,
+                    reasoning: msg.reasoning ? (typeof msg.reasoning === 'string' ? JSON.parse(msg.reasoning) : msg.reasoning) : null
                 }));
 
                 setHistory(messages.reverse());
@@ -188,7 +191,39 @@ function App() {
 
 
                 <div style={{ padding: '2rem', flexShrink: 0, borderTop: '1px solid #27272a', background: '#09090b', zIndex: 20 }}>
-                    <form onSubmit={sendMessage} style={{ display: 'flex', gap: '1rem', maxWidth: '900px', margin: '0 auto' }}>
+                    <form onSubmit={sendMessage} style={{ display: 'flex', gap: '1rem', maxWidth: '900px', margin: '0 auto', position: 'relative' }}>
+
+                        <div style={{ display: 'flex', alignItems: 'center' }}>
+                            <button
+                                type="button"
+                                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                                style={{
+                                    background: 'transparent',
+                                    border: 'none',
+                                    fontSize: '1.5rem',
+                                    cursor: 'pointer',
+                                    padding: '0 0.5rem',
+                                    filter: 'grayscale(100%) brightness(150%)',
+                                    transition: 'filter 0.2s'
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.filter = 'none'}
+                                onMouseOut={(e) => e.currentTarget.style.filter = 'grayscale(100%) brightness(150%)'}
+                            >
+                                😊
+                            </button>
+
+                            {showEmojiPicker && (
+                                <div style={{ position: 'absolute', bottom: '80px', left: 0, zIndex: 100 }}>
+                                    <EmojiPicker
+                                        theme="dark"
+                                        onEmojiClick={(emojiData) => {
+                                            setMessage(prev => prev + emojiData.emoji);
+                                        }}
+                                    />
+                                </div>
+                            )}
+                        </div>
+
                         <input
                             type="text"
                             placeholder="Enter command or message..."

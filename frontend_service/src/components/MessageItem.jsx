@@ -92,6 +92,51 @@ const MessageItem = ({ message, isOwn }) => {
                             {isPending && <span style={{ animation: 'pulse 1.5s infinite' }}>⌛ Analyzing...</span>}
                         </div>
                     </div>
+
+                    {/* Emotion Badge */}
+                    <div style={{
+                        marginTop: '0.5rem',
+                        display: 'flex',
+                        gap: '0.5rem',
+                        flexWrap: 'wrap'
+                    }}>
+                        {Object.entries(message.emotions || {})
+                            .filter(([k, v]) => v > 0.4 && !k.startsWith('vader_') && !k.startsWith('sentiment_') && !k.startsWith('emphasis_'))
+                            .sort(([, a], [, b]) => b - a)
+                            .slice(0, 3)
+                            .map(([emotion, score]) => (
+                                <div key={emotion} style={{
+                                    fontSize: '0.75rem',
+                                    padding: '2px 8px',
+                                    borderRadius: '12px',
+                                    background: 'rgba(255,255,255,0.1)',
+                                    color: 'rgba(255,255,255,0.8)',
+                                    border: '1px solid rgba(255,255,255,0.1)'
+                                }}>
+                                    {emotion} {Math.round(score * 100)}%
+                                </div>
+                            ))}
+
+                        {/* Reasoning Badge */}
+                        {message.reasoning && (
+                            <div
+                                title={`${message.reasoning.type}: ${message.reasoning.details}\nAction: ${message.reasoning.action}`}
+                                style={{
+                                    fontSize: '0.75rem',
+                                    padding: '2px 8px',
+                                    borderRadius: '12px',
+                                    background: 'rgba(124, 58, 237, 0.2)', // Purple tint
+                                    color: '#a78bfa',
+                                    border: '1px solid rgba(124, 58, 237, 0.4)',
+                                    cursor: 'help',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                }}>
+                                <span>💡</span> {message.reasoning.type}
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* Integrated Analysis Section (Collapsible?) - No glass panel, just darker bg */}

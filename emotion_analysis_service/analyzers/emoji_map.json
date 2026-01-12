@@ -1,0 +1,168 @@
+{
+    "keywords": {
+        "love": {
+            "love": 0.6,
+            "caring": 0.5
+        },
+        "heart": {
+            "love": 0.6,
+            "caring": 0.4
+        },
+        "kiss": {
+            "love": 0.5,
+            "admiration": 0.3
+        },
+        "romance": {
+            "love": 0.7
+        },
+        "joy": {
+            "joy": 0.6,
+            "optimism": 0.4
+        },
+        "smile": {
+            "joy": 0.4,
+            "approval": 0.3
+        },
+        "happy": {
+            "joy": 0.6
+        },
+        "laugh": {
+            "amusement": 0.7,
+            "joy": 0.5
+        },
+        "rofl": {
+            "amusement": 0.8
+        },
+        "sad": {
+            "sadness": 0.6,
+            "remorse": 0.3
+        },
+        "cry": {
+            "sadness": 0.7,
+            "grief": 0.4
+        },
+        "sob": {
+            "sadness": 0.8,
+            "grief": 0.5
+        },
+        "tear": {
+            "sadness": 0.5
+        },
+        "broken_heart": {
+            "sadness": 0.7,
+            "remorse": 0.3
+        },
+        "fear": {
+            "fear": 0.7,
+            "nervousness": 0.5
+        },
+        "scared": {
+            "fear": 0.7,
+            "nervousness": 0.5
+        },
+        "scream": {
+            "fear": 0.8,
+            "surprise": 0.4
+        },
+        "terror": {
+            "fear": 0.9
+        },
+        "anger": {
+            "anger": 0.7,
+            "annoyance": 0.5
+        },
+        "rage": {
+            "anger": 0.9
+        },
+        "mad": {
+            "anger": 0.6
+        },
+        "pout": {
+            "annoyance": 0.5
+        },
+        "surprised": {
+            "surprise": 0.6,
+            "excitement": 0.3
+        },
+        "shock": {
+            "surprise": 0.7,
+            "confusion": 0.3
+        },
+        "wow": {
+            "surprise": 0.6,
+            "admiration": 0.4
+        },
+        "exploding": {
+            "surprise": 0.8,
+            "realization": 0.5
+        },
+        "confused": {
+            "confusion": 0.7
+        },
+        "question": {
+            "confusion": 0.5,
+            "curiosity": 0.3
+        },
+        "doubt": {
+            "confusion": 0.5
+        },
+        "curious": {
+            "curiosity": 0.7
+        },
+        "think": {
+            "curiosity": 0.5,
+            "realization": 0.2
+        },
+        "wonder": {
+            "curiosity": 0.6
+        },
+        "chin": {
+            "curiosity": 0.4
+        },
+        "fire": {
+            "excitement": 0.6,
+            "admiration": 0.3
+        },
+        "lit": {
+            "excitement": 0.5,
+            "admiration": 0.3
+        },
+        "party": {
+            "excitement": 0.7,
+            "joy": 0.5
+        },
+        "celebrat": {
+            "excitement": 0.6,
+            "joy": 0.5
+        },
+        "clap": {
+            "approval": 0.6,
+            "admiration": 0.4
+        },
+        "thumbs_up": {
+            "approval": 0.7,
+            "agreement": 0.5
+        },
+        "ok": {
+            "approval": 0.5,
+            "agreement": 0.5
+        },
+        "check": {
+            "approval": 0.5
+        },
+        "pray": {
+            "gratitude": 0.6,
+            "optimism": 0.3
+        },
+        "please": {
+            "desire": 0.5
+        },
+        "sweat": {
+            "nervousness": 0.5,
+            "relief": 0.3
+        },
+        "relief": {
+            "relief": 0.7
+        }
+    }
+}
