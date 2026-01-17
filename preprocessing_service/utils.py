@@ -14,7 +14,9 @@ def clean_text(text: str) -> str:
 def demojize_text(text: str) -> str:
     # Convert emojis to text, e.g. 👍 -> :thumbs_up:
     if emoji:
-        return emoji.demojize(text)
+        # Convert to text and make it natural language (remove colons, replace underscores)
+        d = emoji.demojize(text)
+        return d.replace(':', ' ').replace('_', ' ').strip()
     return text
 
 def preprocess_message(text: str) -> str:

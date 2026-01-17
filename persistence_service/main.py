@@ -27,9 +27,9 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # We wait for DB to be ready in docker-compose, but retries here are good.
 def init_db():
     try:
-        # Run blind migrations first to ensure schema matches code
-        run_migrations()
+        # ensure schema matches code
         Base.metadata.create_all(bind=engine)
+        run_migrations()
         print("Database tables created.")
     except Exception as e:
         print(f"Error creating tables: {e}")
