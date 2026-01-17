@@ -90,18 +90,19 @@ async def update_conversation_state(conversation_id: str, new_emotions: dict, r,
     # Using VADER compound score as valence
     new_valence = new_emotions.get("vader_compound", 0.0)
     
-    # Specific emotions from BERT
-    # We will simply store the latest detected emotion for now, or averaging could be done
-    # Keys: joy, love, surprise, anger, sadness, fear
-    latest_emotions = {k: v for k, v in new_emotions.items() if k not in ["vader_neg", "vader_neu", "vader_pos", "vader_compound"]}
+    # Use dominant emotion from Central Responder if available
+    dominant_emotion = new_emotions.get("dominant_emotion")
+    dominant_score = 1.0 # If we trust the central responder, we can treat it as high confidence, or extract score from map
     
-    # Determine dominant specific emotion
-    dominant_emotion = "None"
-    dominant_score = 0.0
-    for emo, score in latest_emotions.items():
-        if score > dominant_score:
-            dominant_score = score
-            dominant_emotion = emo
+    if not dominant_emotion:
+        # Fallback to old logic if field missing
+        latest_emotions = {k: v for k, v in new_emotions.items() if k not in ["vader_neg", "vader_neu", "vader_pos", "vader_compound", "dominant_emotion"]}
+        dominant_emotion = "None"
+        dominant_score = 0.0
+        for emo, score in latest_emotions.items():
+            if score > dominant_score:
+                dominant_score = score
+                dominant_emotion = emo
             
     # APPLY OVERRIDE
     if override_meaning:
@@ -186,13 +187,26 @@ async def main():
                     for message_id, data in msgs:
                         # Process message
                         conversation_id = data.get("conversation_id")
-                        emotions_json = data.get("emotions", "{}")
-                        emotions = json.loads(emotions_json)
-                        
-                        print(f"Aggregating state for conversation {conversation_id}")
-                        
                         original_text = data.get("original_text", "")
-                        updated_state = await update_conversation_state(conversation_id, new_emotions=emotions, r=r, original_text=original_text)
+                        
+                        # Data structure handling:
+                        # Central Responder sends: 
+                        # emotions: JSON_STRING (map)
+                        # dominant_emotion: STRING
+                        
+                        emotions_json = data.get("emotions", "{}")
+                        try:
+                            emotions_map = json.loads(emotions_json)
+                        except:
+                            emotions_map = {}
+                            
+                        # Add dominant_emotion to the map so update_conversation_state can find it
+                        dom_emo = data.get("dominant_emotion")
+                        if dom_emo:
+                            emotions_map["dominant_emotion"] = dom_emo
+                            
+                        print(f"Aggregating state for conversation {conversation_id}")
+                        updated_state = await update_conversation_state(conversation_id, new_emotions=emotions_map, r=r, original_text=original_text)
                         
                         # Prepare output event
                         output_event = data.copy()
