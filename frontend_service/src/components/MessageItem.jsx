@@ -12,6 +12,7 @@ const EmotionBar = ({ label, score, color }) => (
 );
 
 const MessageItem = ({ message, isOwn }) => {
+    const [showLog, setShowLog] = useState(false);
     const [expanded, setExpanded] = useState(false);
 
     // Parse emotions
@@ -92,6 +93,92 @@ const MessageItem = ({ message, isOwn }) => {
                             {isPending && <span style={{ animation: 'pulse 1.5s infinite' }}>⌛ Analyzing...</span>}
                         </div>
                     </div>
+
+                    {/* Emotion Badge */}
+                    <div style={{
+                        marginTop: '0.5rem',
+                        display: 'flex',
+                        gap: '0.5rem',
+                        flexWrap: 'wrap'
+                    }}>
+                        {Object.entries(message.emotions || {})
+                            .filter(([k, v]) => v > 0.4 && !k.startsWith('vader_') && !k.startsWith('sentiment_') && !k.startsWith('emphasis_'))
+                            .sort(([, a], [, b]) => b - a)
+                            .slice(0, 3)
+                            .map(([emotion, score]) => (
+                                <div key={emotion} style={{
+                                    fontSize: '0.75rem',
+                                    padding: '2px 8px',
+                                    borderRadius: '12px',
+                                    background: 'rgba(255,255,255,0.1)',
+                                    color: 'rgba(255,255,255,0.8)',
+                                    border: '1px solid rgba(255,255,255,0.1)'
+                                }}>
+                                    {emotion} {Math.round(score * 100)}%
+                                </div>
+                            ))}
+
+                        {/* Reasoning Badge */}
+                        {message.reasoning && (
+                            <div
+                                title={`${message.reasoning.type}: ${message.reasoning.details}\nAction: ${message.reasoning.action}`}
+                                style={{
+                                    fontSize: '0.75rem',
+                                    padding: '2px 8px',
+                                    borderRadius: '12px',
+                                    background: 'rgba(124, 58, 237, 0.2)', // Purple tint
+                                    color: '#a78bfa',
+                                    border: '1px solid rgba(124, 58, 237, 0.4)',
+                                    cursor: 'help',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px'
+                                }}>
+                                <span>💡</span> {message.reasoning.type}
+                            </div>
+                        )}
+
+                        {/* Debug Log Button */}
+                        {message.pipeline_log && (
+                            <button
+                                onClick={() => setShowLog(!showLog)}
+                                style={{
+                                    fontSize: '0.75rem',
+                                    padding: '2px 6px',
+                                    borderRadius: '12px',
+                                    background: showLog ? 'rgba(255, 255, 255, 0.2)' : 'transparent',
+                                    color: 'rgba(255,255,255,0.5)',
+                                    border: '1px solid rgba(255,255,255,0.2)',
+                                    cursor: 'pointer',
+                                    marginLeft: 'auto'
+                                }}>
+                                📜 Log
+                            </button>
+                        )}
+                    </div>
+
+                    {/* Expanded Debug View */}
+                    {showLog && message.pipeline_log && (
+                        <div style={{
+                            marginTop: '0.5rem',
+                            padding: '0.5rem',
+                            background: 'rgba(0,0,0,0.3)',
+                            borderRadius: '8px',
+                            fontSize: '0.7rem',
+                            fontFamily: 'monospace',
+                            color: '#ccc',
+                            whiteSpace: 'pre-wrap'
+                        }}>
+                            <div style={{ fontWeight: 'bold', color: '#fff' }}>INPUTS:</div>
+                            <div>Raw: {message.pipeline_log.inputs.raw}</div>
+                            <div>Demojized: {message.pipeline_log.inputs.demojized}</div>
+
+                            <div style={{ fontWeight: 'bold', color: '#fff', marginTop: '4px' }}>MODELS:</div>
+                            <div>VADER: {JSON.stringify(message.pipeline_log.models.vader, null, 1)}</div>
+                            <div>GoEmotions: {JSON.stringify(message.pipeline_log.models.goemotions_final, null, 1)}</div>
+                            <div>Basic BERT: {JSON.stringify(message.pipeline_log.models.bert_basic, null, 1)}</div>
+                        </div>
+                    )}
                 </div>
 
                 {/* Integrated Analysis Section (Collapsible?) - No glass panel, just darker bg */}

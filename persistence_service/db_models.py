@@ -16,6 +16,8 @@ class EmotionAnalysis(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     message_id = Column(String, index=True)
     emotions_json = Column(Text)
+    reasoning_json = Column(Text, nullable=True) # For Explainability
+    pipeline_log_json = Column(Text, nullable=True) # For Debugging
 
 class ConversationState(Base):
     __tablename__ = 'conversation_states'

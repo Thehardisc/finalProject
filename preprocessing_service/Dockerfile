@@ -10,5 +10,7 @@ COPY shared /app/shared
 
 COPY preprocessing_service /app/preprocessing_service
 
+ENV PYTHONUNBUFFERED=1
+
 ENV PYTHONPATH=/app
 CMD ["python", "preprocessing_service/main.py"]

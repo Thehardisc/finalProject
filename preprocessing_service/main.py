@@ -7,7 +7,7 @@ import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
-from preprocessing_service.utils import preprocess_message
+from preprocessing_service.utils import clean_text, demojize_text
 
 redis_client = RedisClient()
 STREAM_KEY = "message_stream"
@@ -41,12 +41,18 @@ async def main():
                         print(f"Processing message {message_id}")
                         
                         original_text = data.get("text", "")
-                        processed_text = preprocess_message(original_text)
+                        
+                        # Generate Dual Payloads
+                        # 1. Raw (Cleaned + Emojis) -> For VADER
+                        processed_text = clean_text(original_text)
+                        
+                        # 2. Demojized (Cleaned + Text Emojis) -> For BERT/Sentiment
+                        processed_text_demojized = demojize_text(processed_text)
                         
                         # Prepare output event
-                        # We keep original metadata and add processed text
                         output_event = data.copy()
                         output_event["processed_text"] = processed_text
+                        output_event["processed_text_demojized"] = processed_text_demojized
                         output_event["original_text"] = original_text # Ensure we keep original
                         
                         # Publish to next stage
