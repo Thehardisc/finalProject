@@ -8,8 +8,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy shared code
 COPY shared/ /app/shared/
 
-# Copy service code
+# Copy service code (includes main.py, meta_learner.py, trainer.py, weights.json)
 COPY central_responder_service/ /app/central_responder_service/
+
+# Ensure models dir exists (will be overridden by Docker volume at runtime)
+RUN mkdir -p /app/models
+
 
 # Set Python path
 ENV PYTHONPATH=/app
