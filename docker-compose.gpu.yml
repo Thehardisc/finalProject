@@ -1,4 +1,7 @@
 # docker-compose.gpu.yml
+# This configuration enables hardware acceleration for neural services.
+# Supports NVIDIA (CUDA) and provides guidance for Apple Silicon (MPS).
+
 services:
   goemotions_service:
     deploy:
@@ -8,6 +11,10 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+      # For Apple Silicon (MPS): Docker currently doesn't support MPS passthrough to Linux containers.
+      # To use MPS, run the service natively or use 'device: cpu' with multiple threads.
 
   bert_service:
     deploy:
@@ -17,8 +24,11 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
 
   central_responder_service:
+    # Meta-learner is CPU-based (sklearn), but retraining might use GPU in the future.
     deploy:
       resources:
         reservations:
@@ -26,3 +36,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    environment:
+      - CUDA_VISIBLE_DEVICES=0
+
+# networks and volumes are inherited if used with main docker-compose.yml
+# Command: docker-compose -f docker-compose.yml -f docker-compose.gpu.yml up -d

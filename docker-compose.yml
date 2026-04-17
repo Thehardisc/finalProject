@@ -44,7 +44,12 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-secret-key}
+      RATE_LIMIT_MAX: 60
+      RATE_LIMIT_WINDOW: 60
 
   preprocessing_service:
     build:
@@ -57,6 +62,8 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
 
   vader_service:
@@ -71,6 +78,8 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
 
   goemotions_service:
@@ -84,6 +93,8 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
 
   emojinet_service:
@@ -97,6 +108,8 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
 
   bert_service:
@@ -110,6 +123,8 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
 
   central_responder_service:
@@ -123,13 +138,31 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       # ── Periodic retraining (background thread inside this container) ────
-      RETRAIN_INTERVAL_SECONDS: 600 # retrain every 10 minutes
+      RETRAIN_INTERVAL_SECONDS: 1800 # retrain every 30 minutes
       ACCURACY_GATE: 0.40 # min test accuracy to deploy a new model
-      MAX_SAMPLES: 10000 # GoEmotions samples per training run
+      MAX_SAMPLES: 2500 # Optimized for CPU-mode stability
     volumes:
       - ./central_responder_service/models:/app/models # use host directory directly
+
+  llm_reasoning_service:
+    build:
+      context: .
+      dockerfile: llm_reasoning_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+      LLM_PROVIDER: MOCK
 
   aggregation_service:
     build:
@@ -142,6 +175,8 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
 
   persistence_service:
@@ -157,6 +192,8 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       DB_HOST: db
 
@@ -172,7 +209,7 @@ services:
       db:
         condition: service_healthy
       central_responder_service:
-        condition: service_started
+        condition: service_healthy
       aggregation_service:
         condition: service_started
       persistence_service:
@@ -181,7 +218,11 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
       REDIS_PORT: 6379
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-secret-key}
+      RATE_LIMIT_MAX: 60
+      RATE_LIMIT_WINDOW: 60
 
   frontend_service:
     build:

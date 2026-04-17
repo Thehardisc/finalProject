@@ -5,12 +5,17 @@ import json
 import time
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from alembic.config import Config
+from alembic import command
 
 # Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
+from shared.utils.logger import get_logger
 from persistence_service.db_models import Base, Message, EmotionAnalysis, ConversationState
+
+logger = get_logger("persistence_service")
 
 # Database setup
 DB_USER = os.getenv("POSTGRES_USER", "user")
@@ -28,12 +33,29 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 # We wait for DB to be ready in docker-compose, but retries here are good.
 def init_db():
     try:
-        # ensure schema matches code
-        Base.metadata.create_all(bind=engine)
-        run_migrations()
-        print("Database tables created.")
+        # Run Alembic migrations automatically on start
+        alembic_cfg = Config("persistence_service/alembic.ini")
+        # Ensure we use absolute paths inside the container
+        alembic_cfg.set_main_option("script_location", "persistence_service/alembic")
+        # Ensure we use the correct credentials
+        alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Database migrations applied (Alembic).")
+        
+        # ── Self-Healing Layer (Safety check for missing columns) ────────────
+        # Sometimes Alembic migrations can get out of sync with existing volumes.
+        with engine.begin() as conn:
+            # 1. Fix missing ground_truth_emotion in emotion_analysis
+            conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS ground_truth_emotion VARCHAR(50);"))
+            # 2. Fix missing escalation_score in conversation_states
+            conn.execute(text("ALTER TABLE conversation_states ADD COLUMN IF NOT EXISTS escalation_score FLOAT DEFAULT 0.0;"))
+            logger.info("Self-healing schema check complete: Added missing columns if needed.")
+            
     except Exception as e:
-        print(f"Error creating tables: {e}")
+        logger.log_exception("CRITICAL DATABASE INITIALIZATION FAILURE", e)
+        # We allow continuation if it's a transient startup error, 
+        # but the failure is recorded with a full stack trace.
+        logger.warning("Attempting to continue despite migration error.")
 
 redis_client = RedisClient()
 
@@ -41,7 +63,8 @@ redis_client = RedisClient()
 STREAMS = {
     "message_stream": "persistence_group", # For raw messages
     "emotion_stream": "persistence_group", # For analysis results
-    "conversation_update_stream": "persistence_group" # For state updates
+    "conversation_update_stream": "persistence_group", # For state updates
+    "feedback_stream": "persistence_group" # For verified labels
 }
 CONSUMER_NAME = "worker_1"
 
@@ -66,34 +89,84 @@ async def process_emotion_event(session, data):
     )
     session.add(analysis)
 
-# "Poor Man's Migration" to ensure columns exist without wiping DB
-def run_migrations():
-    try:
-        with engine.connect() as conn:
-            from sqlalchemy import text
-            conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS reasoning_json TEXT;"))
-            conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS pipeline_log_json TEXT;"))
-            # Depending on sqlalchemy version / driver, we might need to commit
-            try:
-                conn.commit()
-            except:
-                pass # Auto-commit in some drivers
-            print("Transformations/Migrations applied successfully.")
-    except Exception as e:
-        print(f"Migration / Column addition warning: {e}")
-
 async def process_state_event(session, data):
     # Update conversation state
     conversation_id = data.get("conversation_id")
     state_json = data.get("conversation_state", "{}")
     state_obj = json.loads(state_json)
     
-    state_record = ConversationState(
-        conversation_id=conversation_id,
-        state_json=state_json,
-        last_updated=float(state_obj.get("last_updated", 0))
-    )
-    session.merge(state_record)
+    # Calculate velocity if we have enough history
+    escalation_score = calculate_sentiment_velocity(session, conversation_id)
+    
+    state_record = session.query(ConversationState).filter(ConversationState.conversation_id == conversation_id).first()
+    if not state_record:
+        state_record = ConversationState(conversation_id=conversation_id)
+        session.add(state_record)
+        
+    state_record.state_json = state_json
+    state_record.escalation_score = float(escalation_score)
+    state_record.last_updated = float(state_obj.get("last_updated", 0))
+    
+def calculate_sentiment_velocity(session, conversation_id: str, limit: int = 5) -> float:
+    """
+    Measures the 'slope' of emotional tension over the last N messages.
+    Returns a score from 0.0 to 1.0 (1.0 = rapid escalation toward anger/grief).
+    """
+    try:
+        # Get last N analysis records for this conversation
+        # We join with Message table to ensure correct temporal ordering
+        results = session.query(EmotionAnalysis.emotions_json)\
+            .join(Message, Message.message_id == EmotionAnalysis.message_id)\
+            .filter(Message.conversation_id == conversation_id)\
+            .order_by(Message.timestamp.desc())\
+            .limit(limit).all()
+        
+        if len(results) < 2:
+            return 0.0
+        
+        # Tension indices (Anger, Annoyance, Sadness, Grief, Disgust)
+        TENSION_LABELS = ['anger', 'annoyance', 'sadness', 'grief', 'disgust', 'fear']
+        
+        scores = []
+        for (json_str,) in reversed(results):
+            data = json.loads(json_str)
+            # Sum of negative/high-tension emotions
+            tension = sum(data.get(label, 0.0) for label in TENSION_LABELS)
+            scores.append(tension)
+            
+        # Calculate trend (simple slope proxy)
+        diffs = [scores[i] - scores[i-1] for i in range(1, len(scores))]
+        avg_velocity = sum(diffs) / len(diffs) if diffs else 0.0
+        
+        # Final escalation score: Current intensity + velocity bonus
+        final_score = scores[-1] + (avg_velocity * 0.5)
+        return max(0.0, min(1.0, final_score))
+    except Exception as e:
+        logger.warning(f"Velocity calc failure: {e}")
+        return 0.0
+ 
+async def process_feedback_event(session, data):
+    msg_id = data.get("message_id")
+    label = data.get("ground_truth_emotion")
+    
+    if msg_id and label:
+        # Find the existing analysis record
+        analysis = session.query(EmotionAnalysis).filter(EmotionAnalysis.message_id == msg_id).first()
+        if analysis:
+            analysis.ground_truth_emotion = label
+            analysis.is_verified = True
+            logger.info(f"Feedback applied to {msg_id}: Label={label}")
+        else:
+            # Create a placeholder analysis if none exists?
+            # Usually analysis exists if the pipeline finished, but safety first
+            new_analysis = EmotionAnalysis(
+                message_id=msg_id,
+                ground_truth_emotion=label,
+                is_verified=True,
+                emotions_json="{}"
+            )
+            session.add(new_analysis)
+            logger.info(f"New verified analysis created for {msg_id}: Label={label}")
 
 async def main():
     # Retry DB connection
@@ -102,7 +175,7 @@ async def main():
             init_db()
             break
         except Exception:
-            print("Waiting for DB...")
+            logger.info("Waiting for Database to be ready...")
             time.sleep(2)
             
     await redis_client.connect()
@@ -114,9 +187,9 @@ async def main():
             await r.xgroup_create(stream, group, mkstream=True)
         except Exception as e:
             if "BUSYGROUP" not in str(e):
-                print(f"Error creating group for {stream}: {e}")
+                logger.error(f"Error creating group for {stream}: {e}")
 
-    print("Persistence worker started...")
+    logger.info("Persistence worker started.")
     
     while True:
         try:
@@ -130,7 +203,7 @@ async def main():
                 try:
                     for stream, msgs in messages:
                         for message_id, data in msgs:
-                            print(f"Persisting data from {stream}")
+                            logger.debug(f"Persisting data from stream: {stream}")
                             
                             if stream == "message_stream":
                                 await process_message_event(session, data)
@@ -138,18 +211,22 @@ async def main():
                                 await process_emotion_event(session, data)
                             elif stream == "conversation_update_stream":
                                 await process_state_event(session, data)
+                            elif stream == "feedback_stream":
+                                await process_feedback_event(session, data)
                             
                             await r.xack(stream, "persistence_group", message_id)
                     
                     session.commit()
+                    elapsed = (time.time() - start_time) * 1000
+                    logger.info(f"Successfully persisted batch of {len(messages)} events in {elapsed:.2f}ms")
                 except Exception as e:
                     session.rollback()
-                    print(f"Error persisting batch: {e}")
+                    logger.log_exception("SQL TRANSACTION ROLLBACK", e)
                 finally:
                     session.close()
             
         except Exception as e:
-            print(f"Error in processing loop: {e}")
+            logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

@@ -10,7 +10,11 @@ echo "    [System]  Emotion Analysis System - Launcher"
 echo "=============================================================="
 echo ""
 
-# ── STEP 1: Detect Hardware ──────────────────────────────────────────────────
+# ── STEP 1: Load Environment ──────────────────────────────────────────────────
+# Extract API key for health checks
+API_KEY=$(grep "^INTERNAL_API_KEY=" .env | cut -d'=' -f2 | tr -d '"'\'' ')
+API_KEY=${API_KEY:-dev-secret-key}
+
 echo "[Search] Detecting host environment..."
 
 if command -v nvidia-smi &> /dev/null; then
@@ -75,7 +79,7 @@ check_service() {
     local attempt=0
 
     while [ $attempt -lt $max_retries ]; do
-        if curl -s --max-time 3 "$url" > /dev/null 2>&1; then
+        if curl -s --max-time 3 -H "X-API-Key: $API_KEY" "$url" > /dev/null 2>&1; then
             echo "   [OK] $name - responding"
             PASS=$((PASS + 1))
             return 0
@@ -121,12 +125,11 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# ── STEP 5: End-to-End Pipeline Test ─────────────────────────────────────────
-echo ""
 echo "[Test] Running end-to-end pipeline test..."
 
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/messages \
     -H "Content-Type: application/json" \
+    -H "X-API-Key: $API_KEY" \
     -d '{"conversation_id": "healthcheck", "user_id": "system", "text": "I am happy!"}' 2>/dev/null)
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
