@@ -1,0 +1,21 @@
+# Dependencies for running train_meta_learner.py offline (NOT inside Docker).
+# Run once on your local machine or a training machine.
+#
+# Install:
+#   pip install -r training/requirements.txt
+#
+# Then run:
+#   python training/train_meta_learner.py
+
+# Dataset loading
+datasets>=2.14.0
+
+# Model analyzers
+vaderSentiment>=3.3.2
+transformers>=4.35.0
+torch>=2.0.0          # CPU-only: pip install torch --index-url https://download.pytorch.org/whl/cpu
+emoji>=2.8.0
+
+# Meta-learner training
+scikit-learn>=1.3.0
+numpy>=1.24.0
