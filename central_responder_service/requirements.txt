@@ -1,1 +1,9 @@
 redis
+scikit-learn>=1.3.0
+numpy>=1.24.0
+# Training dependencies (used by trainer.py background thread)
+torch>=2.0.0
+transformers>=4.35.0
+vaderSentiment>=3.3.2
+emoji>=2.8.0
+datasets>=2.14.0

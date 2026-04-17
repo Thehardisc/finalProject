@@ -11,12 +11,15 @@ from transformers import pipeline
 
 class BasicBertAnalyzer:
     def __init__(self):
+        import torch
+        device = 0 if torch.cuda.is_available() else -1
         # Using a small, fast model for basic emotions (Ekman)
         # "j-hartmann/emotion-english-distilroberta-base" covers:
         # anger, disgust, fear, joy, neutral, sadness, surprise
         self.classifier = pipeline("text-classification", 
                                    model="j-hartmann/emotion-english-distilroberta-base", 
-                                   return_all_scores=True)
+                                   return_all_scores=True,
+                                   device=device)
     
     def analyze(self, text: str) -> dict:
         results = self.classifier(text)

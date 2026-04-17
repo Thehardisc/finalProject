@@ -2,38 +2,53 @@ import asyncio
 import sys
 import os
 import json
-import time
+
+# Meta-learner module (safe — returns None on any load failure)
+from meta_learner import (
+    load_meta_learner,
+    build_feature_vector,
+    predict_with_meta_learner,
+)
+
+# Periodic retraining daemon (runs as a background thread)
+from trainer import start_trainer_thread
 
 # Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 
-# Load Configuration
-WEIGHTS_PATH = os.path.join(os.path.dirname(__file__), 'weights.json')
-CONFIG = {}
-try:
-    with open(WEIGHTS_PATH, 'r') as f:
-        CONFIG = json.load(f)
-except Exception as e:
-    print(f"Error loading weights.json: {e}")
-    CONFIG = {
-        "models": {
-            "go_emotions": {"weight": 1.0},
-            "basic_bert": {"weight": 0.5},
-            "vader": {"weight": 0.3},
-            "emojinet": {"weight": 2.0}
-        },
-        "timeout_ms": 5000
-    }
-
 redis_client = RedisClient()
 INPUT_STREAM = "partial_analysis_stream"
 GROUP_NAME = "central_responder_group"
 CONSUMER_NAME = "responder_1"
 OUTPUT_STREAM = "emotion_stream"
-
 PENDING_KEY_PREFIX = "pending_aggregation:"
+
+AGGREGATION_TIMEOUT_MS = 5000
+
+# ── Meta-learner startup load ─────────────────────────────────────────────────
+# The trained .pkl from models/ is STRICTLY REQUIRED.
+# If missing, we crash immediately so the user knows they must run training.
+META_LEARNER = load_meta_learner()
+if META_LEARNER is None:
+    print("[CentralResponder] [CRITICAL] No meta_weights.pkl found! You MUST run the training script first.")
+    sys.exit(1)
+
+print("[CentralResponder] [OK] Running in META-LEARNER mode.")
+
+# ── Hot-reload callback ─────────────────────────────────────────────────
+# Called by the trainer thread after a successful deploy.
+# Swaps the in-memory model immediately — no container restart needed.
+def on_model_reload(new_model):
+    global META_LEARNER
+    META_LEARNER = new_model
+    print("[CentralResponder] [RELOAD] Meta-learner hot-reloaded in memory.")
+
+# ── Start periodic retraining thread ────────────────────────────────────
+start_trainer_thread(on_model_reload)
+print("[CentralResponder] [INFO] Background meta-learner retraining daemon is ACTIVATED with transient auto-garbage collection.")
+
 
 # All 27 GoEmotions labels
 EMOTION_LABELS = [
@@ -47,137 +62,56 @@ EMOTION_LABELS = [
 async def aggregate_and_publish(message_id, partial_results, r):
     print(f"Aggregating results for {message_id}...")
     
-    # Base structure
-    final_scores = {emo: 0.0 for emo in EMOTION_LABELS}
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
     
-    # 1. Weighted Average for Direct Hits
-    total_weights = {emo: 0.0 for emo in EMOTION_LABELS}
-    
+    # ── 1. Gather scores from analyzers ───────────────────────────────────────
     model_outputs = {}
-    
     for res in partial_results:
         model_name = res.get("model_name")
         scores = res.get("scores", {})
         model_outputs[model_name] = scores
-        
-        weight = CONFIG["models"].get(model_name, {}).get("weight", 0.0)
-        
-        # Apply Logic
-        if model_name == "vader":
-            # VADER doesn't map directly to 27 emotions usually.
-            # We keep it for Context Resolution and Logging.
-            pass
-        elif model_name == "basic_bert":
-            # Maps to 7 Ekman emotions.
-            # We map these to GoEmotions equivalents.
-            for emo, score in scores.items():
-                if emo in final_scores:
-                    final_scores[emo] += score * weight
-                    total_weights[emo] += weight
-        elif model_name == "go_emotions":
-            # Maps directly
-            for emo, score in scores.items():
-                if emo in final_scores:
-                    final_scores[emo] += score * weight
-                    total_weights[emo] += weight
-        elif model_name == "emojinet":
-            # EmojiNet uses compatible labels
-            for emo, score in scores.items():
-                if emo in final_scores:
-                    final_scores[emo] += score * weight
-                    total_weights[emo] += weight
 
-    # Normalize
-    for emo in final_scores:
-        if total_weights[emo] > 0:
-            final_scores[emo] /= total_weights[emo]
+    # ── 2. Meta-Learner Inference ─────────────────────────────────────────────
+    # The meta-learner is mandatory. It consumes all 4 model outputs and emits
+    # the dominant emotion + a full probability distribution over all 27 classes.
+    try:
+        fv = build_feature_vector(model_outputs)
+        dominant_emotion, meta_confidence, final_scores = predict_with_meta_learner(META_LEARNER, fv)
+        print(f"[MetaLearner] Prediction: '{dominant_emotion}' (confidence={meta_confidence:.3f})")
+    except Exception as e:
+        print(f"[MetaLearner] [WARN] Predict failed ({e}). Defaulting to neutral.")
+        dominant_emotion = "neutral"
+        meta_confidence = 0.0
+        final_scores = {emo: 0.0 for emo in EMOTION_LABELS}
 
-    # 2. Context Resolution (Sarcasm/Slang)
-    # Using logic ported from original service
+    # ── 3. Sarcasm / Conflict Check (Optional reasoning layer) ────────────────
     reasoning = None
-    vader_scores = model_outputs.get("vader", {})
-    vt = vader_scores.get("vader_compound", 0)
-    
-    # We need to recalculate emoji vector or pass it?
-    # For now, let's implement a simplified check using VADER vs Top Emotion Valence
-    # (Since we don't have the Emoji Map loaded here yet, we might want to move it to Shared or load it here)
-    # For MVP of this refactor, I will omit the detailed Emoji Map logic to avoid complexity explosion, 
-    # but I will keep the placeholder for where it would go.
+    vt = model_outputs.get("vader", {}).get("vader_compound", 0)
     
     if vt < -0.5 and final_scores.get('joy', 0) > 0.5:
-         # Potential Sarcasm (Negative text, Positive emotion detected)
          reasoning = {
              "type": "Conflict Detected",
-             "details": "VADER negative but Model positive",
+             "details": "VADER negative but MetaLearner predicts Joy",
              "action": "Reporting this discrepancy."
          }
 
-    # 2.5 Determine Dominant Emotion
-    # Helper to find max in dict
-    def get_max_score(score_dict):
-        max_k = "neutral"
-        max_v = 0.0
-        for k, v in score_dict.items():
-            if v > max_v:
-                max_v = v
-                max_k = k
-        return max_k, max_v
-
-    # Heuristic: Check non-neutral emotions first
-    non_neutral_scores = {k: v for k, v in final_scores.items() if k != "neutral"}
-    dom_k, dom_v = get_max_score(non_neutral_scores)
-    
-    # Threshold for accepting a non-neutral emotion over neutral
-    # If the strongest non-neutral emotion is very weak (e.g. < 0.15), we might fall back to neutral
-    # But user requested "I don't want to get neutral... I want from the info to get only one response"
-    # So we will be aggressive in picking a non-neutral one if it exists.
-    
-    if dom_v > 0.15:
-        dominant_emotion = dom_k
-    else:
-        # If everything is extremely low, check neutral
-        neutral_score = final_scores.get("neutral", 0.0)
-        if neutral_score > dom_v:
-            dominant_emotion = "neutral"
-        else:
-             # Even neutral is low? Just pick the max whatever it is.
-             dominant_emotion = dom_k
-
-    # [DEBUG] Print all model outputs to trace the decision
-    print(f"[DEBUG] Message {message_id} Model Outputs: {json.dumps(model_outputs)}")
-
-    # [SPECIALIST OVERRIDE]
-
-    # [SPECIALIST OVERRIDE]
-    # If EmojiNet is highly confident, trust it above all else.
-    # This fixes cases where short texts (just emojis) confuse BERT/GoEmotions.
-    if "emojinet" in model_outputs:
-        emoji_scores = model_outputs["emojinet"]
-        # Find max in EmojiNet
-        em_k, em_v = get_max_score(emoji_scores)
-        if em_k != "neutral" and em_v > 0.8:
-            print(f"Confidence Override: Trusting EmojiNet '{em_k}' ({em_v}) over Ensemble '{dominant_emotion}'")
-            dominant_emotion = em_k
-            # Boost the score of the winner to ensure visual clarity
-            final_scores[em_k] = max(final_scores.get(em_k, 0), em_v)
-
-    # 3. Construct Output
+    # ── 4. Construct Output ───────────────────────────────────────────────────
     pipeline_log = {
         "models": model_outputs,
         "aggregated": final_scores,
-        "dominant_selected": dominant_emotion
+        "dominant_selected": dominant_emotion,
+        "decision_mode": "meta-learner",
+        "meta_confidence": meta_confidence,
     }
     
-    # Inject VADER scores into the final payload so Aggregation Service can use them for Valence
+    # Inject VADER scores into the final payload for the Aggregation/Frontend service
     if "vader" in model_outputs:
         for k, v in model_outputs["vader"].items():
-             # We include all vader keys: vader_neg, vader_neu, vader_pos, vader_compound
              final_scores[k] = v
 
     output_event = original_data.copy()
     output_event["emotions"] = json.dumps(final_scores)
-    output_event["dominant_emotion"] = dominant_emotion # Explicit single winner
+    output_event["dominant_emotion"] = dominant_emotion 
     output_event["pipeline_log"] = json.dumps(pipeline_log)
     if reasoning:
         output_event["reasoning"] = json.dumps(reasoning)
@@ -207,29 +141,7 @@ async def main():
             
             if messages:
                 for stream, msgs in messages:
-                    for record_id, data in msgs:
-                        # Parse
-                        # Redis returns byte keys sometimes if not decoded, but our client handles decoding usually?
-                        # Our redis_client doesn't auto-decode dict values if they are complex stringified JSONs?
-                        # The 'publish_event' uses json.dumps. The stream read returns dict of strings.
-                        
-                        # Wait, publish_event sends a dict. xadd stores field-values.
-                        # data is {field: value}.
-                        # In 'publish_event' (shared/utils/redis_client.py), it likely breaks down dict to fields?
-                        # No, usually we store a single 'payload' or separate fields.
-                        
-                        # Let's assume data is usable.
-                        # In the services, I sent:
-                        # output_event = { "message_id": ..., "model_name": ..., "scores": ... }
-                        # redis_client.publish_event might flatten this?
-                        # If publish_event does hset/xadd style, nested dicts need json.dumps.
-                        # I should check 'shared/utils/redis_client.py' to be sure, but let's assume standard behavior.
-                        # I'll rely on the fact that I passed a dict.
-                        
-                        # The `publish_event` implementation in Step 17's context (emotion_analysis main.py line 207)
-                        # sends `output_event`.
-                        
-                        # I'll parse `scores` which might be a JSON string if it was serialised.
+                     for record_id, data in msgs:
                         msg_id = data.get("message_id")
                         model_name = data.get("model_name")
                         scores_raw = data.get("scores")
@@ -262,9 +174,8 @@ async def main():
                         pending_key = f"{PENDING_KEY_PREFIX}{msg_id}"
                         await r.hset(pending_key, model_name, json.dumps(full_packet))
                         
-                        # Check completeness
-                        # We need to know which models are required.
-                        expected_models = [k for k, v in CONFIG["models"].items() if v.get("required", True)]
+                        # We need to know which models are required before aggregating.
+                        expected_models = ["go_emotions", "basic_bert", "vader", "emojinet"]
                         
                         current_results = await r.hgetall(pending_key)
                         received_models = list(current_results.keys())
