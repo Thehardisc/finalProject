@@ -32,10 +32,10 @@ AGGREGATION_TIMEOUT_MS = 5000
 # If missing, we crash immediately so the user knows they must run training.
 META_LEARNER = load_meta_learner()
 if META_LEARNER is None:
-    print("[CentralResponder] ❌ CRITICAL: No meta_weights.pkl found! You MUST run the training script first.")
+    print("[CentralResponder] [CRITICAL] No meta_weights.pkl found! You MUST run the training script first.")
     sys.exit(1)
 
-print("[CentralResponder] ✅  Running in META-LEARNER mode.")
+print("[CentralResponder] [OK] Running in META-LEARNER mode.")
 
 # ── Hot-reload callback ─────────────────────────────────────────────────
 # Called by the trainer thread after a successful deploy.
@@ -43,11 +43,11 @@ print("[CentralResponder] ✅  Running in META-LEARNER mode.")
 def on_model_reload(new_model):
     global META_LEARNER
     META_LEARNER = new_model
-    print("[CentralResponder] 🔄 Meta-learner hot-reloaded in memory.")
+    print("[CentralResponder] [RELOAD] Meta-learner hot-reloaded in memory.")
 
 # ── Start periodic retraining thread ────────────────────────────────────
 start_trainer_thread(on_model_reload)
-print("[CentralResponder] ℹ️ Background meta-learner retraining daemon is ACTIVATED with transient auto-garbage collection.")
+print("[CentralResponder] [INFO] Background meta-learner retraining daemon is ACTIVATED with transient auto-garbage collection.")
 
 
 # All 27 GoEmotions labels
@@ -79,7 +79,7 @@ async def aggregate_and_publish(message_id, partial_results, r):
         dominant_emotion, meta_confidence, final_scores = predict_with_meta_learner(META_LEARNER, fv)
         print(f"[MetaLearner] Prediction: '{dominant_emotion}' (confidence={meta_confidence:.3f})")
     except Exception as e:
-        print(f"[MetaLearner] ⚠️ Predict failed ({e}). Defaulting to neutral.")
+        print(f"[MetaLearner] [WARN] Predict failed ({e}). Defaulting to neutral.")
         dominant_emotion = "neutral"
         meta_confidence = 0.0
         final_scores = {emo: 0.0 for emo in EMOTION_LABELS}

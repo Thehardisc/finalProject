@@ -53,42 +53,15 @@ manager = ConnectionManager()
 
 # --- Background Task for Redis Listener ---
 async def redis_listener():
+    """Listens to conversation_update_stream and broadcasts updates to WebSocket clients."""
     print("Starting Redis Listener for WebSockets...")
-    # We need a separate connection for blocking reads usually, 
-    # but our redis_client uses a pool so it might be okay.
-    # However, xread is blocking. It's safer to use a dedicated client or careful async.
-    # We will use the existing client but ensure we don't block other API calls if possible.
-    # Actually, asyncio architecture allows this.
-    
-    # We want to listen to the final output. 
-    # The 'aggregation_service' publishes to 'conversation_update_stream'
-    STREAM_KEY = "conversation_update_stream" 
-    # Also 'emotion_stream' from central responder if we want raw live updates?
-    # User UI shows "Live Analysis", so we might want the stream from Central Responder directly?
-    # The Aggregation Service output contains the state update.
-    # The Central Responder output contains the immediate analysis.
-    # Let's listen to 'emotion_stream' (from Central Responder) for live feedback
-    # AND 'conversation_update_stream' (from Aggregation) for vibe updates?
-    
-    # Let's listen to BOTH or merge them?
-    # For now, let's listen to 'emotion_stream' as that is the "Live" event.
-    # But wait, the frontend needs "Vibe" stats which come from Aggregation.
-    
-    # We will listen to 'conversation_update_stream'. 
-    # NOTE: The Central Responder pushes to 'emotion_stream', Aggregation reads 'emotion_stream' 
-    # and pushes to 'conversation_update_stream'. 
-    # So 'conversation_update_stream' happens AFTER aggregation.
-    # That event contains "conversation_state". Does it contain the raw analysis details too?
-    # In 'aggregation_service/main.py', output_event = data.copy() + conversation_state.
-    # So yes, it carries everything.
     
     r = redis_client.redis
+    STREAM_KEY = "conversation_update_stream"
     last_id = "$"
     
     while True:
         try:
-            # We use xread() here to just tail the stream
-            # xread returns [[stream_name, [[message_id, data], ...]]]
             response = await r.xread({STREAM_KEY: last_id}, count=1, block=100)
             
             if response:
@@ -96,8 +69,6 @@ async def redis_listener():
                     for message_id, data in messages:
                         last_id = message_id
                         
-                        # Parse data for frontend
-                        # data values are strings.
                         payload = {
                             "type": "analysis",
                             "data": {},
@@ -110,23 +81,10 @@ async def redis_listener():
                         
                         raw_text = data.get("original_text", "") or data.get("text", "")
                         
-                        # Pipeline Log has details
                         pipeline_log = json.loads(data.get("pipeline_log", "{}"))
-                        
-                        # Dominant
                         dom_emo = data.get("dominant_emotion", "Neutral")
-                        
-                        # Conversation State (Vibe)
                         conv_state = json.loads(data.get("conversation_state", "{}"))
                         
-                        # Construct Payload matching User's Frontend expectation
-                        # User JS expects:
-                        # payload.data = { id, raw_text, final_dominant_emotion, final_valence, bert_emotions, llm_insights ... }
-                        
-                        # We map our data to this structure
-                        
-                        # BERT emotions
-                        # We have 'emotions' map in data.
                         ems = json.loads(data.get("emotions", "{}"))
                         bert_list = []
                         for k, v in ems.items():
@@ -222,14 +180,7 @@ async def get_conversation_state(conversation_id: str):
 
 @app.get("/conversation/{conversation_id}/messages")
 async def get_conversation_messages(conversation_id: str, limit: int = 50):
-    """
-    Fetch recent messages for a conversation from the database.
-    Since API Service doesn't connect to DB directly in this microservices pattern 
-    (usually Persistence Service handles DB), we have two options:
-    1. Connect API to DB directly for reads (CQRS pattern, common for performance).
-    2. Request via Redis (too complex for MVP).
-    3. We will connect API to Postgres directly for READS.
-    """
+    """Fetch recent messages for a conversation directly from PostgreSQL (CQRS read path)."""
     import os
     import asyncpg
     
@@ -254,10 +205,6 @@ async def get_conversation_messages(conversation_id: str, limit: int = 50):
         messages = []
         for row in rows:
             msg = dict(row)
-            # Timestamp is already a float (unix epoch), which the frontend JS can handle (new Date(ts * 1000) or if it's ms)
-            # Python time.time() is seconds. JS Date needs ms usually, or just passing seconds to some parser.
-            # But wait, looking at ingestion, we store time.time() which is float seconds.
-            # Let's just pass it as is. Frontend `new Date(msg.timestamp * 1000)` might be needed if it expects ms.
             messages.append(msg)
             
         return messages

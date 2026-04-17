@@ -86,3 +86,91 @@ api_service-1                | INFO:     192.168.65.1:21345 - "GET /conversation
 api_service-1                | INFO:     192.168.65.1:21345 - "GET /conversation/conv-1/state HTTP/1.1" 200 OK
 db-1                         | 2026-04-17 10:25:18.719 UTC [27] LOG:  checkpoint starting: time
 db-1                         | 2026-04-17 10:25:20.096 UTC [27] LOG:  checkpoint complete: wrote 16 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.353 s, sync=0.012 s, total=1.377 s; sync files=14, longest=0.009 s, average=0.001 s; distance=31 kB, estimate=31 kB
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 3 (SIGQUIT) received, shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 30#30: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 31#31: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 30#30: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 31#31: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 29#29: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 30#30: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 31#31: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 32#32: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 32#32: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 32#32: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 33#33: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 33#33: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 33#33: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 29#29: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 29#29: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 37#37: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 37#37: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 37#37: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 34#34: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 34#34: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 38#38: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 34#34: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 38#38: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 38#38: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 35#35: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 35#35: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 35#35: exit
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 36#36: gracefully shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 36#36: exiting
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 36#36: exit
+ingestion_service-1          | INFO:     Shutting down
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 17 (SIGCHLD) received from 30
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 30 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 29 (SIGIO) received
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 17 (SIGCHLD) received from 31
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 31 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 29 (SIGIO) received
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 17 (SIGCHLD) received from 29
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 29 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 38 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 32 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 37 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 29 (SIGIO) received
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 17 (SIGCHLD) received from 38
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 33 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 36 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 29 (SIGIO) received
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 17 (SIGCHLD) received from 35
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 35 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 29 (SIGIO) received
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: signal 17 (SIGCHLD) received from 34
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: worker process 34 exited with code 0
+frontend_service-1           | 2026/04/17 10:48:27 [notice] 1#1: exit
+ingestion_service-1          | INFO:     Waiting for application shutdown.
+ingestion_service-1          | INFO:     Application shutdown complete.
+ingestion_service-1          | INFO:     Finished server process [1]
+[Kfrontend_service-1 exited with code 0
+api_service-1                | INFO:     Shutting down
+api_service-1                | INFO:     connection closed
+api_service-1                | INFO:     Waiting for application shutdown.
+api_service-1                | INFO:     Application shutdown complete.
+api_service-1                | INFO:     Finished server process [1]
+api_service-1                | Client disconnected. Active: 0
+[Kingestion_service-1 exited with code 0
+[Kapi_service-1 exited with code 0
+[Kvader_service-1 exited with code 137
+[Kemojinet_service-1 exited with code 137
+[Kpreprocessing_service-1 exited with code 137
+[Kgoemotions_service-1 exited with code 137
+[Kbert_service-1 exited with code 137
+[Kpersistence_service-1 exited with code 137
+db-1                         | 2026-04-17 10:48:38.083 UTC [1] LOG:  received fast shutdown request
+db-1                         | 2026-04-17 10:48:38.084 UTC [1] LOG:  aborting any active transactions
+db-1                         | 2026-04-17 10:48:38.086 UTC [1] LOG:  background worker "logical replication launcher" (PID 32) exited with exit code 1
+db-1                         | 2026-04-17 10:48:38.087 UTC [27] LOG:  shutting down
+db-1                         | 2026-04-17 10:48:38.088 UTC [27] LOG:  checkpoint starting: shutdown immediate
+db-1                         | 2026-04-17 10:48:38.094 UTC [27] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.003 s, sync=0.001 s, total=0.008 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=28 kB
+db-1                         | 2026-04-17 10:48:38.097 UTC [1] LOG:  database system is shut down
+[Kcentral_responder_service-1 exited with code 137
+[Kaggregation_service-1 exited with code 137
+redis-1                      | 1:signal-handler (1776422918) Received SIGTERM scheduling shutdown...
+redis-1                      | 1:M 17 Apr 2026 10:48:38.276 * User requested shutdown...
+redis-1                      | 1:M 17 Apr 2026 10:48:38.276 * Saving the final RDB snapshot before exiting.
+[Kdb-1 exited with code 0
+redis-1                      | 1:M 17 Apr 2026 10:48:38.281 * DB saved on disk
+redis-1                      | 1:M 17 Apr 2026 10:48:38.281 # Redis is now ready to exit, bye bye...
+[Kredis-1 exited with code 0

@@ -58,7 +58,7 @@ def print_report(prev_meta: dict, new_acc: float, n_train: int,
     W = 58
 
     print("\n" + "╔" + "═"*(W-2) + "╗")
-    print(f"║{'  🔄  Retraining Report':^{W-2}}║")
+    print(f"║{'  [RELOAD] Retraining Report':^{W-2}}║")
     print("╠" + "═"*(W-2) + "╣")
     print(f"║  {ts:<{W-4}}║")
     print(f"║  Samples trained : {n_train}  │  Filtered (bad): {n_filtered:<{W-40}}║")
@@ -77,11 +77,11 @@ def print_report(prev_meta: dict, new_acc: float, n_train: int,
 
     print("╠" + "═"*(W-2) + "╣")
     if deployed:
-        print(f"║  {'✅  DEPLOYED  — model hot-reloaded in memory':<{W-4}}║")
+        print(f"║  {'[OK] DEPLOYED — model hot-reloaded in memory':<{W-4}}║")
     else:
         reason = (f"accuracy {new_acc:.4f} < gate {ACCURACY_GATE:.2f}"
                   if new_acc < ACCURACY_GATE else "accuracy regressed")
-        print(f"║  {'❌  REJECTED  — ' + reason:<{W-4}}║")
+        print(f"║  {'[REJECT] — ' + reason:<{W-4}}║")
     print("╚" + "═"*(W-2) + "╝\n")
 
 
@@ -209,7 +209,7 @@ def run_one_cycle(reload_callback):
         from datasets import load_dataset
         ds = load_dataset("google-research-datasets/go_emotions", "simplified")
     except Exception as e:
-        print(f"[Trainer] ❌ Dataset load failed: {e}")
+        print(f"[Trainer] [ERROR] Dataset load failed: {e}")
         return
 
     train_raw = list(ds["train"])[:MAX_SAMPLES]
@@ -259,7 +259,7 @@ def run_one_cycle(reload_callback):
     n_filtered = n_before - len(X_tr)
 
     if len(X_tr) < 100:
-        print("[Trainer] ❌ Too few samples after filtering. Skipping.")
+        print("[Trainer] [ERROR] Too few samples after filtering. Skipping.")
         return
 
     # Train
@@ -322,7 +322,7 @@ def start_trainer_thread(reload_callback):
             try:
                 run_one_cycle(reload_callback)
             except Exception as e:
-                print(f"[Trainer] ❌ Unhandled error: {e}")
+                print(f"[Trainer] [ERROR] Unhandled error: {e}")
                 traceback.print_exc()
             print(f"[Trainer] Sleeping {RETRAIN_INTERVAL}s...")
             time.sleep(RETRAIN_INTERVAL)

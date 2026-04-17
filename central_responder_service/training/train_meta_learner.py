@@ -309,7 +309,7 @@ def train(max_samples_per_split: int = 10000):
         json.dump(metadata, f, indent=2)
 
     print(f"Saved metadata to {META_PATH}")
-    print("\n✅ Training complete!")
+    print("\n[OK] Training complete!")
     print(f"   PKL:  {PKL_PATH}")
     print(f"   Meta: {META_PATH}")
 

@@ -7,7 +7,7 @@ Provides:
   - predict_with_meta_learner()  Run inference, return (dominant_emotion, confidence)
 
 The Central Responder calls these functions. If load_meta_learner() returns None,
-the caller falls back to the existing weighted-average logic — no crash, no data loss.
+the service exits — a trained model is strictly required.
 """
 
 import os
@@ -51,7 +51,7 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
     """
     try:
         if not os.path.exists(model_path):
-            print(f"[MetaLearner] ⚠️  No model file at '{model_path}'. Fallback mode will be used.")
+            print(f"[MetaLearner] [WARN] No model file at '{model_path}'. Fallback mode will be used.")
             return None
 
         with open(model_path, 'rb') as f:
@@ -59,20 +59,20 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
 
         # Basic sanity check — should have predict_proba (sklearn Pipeline)
         if not hasattr(model, 'predict_proba'):
-            print("[MetaLearner] ⚠️  Loaded object is not a valid sklearn Pipeline. Fallback mode.")
+            print("[MetaLearner] [WARN] Loaded object is not a valid sklearn Pipeline. Fallback mode.")
             return None
 
         # Log metadata if available
         _log_metadata()
 
-        print(f"[MetaLearner] ✅ Meta-learner loaded successfully from '{model_path}'.")
+        print(f"[MetaLearner] [OK] Meta-learner loaded successfully from '{model_path}'.")
         return model
 
     except (pickle.UnpicklingError, EOFError, AttributeError) as e:
-        print(f"[MetaLearner] ⚠️  Failed to load model (corrupt file?): {e}. Fallback mode.")
+        print(f"[MetaLearner] [WARN] Failed to load model (corrupt file?): {e}. Fallback mode.")
         return None
     except Exception as e:
-        print(f"[MetaLearner] ⚠️  Unexpected error loading model: {e}. Fallback mode.")
+        print(f"[MetaLearner] [WARN] Unexpected error loading model: {e}. Fallback mode.")
         return None
 
 
@@ -145,7 +145,7 @@ def predict_with_meta_learner(
         confidence = float(proba[label_idx])
         return pred_label, confidence, all_scores
     except Exception as e:
-        print(f"[MetaLearner] ⚠️  Predict error: {e}. Returning neutral.")
+        print(f"[MetaLearner] [WARN] Predict error: {e}. Returning neutral.")
         return "neutral", 0.0, {}
 
 
