@@ -22,24 +22,26 @@ import traceback
 import numpy as np
 from pathlib import Path
 from collections import Counter
+from sqlalchemy import create_engine, text
+from shared.utils.logger import get_logger
+ 
+logger = get_logger("trainer")
+ 
+# ── Database Config ──────────────────────────────────────────────────────────
+DB_USER = os.getenv("POSTGRES_USER", "user")
+DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
+DB_NAME = os.getenv("POSTGRES_DB", "emotion_db")
+DB_HOST = os.getenv("DB_HOST", "db")
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}"
 
 # ── Config ────────────────────────────────────────────────────────────────────
-RETRAIN_INTERVAL = int(os.environ.get("RETRAIN_INTERVAL_SECONDS", 600))
+RETRAIN_INTERVAL = int(os.environ.get("RETRAIN_INTERVAL_SECONDS", 1800))
 ACCURACY_GATE    = float(os.environ.get("ACCURACY_GATE", 0.40))
-MAX_SAMPLES      = int(os.environ.get("MAX_SAMPLES", 10000))
+MAX_SAMPLES      = int(os.environ.get("MAX_SAMPLES", 2500))
 MODEL_PATH       = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"))
 META_PATH        = MODEL_PATH.with_name("meta_weights_meta.json")
 
-# Label space — mirrors meta_learner.py
-EMOTION_LABELS = [
-    'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
-    'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval',
-    'disgust', 'embarrassment', 'excitement', 'fear', 'gratitude', 'grief',
-    'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization',
-    'relief', 'remorse', 'sadness', 'surprise', 'neutral'
-]
-VADER_KEYS  = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
-BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
+from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
@@ -50,51 +52,40 @@ def _bar(value: float, width: int = 25) -> str:
     filled = int(value * width)
     return "█" * filled + "░" * (width - filled)
 
-def print_report(prev_meta: dict, new_acc: float, n_train: int,
-                 n_filtered: int, deployed: bool):
-    prev_acc = prev_meta.get("test_accuracy")
-    delta    = (new_acc - prev_acc) if prev_acc is not None else None
-    ts       = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-    W = 58
-
-    print("\n" + "╔" + "═"*(W-2) + "╗")
-    print(f"║{'  [RELOAD] Retraining Report':^{W-2}}║")
-    print("╠" + "═"*(W-2) + "╣")
-    print(f"║  {ts:<{W-4}}║")
-    print(f"║  Samples trained : {n_train}  │  Filtered (bad): {n_filtered:<{W-40}}║")
-    print("╠" + "═"*(W-2) + "╣")
-
-    if prev_acc is not None:
-        print(f"║  Previous : {prev_acc:.4f}  {_bar(prev_acc):<25} ║")
-    else:
-        print(f"║  Previous : — (no prior model){'':<{W-32}}║")
-
-    print(f"║  New      : {new_acc:.4f}  {_bar(new_acc):<25} ║")
-
+    stats = {
+        "Previous Accuracy": f"{prev_acc:.4f}" if prev_acc is not None else "N/A",
+        "New Accuracy":      f"{new_acc:.4f}",
+        "Samples Trained":   n_train,
+        "Samples Filtered":  n_filtered,
+        "Deployment":        "DEPLOYED (Success)" if deployed else "REJECTED (Low Accuracy/Regression)"
+    }
+    
     if delta is not None:
-        sign, emoji = ("+", "📈") if delta >= 0 else ("", "📉")
-        print(f"║  Delta    : {emoji} {sign}{delta*100:.2f}%{'':<{W-26}}║")
+        direction = "UP" if delta >= 0 else "DOWN"
+        stats["Delta"] = f"{direction} {delta*100:+.2f}%"
 
-    print("╠" + "═"*(W-2) + "╣")
-    if deployed:
-        print(f"║  {'[OK] DEPLOYED — model hot-reloaded in memory':<{W-4}}║")
-    else:
-        reason = (f"accuracy {new_acc:.4f} < gate {ACCURACY_GATE:.2f}"
-                  if new_acc < ACCURACY_GATE else "accuracy regressed")
-        print(f"║  {'[REJECT] — ' + reason:<{W-4}}║")
-    print("╚" + "═"*(W-2) + "╝\n")
+    logger.log_stats("Retraining report", stats)
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
 # ║  Feature Builder                                                     ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 
-def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict) -> np.ndarray:
+def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict, context: dict = None) -> np.ndarray:
+    context = context or {}
     vec = []
+    # Block 1-4 (Standard)
     for k in VADER_KEYS:  vec.append(float(vader.get(k, 0.0)))
     for k in BERT_LABELS: vec.append(float(bert.get(k,  0.0)))
     for k in EMOTION_LABELS: vec.append(float(goe.get(k,   0.0)))
     for k in EMOTION_LABELS: vec.append(float(emoji.get(k,  0.0)))
+    
+    # Block 5: Context (Memory)
+    vec.append(float(context.get("avg_valence", 0.0)))
+    prev_emo = context.get("prev_emotion", "neutral").lower()
+    for label in EMOTION_LABELS:
+        vec.append(1.0 if label == prev_emo else 0.0)
+        
     return np.array(vec, dtype=np.float32)
 
 
@@ -125,7 +116,7 @@ def filter_balance(X, y):
             cX.append(fv); cy.append(label); seen[label] += 1
     removed = len(X) - len(cX)
     if removed:
-        print(f"  [Filter] Balance cap: removed {removed} samples (cap={cap}/class).")
+        logger.info(f"  [Filter] Balance cap: removed {removed} samples (cap={cap}/class).")
     return cX, cy
 
 
@@ -134,7 +125,7 @@ def filter_balance(X, y):
 # ╚══════════════════════════════════════════════════════════════════════╝
 
 def _get_analyzers(device):
-    print("[Trainer] Loading analyzers transiently into RAM...")
+    logger.info("Loading analyzers transiently into RAM...")
     import torch
     
     # Constrain threads to prevent PyTorch from inflating RAM overhead during inference
@@ -152,7 +143,7 @@ def _get_analyzers(device):
                           return_all_scores=True,
                           device=device)
                           
-    print("[Trainer] Analyzers fully loaded.")
+    logger.info("Analyzers fully loaded.")
     return vader, bert, goe
 
 def _vader(v, text):
@@ -183,6 +174,55 @@ def _emojinet(text):
                 count += 1
         return {k: v/count for k,v in scores.items()} if count else {}
     except: return {}
+ 
+# ╔══════════════════════════════════════════════════════════════════════╗
+# ║  SQL Data Fetcher                                                    ║
+# ╚══════════════════════════════════════════════════════════════════════╝
+ 
+def fetch_live_data(vader, bert, goe):
+    """
+    Fetch verified samples from PostgreSQL (emotion_analysis joined with messages).
+    Returns (X, y) lists of feature vectors and labels.
+    """
+    X, y = [], []
+    try:
+        engine = create_engine(DATABASE_URL)
+        with engine.connect() as conn:
+            query = text("""
+                WITH ranked_messages AS (
+                    SELECT m.message_id, m.text, a.ground_truth_emotion, m.conversation_id, m.timestamp,
+                           LAG(a.ground_truth_emotion) OVER (PARTITION BY m.conversation_id ORDER BY m.timestamp) as prev_emo
+                    FROM emotion_analysis a
+                    JOIN messages m ON a.message_id = m.message_id
+                    WHERE a.is_verified = TRUE
+                )
+                SELECT text, ground_truth_emotion, prev_emo
+                FROM ranked_messages
+                ORDER BY timestamp DESC
+                LIMIT 1000
+            """)
+            rows = conn.execute(query).fetchall()
+            
+            if not rows:
+                return [], []
+                
+            logger.info(f"  [SQL] Found {len(rows)} verified live samples with context tracking.")
+            
+            for text_content, label, prev_emo in rows:
+                vs = {f"vader_{k}": v for k, v in _vader(vader, text_content).items()}
+                bs = _run(bert, text_content)
+                gs = _run(goe,  text_content)
+                es = _emojinet(text_content)
+                
+                context = {"avg_valence": 0.0, "prev_emotion": prev_emo or "neutral"}
+                fv = build_fv(vs, bs, gs, es, context=context)
+                X.append(fv)
+                y.append(label)
+        
+        return X, y
+    except Exception as e:
+        logger.error(f"  [SQL] Failed to fetch live data: {e}")
+        return [], []
 
 
 # ╔══════════════════════════════════════════════════════════════════════╗
@@ -195,7 +235,7 @@ def run_one_cycle(reload_callback):
     Calls reload_callback(new_model) on success so main.py can hot-swap
     the global META_LEARNER without restarting the container.
     """
-    print(f"\n[Trainer] ═══ Starting cycle at {datetime.datetime.utcnow().strftime('%H:%M:%S UTC')} ═══")
+    logger.info(f"═══ Starting cycle at {datetime.datetime.utcnow().strftime('%H:%M:%S UTC')} ═══")
 
     prev_meta = {}
     if META_PATH.exists():
@@ -204,17 +244,19 @@ def run_one_cycle(reload_callback):
         except Exception: pass
 
     # Load dataset
-    print("[Trainer] Loading GoEmotions dataset...")
+    t0 = time.time()
+    logger.info("Loading GoEmotions dataset...")
     try:
         from datasets import load_dataset
         ds = load_dataset("google-research-datasets/go_emotions", "simplified")
     except Exception as e:
-        print(f"[Trainer] [ERROR] Dataset load failed: {e}")
+        logger.error(f"Dataset load failed: {e}")
         return
 
     train_raw = list(ds["train"])[:MAX_SAMPLES]
     val_raw   = list(ds["validation"])[:MAX_SAMPLES // 5]
     test_raw  = list(ds["test"])[:MAX_SAMPLES // 5]
+    logger.info(f"  [Extraction] Selected {len(train_raw)} train samples for cognitive build.")
 
     # Setup device mapping and load analyzers
     import torch
@@ -224,7 +266,9 @@ def run_one_cycle(reload_callback):
     def process(split, name):
         X, y, gs_list = [], [], []
         for i, s in enumerate(split):
-            if i % 500 == 0: print(f"  [Trainer] {name} {i}/{len(split)}", end="\r")
+            if i % 100 == 0: 
+                pct = (i / len(split)) * 100
+                logger.info(f"  [Trainer] {name} Building Features: {i}/{len(split)} ({pct:.0f}%)")
             lids = s.get("labels", [])
             if not lids or lids[0] >= len(EMOTION_LABELS): continue
             text = s["text"]
@@ -233,37 +277,62 @@ def run_one_cycle(reload_callback):
             gs = _run(goe,  text)
             es = _emojinet(text)
             gs_list.append(gs)
-            X.append(build_fv(vs, bs, gs, es))
+            # Dummy context for base dataset training
+            context = {"avg_valence": 0.0, "prev_emotion": "neutral"}
+            X.append(build_fv(vs, bs, gs, es, context=context))
             y.append(EMOTION_LABELS[lids[0]])
-        print(f"  [Trainer] {name}: {len(X)} samples.          ")
+        pt = (time.time() - t0) / len(X) if X else 0
+        logger.info(f"  [Trainer] {name}: {len(X)} samples. Avg {pt*1000:.2f}ms/sample.")
         return X, y, gs_list
 
     print("[Trainer] Building feature vectors...")
     X_tr, y_tr, gs_tr = process(train_raw, "train")
     X_v,  y_v,  _     = process(val_raw,   "val  ")
     X_te, y_te, _     = process(test_raw,  "test ")
+ 
+    # Fetch Live Supervised Data
+    X_live, y_live = fetch_live_data(vader, bert, goe)
+    if X_live:
+        # Augment training set with live data
+        # We can duplicate live data to give it more weight if the set is small
+        weight = 3 
+        X_tr.extend(X_live * weight)
+        y_tr.extend(y_live * weight)
+        # We don't filter live data (it's already verified by human)
+        # But we need placeholder gs entries if we use Layer 2 filter on everything
+        # Actually, let's just bypass outlier filtering for live data
+        gs_tr.extend([{}] * len(X_live) * weight)
+        logger.info(f"  [Trainer] Augmented training set with {len(X_live)} live verified samples (weight={weight})")
 
     # Aggressive memory cleanup immediately after features are computed limits RAM peak
     del vader, bert, goe
     import gc
     gc.collect()
-    print("[Trainer] Aggressively purged transient analyzers from RAM.")
+    logger.info("Aggressively purged transient analyzers from RAM.")
+
+    # Stats: Distribution before filtering
+    dist_before = Counter(y_tr).most_common(5)
+    logger.log_stats("Pre-Filter Distribution (Top 5)", dict(dist_before))
 
     n_before = len(X_tr)
-    print("[Trainer] Applying bad-data filters...")
+    logger.info("Applying bad-data filters...")
 
     # Layer 1 already enforced (only valid EMOTION_LABELS pass process())
     X_tr, y_tr, n_out = filter_outliers(X_tr, y_tr, gs_tr)
-    print(f"  Layer 2 (outlier filter)  : removed {n_out}")
+    logger.info(f"  Layer 2 (outlier filter)  : removed {n_out}")
     X_tr, y_tr        = filter_balance(X_tr, y_tr)
     n_filtered = n_before - len(X_tr)
+    
+    # Stats: Distribution after filtering
+    dist_after = Counter(y_tr).most_common(5)
+    logger.log_stats("Post-Filter Distribution (Top 5)", dict(dist_after))
 
-    if len(X_tr) < 100:
-        print("[Trainer] [ERROR] Too few samples after filtering. Skipping.")
+    if not X_tr:
+        logger.error("No samples remaining after filtering. Sequence aborted.")
         return
 
     # Train
-    print("[Trainer] Training Logistic Regression...")
+    logger.info("⚡ PHASE: Logistic Regression Pipeline Training...")
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
@@ -302,6 +371,14 @@ def run_one_cycle(reload_callback):
 
         # Hot-reload — no container restart needed
         reload_callback(pipeline)
+        
+        # Gating feedback: Create a definitive signal that a VALID model is live
+        ready_marker = MODEL_PATH.parent / ".ready"
+        ready_marker.touch()
+        
+        if not hasattr(start_trainer_thread, '_initial_trained'):
+            logger.info("✅ [GATEKEEPER] Initial training complete. Opening system gates.")
+            setattr(start_trainer_thread, '_initial_trained', True)
 
     print_report(prev_meta, test_acc, len(X_tr), n_filtered, deployed)
 
@@ -317,14 +394,15 @@ def start_trainer_thread(reload_callback):
     main.py can swap the global META_LEARNER without restarting.
     """
     def _loop():
-        print(f"[Trainer] 🚀 Started. Interval={RETRAIN_INTERVAL}s, Gate={ACCURACY_GATE}, Samples={MAX_SAMPLES}")
+        logger.info(f"🚀 Started. Interval={RETRAIN_INTERVAL}s, Gate={ACCURACY_GATE}, Samples={MAX_SAMPLES}")
+        logger.info("🔒 [GATEKEEPER] Intelligence layer is warming up. API access will be enabled upon initial model completion.")
         while True:
             try:
                 run_one_cycle(reload_callback)
             except Exception as e:
-                print(f"[Trainer] [ERROR] Unhandled error: {e}")
+                logger.error(f"Unhandled error: {e}")
                 traceback.print_exc()
-            print(f"[Trainer] Sleeping {RETRAIN_INTERVAL}s...")
+            logger.debug(f"Sleeping {RETRAIN_INTERVAL}s...")
             time.sleep(RETRAIN_INTERVAL)
 
     t = threading.Thread(target=_loop, name="trainer", daemon=True)

@@ -8,6 +8,7 @@ ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointE
 
 const API_BASE = 'http://localhost:8001';
 const WS_BASE = 'ws://localhost:8001';
+const API_KEY = 'dev-secret-key'; // Matches INTERNAL_API_KEY in docker-compose
 
 // --- Constants ---
 const EMOTION_COLORS = {
@@ -150,7 +151,7 @@ const BuildupChart = ({ steps }) => {
 
 
 function App() {
-    const [view, setView] = useState('live'); // 'live' | 'history'
+    const [view, setView] = useState('live'); // 'live' | 'history' | 'analytics'
     const [status, setStatus] = useState('Live'); // 'Live' | 'Offline'
     const [messages, setMessages] = useState([]); // Chat history
     const [inputValue, setInputValue] = useState('');
@@ -158,6 +159,7 @@ function App() {
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [currentAnalysis, setCurrentAnalysis] = useState(null);
     const [vibeAnalysis, setVibeAnalysis] = useState(null); // Separate vibe state
+    const [analyticsData, setAnalyticsData] = useState(null); // Calibration state
 
     // WebSocket
     const socketRef = useRef(null);
@@ -208,7 +210,9 @@ function App() {
 
     const fetchVibe = async () => {
         try {
-            const stateRes = await axios.get(`${API_BASE}/conversation/conv-1/state`);
+            const stateRes = await axios.get(`${API_BASE}/conversation/conv-1/state`, {
+                headers: { 'X-API-Key': API_KEY }
+            });
             if (stateRes.data) {
                 setVibeAnalysis({
                     valence: parseFloat(stateRes.data.average_valence || 0),
@@ -221,13 +225,29 @@ function App() {
         } catch (e) { console.warn("Could not fetch latest vibe state"); }
     };
 
+    const fetchAnalytics = async () => {
+        try {
+            const res = await axios.get(`${API_BASE}/analytics/calibration`, {
+                headers: { 'X-API-Key': API_KEY }
+            });
+            setAnalyticsData(res.data);
+        } catch (e) { console.error("Failed to fetch analytics", e); }
+    };
+
     // WebSocket Connection
+    useEffect(() => {
+        if (view === 'analytics') {
+            fetchAnalytics();
+        }
+    }, [view]);
     useEffect(() => {
         // Fetch initial state first
         const fetchInitialState = async () => {
             try {
                 // Fetch last 50 messages for history
-                const res = await axios.get(`${API_BASE}/conversation/conv-1/messages?limit=50`);
+                const res = await axios.get(`${API_BASE}/conversation/conv-1/messages?limit=50`, {
+                    headers: { 'X-API-Key': API_KEY }
+                });
                 if (res.data && res.data.length > 0) {
                     // 1. Populate Chat History
                     const historyMsgs = res.data.slice().reverse().map(m => {
@@ -262,7 +282,7 @@ function App() {
         fetchInitialState();
 
         const clientId = `client_${Math.floor(Math.random() * 9999)}`;
-        const ws = new WebSocket(`${WS_BASE}/ws/${clientId}`);
+        const ws = new WebSocket(`${WS_BASE}/ws/${clientId}?api_key=${API_KEY}`);
 
         ws.onopen = () => {
             console.log("Connected to WS");
@@ -273,8 +293,11 @@ function App() {
             try {
                 const payload = JSON.parse(event.data);
                 if (payload.type === 'analysis') {
-                    // Update State
-                    setCurrentAnalysis(payload);
+                    setCurrentAnalysis(prev => ({
+                        ...payload,
+                        ai_insight: null,
+                        loadingReasoning: true
+                    }));
                     applyTheme(payload.data.final_dominant_emotion);
 
                     // Also update vibe if present
@@ -284,10 +307,13 @@ function App() {
                         // Force fetch new vibe
                         fetchVibe();
                     }
-
-                    // If this message isn't in our list (it's new), appending it SHOULD happen via the sendMessage flow for user messages.
-                    // But if it's a SYSTEM message or other user's, we need to handle it. 
-                    // For this demo, let's assume we just update the dashboard.
+                } else if (payload.type === 'reasoning') {
+                    setCurrentAnalysis(prev => {
+                        if (prev && prev.data.id === payload.message_id) {
+                            return { ...prev, ai_insight: payload.ai_insight, loadingReasoning: false };
+                        }
+                        return prev;
+                    });
                 }
             } catch (e) {
                 console.error("WS Parse error", e);
@@ -334,6 +360,23 @@ function App() {
     }, [messages, view]);
 
 
+    const handleFeedback = async (msgId, newLabel) => {
+        try {
+            await axios.post(`${API_BASE}/message/${msgId}/feedback`, 
+                { label: newLabel },
+                { headers: { 'X-API-Key': API_KEY } }
+            );
+            // Optionally update local state
+            setMessages(prev => prev.map(m => m.id === msgId ? { ...m, verified: true, feedbackLabel: newLabel } : m));
+            if (currentAnalysis && currentAnalysis.data.id === msgId) {
+                setCurrentAnalysis(prev => ({ ...prev, verified: true, feedbackLabel: newLabel }));
+            }
+            console.log(`Feedback sent for ${msgId}: ${newLabel}`);
+        } catch (e) {
+            console.error("Failed to send feedback", e);
+        }
+    };
+ 
     const handleHistoryClick = (msg) => {
         if (msg.analysis) {
             setCurrentAnalysis(msg.analysis);
@@ -378,6 +421,9 @@ function App() {
                     </button>
                     <button className={`nav-btn ${view === 'history' ? 'active' : ''}`} onClick={() => setView('history')}>
                         <span className="btn-icon">📜</span> History & Trends
+                    </button>
+                    <button className={`nav-btn ${view === 'analytics' ? 'active' : ''}`} onClick={() => setView('analytics')}>
+                        <span className="btn-icon">📊</span> System Insights
                     </button>
                 </div>
 
@@ -552,13 +598,42 @@ function App() {
 
                         {/* Dominant Emotion */}
                         <section className="hero-emotion glass">
-                            <div className="label-group">
+                            <div className="hero-emotion">
                                 <span className="label">Dominant Resonance</span>
                                 <h3 id="dominant-emotion-text" style={{ textShadow: `0 0 20px var(--accent-primary)` }}>
                                     {currentAnalysis.data.final_dominant_emotion}
                                 </h3>
+                                
+                                {currentAnalysis.data.context_shift && (
+                                    <div className="context-shift-badge glass pulse-neon">
+                                        <span className="shift-icon">🔄</span>
+                                        <div className="shift-content">
+                                            <strong>Context Shift</strong>
+                                            <span>From {currentAnalysis.data.context_shift.from} to {currentAnalysis.data.context_shift.to}</span>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
-
+ 
+                            <div className="feedback-section">
+                                <span className="label">Is this correct?</span>
+                                <div className="feedback-actions">
+                                    <select 
+                                        className="glass feedback-select"
+                                        onChange={(e) => handleFeedback(currentAnalysis.data.id, e.target.value)}
+                                        value={currentAnalysis.feedbackLabel || ""}
+                                    >
+                                        <option value="" disabled>Correct this emotion...</option>
+                                        {Object.keys(EMOTION_COLORS).map(emo => (
+                                            <option key={emo} value={emo}>{emo}</option>
+                                        ))}
+                                    </select>
+                                    {(currentAnalysis.verified || currentAnalysis.feedbackLabel) && (
+                                        <span className="verified-badge">✓ Verified</span>
+                                    )}
+                                </div>
+                            </div>
+ 
                             {/* Word Highlighting Overlay */}
                             <EmotionalTextOverlay text={currentAnalysis.data.raw_text} />
 
@@ -595,25 +670,67 @@ function App() {
                                 </div>
                             </section>
 
-                            {/* Insight Engine */}
-                            <section className="analysis-card glass">
+                            {/* Dissonance / Sarcasm Meter (New) */}
+                        {currentAnalysis.data.sarcasm_score > 0.1 && (
+                            <div className={`dissonance-meter glass ${currentAnalysis.data.sarcasm_score > 0.5 ? 'high-alert' : ''}`}>
+                                <div className="meter-label">
+                                    <span>Contextual Dissonance</span>
+                                    <span className="score">{Math.round(currentAnalysis.data.sarcasm_score * 100)}%</span>
+                                </div>
+                                <div className="meter-track">
+                                    <div 
+                                        className="meter-fill" 
+                                        style={{ width: `${currentAnalysis.data.sarcasm_score * 100}%` }}
+                                    ></div>
+                                </div>
+                                {currentAnalysis.data.conflict && (
+                                    <p className="conflict-tag bounce-in">{currentAnalysis.data.conflict}</p>
+                                )}
+                            </div>
+                        )}
+
+                        {/* AI Insight Card */}
+                            <div className={`ai-insight-card glass ${currentAnalysis.loadingReasoning ? 'thinking' : ''}`}>
                                 <div className="card-header">
-                                    <h4>AI Insight Engine</h4>
-                                    <span className="info-tag">Analytic</span>
+                                    <span className="icon">🧠</span>
+                                    <h4>AI Cognitive Insight</h4>
                                 </div>
-                                <div className="insight-content">
-                                    <p>{currentAnalysis.data.llm_insights || "Deep analysis in progress..."}</p>
-                                    <div className="metric-row">
-                                        <div className="metric">
-                                            <span className="metric-label">Sarcasm Probability</span>
-                                            <div className="metric-gauge">
-                                                <div className="gauge-fill" style={{ width: `${currentAnalysis.data.llm_sarcasm_score * 100}%`, background: currentAnalysis.data.llm_sarcasm_score > 0.5 ? 'var(--accent-error)' : 'var(--accent-secondary)' }}></div>
-                                            </div>
-                                            <span className="metric-value">{Math.round(currentAnalysis.data.llm_sarcasm_score * 100)}%</span>
+                                <div className="card-body">
+                                    {currentAnalysis.ai_insight ? (
+                                        <p className="insight-text fade-in">{currentAnalysis.ai_insight}</p>
+                                    ) : (
+                                        <div className="thinking-loader">
+                                            <div className="dot"></div>
+                                            <div className="dot"></div>
+                                            <div className="dot"></div>
+                                            <span>Deep analysis in progress...</span>
                                         </div>
-                                    </div>
+                                    )}
                                 </div>
-                            </section>
+                            </div>
+
+                            <div className="logic-explainer section">
+                                <h4 className="section-title">Logic Map — Model Influence</h4>
+                                {currentAnalysis.data.logic_map && Object.keys(currentAnalysis.data.logic_map).length > 0 ? (
+                                    <div className="impact-grid">
+                                        {Object.entries(currentAnalysis.data.logic_map).map(([system, impact]) => (
+                                            <div key={system} className="impact-item">
+                                                <div className="impact-header">
+                                                    <span>{system}</span>
+                                                    <span>{Math.round(impact * 100)}%</span>
+                                                </div>
+                                                <div className="impact-bar-bg">
+                                                    <div className={`impact-bar-fill impact-${system.toLowerCase()}`} 
+                                                         style={{ width: `${impact * 100}%` }}>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="no-data-msg">Logic trace unavailable for this message.</p>
+                                )}
+                            </div>
 
                             {/* Buildup Chart */}
                             <section className="analysis-card glass full-width">
@@ -657,17 +774,85 @@ function App() {
                                     <div className="history-item-text">
                                         {msg.text}
                                     </div>
-                                    {msg.analysis && (
-                                        <div className="history-item-emotion" style={{ background: EMOTION_COLORS[msg.analysis.data.final_dominant_emotion.toLowerCase()] || '#888' }}>
-                                            {msg.analysis.data.final_dominant_emotion}
-                                        </div>
-                                    )}
+                                    <div className="history-footer">
+                                        {msg.analysis && (
+                                            <div className="history-item-emotion" style={{ background: EMOTION_COLORS[msg.analysis.data.final_dominant_emotion.toLowerCase()] || '#888' }}>
+                                                {msg.analysis.data.final_dominant_emotion}
+                                            </div>
+                                        )}
+                                        <select 
+                                            className="history-feedback-select"
+                                            onClick={(e) => e.stopPropagation()}
+                                            onChange={(e) => handleFeedback(msg.id, e.target.value)}
+                                            value={msg.feedbackLabel || ""}
+                                        >
+                                            <option value="" disabled>✎</option>
+                                            {Object.keys(EMOTION_COLORS).map(emo => (
+                                                <option key={emo} value={emo}>{emo}</option>
+                                            ))}
+                                        </select>
+                                    </div>
                                 </div>
                             ))}
                         </div>
                     </div>
                 )}
-
+ 
+                {/* ANALYTICS VIEW */}
+                {view === 'analytics' && (
+                    <div className="analytics-view">
+                        <section className="glass hero-analytics">
+                            <div className="analytics-summary">
+                                <h3>Model Calibration</h3>
+                                <p>Performance metrics derived from {analyticsData?.total_verified_samples || 0} verified samples.</p>
+                                {analyticsData?.overall_accuracy && (
+                                    <div className="main-accuracy">
+                                        <div className="accuracy-value">{Math.round(analyticsData.overall_accuracy * 100)}%</div>
+                                        <div className="label">Composite Accuracy</div>
+                                    </div>
+                                )}
+                            </div>
+                        </section>
+ 
+                        {analyticsData?.status === 'no_data' ? (
+                            <div className="idle-view glass">
+                                <p>Insufficient verification data. Use the feedback tools in History to calibrate the system.</p>
+                            </div>
+                        ) : (
+                            <div className="detailed-grid">
+                                {Object.entries(analyticsData?.emotion_breakdown || {}).sort((a,b) => b[1].samples - a[1].samples).map(([emo, stats]) => (
+                                    <section key={emo} className="analysis-card glass">
+                                        <div className="card-header">
+                                            <h4>{emo}</h4>
+                                            <span className="info-tag">{stats.samples} samples</span>
+                                        </div>
+                                        <div className="stats-list">
+                                            <div className="stat-item">
+                                                <div className="stat-header">
+                                                    <span>Precision</span>
+                                                    <span>{Math.round(stats.precision * 100)}%</span>
+                                                </div>
+                                                <div className="stat-bar-bg">
+                                                    <div className="stat-bar-fill" style={{ width: `${stats.precision * 100}%`, background: 'var(--accent-primary)' }}></div>
+                                                </div>
+                                            </div>
+                                            <div className="stat-item">
+                                                <div className="stat-header">
+                                                    <span>Recall</span>
+                                                    <span>{Math.round(stats.recall * 100)}%</span>
+                                                </div>
+                                                <div className="stat-bar-bg">
+                                                    <div className="stat-bar-fill" style={{ width: `${stats.recall * 100}%`, background: 'var(--accent-secondary)' }}></div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </section>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+ 
             </main>
         </div>
     );
