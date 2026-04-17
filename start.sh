@@ -1,27 +1,159 @@
 #!/bin/bash
 # start.sh - Universal AI Stack Launcher (Mac & Linux)
-# Automatically detects if your machine has an NVIDIA GPU and injects the hardware profiles.
+# Automatically detects NVIDIA GPU, launches Docker, waits for readiness, and verifies health.
 
-echo "Detecting host environment..."
+set -e
+
+echo ""
+echo "=============================================================="
+echo "    [System]  Emotion Analysis System - Launcher"
+echo "=============================================================="
+echo ""
+
+# ── STEP 1: Detect Hardware ──────────────────────────────────────────────────
+echo "[Search] Detecting host environment..."
 
 if command -v nvidia-smi &> /dev/null; then
-    echo "✅ NVIDIA GPU Detetected! Launching with GPU acceleration..."
-    docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+    echo "   [OK] NVIDIA GPU detected! Launching with GPU acceleration..."
+    COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build"
 else
-    echo "ℹ️ No NVIDIA GPU detected (or running on Apple Silicon)."
-    echo "   Launching aggressively in CPU mode..."
-    docker compose up -d
+    echo "   [INFO] No NVIDIA GPU detected. Launching in CPU mode..."
+    COMPOSE_CMD="docker compose up -d --build"
 fi
 
-# ── LOGGING SYSTEM ───────────────────────────────────────────────────────────
-# Ensure the logs folder exists
-mkdir -p logs
+echo ""
+$COMPOSE_CMD
+echo ""
 
-# Generate a unique filename using the current timestamp
+# ── STEP 2: Logging ──────────────────────────────────────────────────────────
+mkdir -p logs
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGFILE="logs/run_${TIMESTAMP}.log"
-
-echo "📝 Streaming all background processes into: ${LOGFILE}"
-# Execute docker compose logs in "follow" mode in the background
-# This will capture every print/error from every service and write it to the file.
+echo "[Logs] Log file: ${LOGFILE}"
 docker compose logs -f > "${LOGFILE}" 2>&1 &
+LOG_PID=$!
+
+# ── STEP 3: Wait for all containers to be running ────────────────────────────
+echo ""
+echo "[Wait] Waiting for all containers to start..."
+
+EXPECTED_SERVICES=$(docker compose config --services | wc -l | tr -d ' ')
+MAX_WAIT=120  # seconds
+ELAPSED=0
+
+while [ $ELAPSED -lt $MAX_WAIT ]; do
+    RUNNING=$(docker compose ps --status running --format json 2>/dev/null | grep -c '"State":"running"' || docker compose ps --status running 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')
+    
+    if [ "$RUNNING" -ge "$EXPECTED_SERVICES" ]; then
+        echo "   [OK] All $EXPECTED_SERVICES containers are running!"
+        break
+    fi
+    
+    echo "   [Wait] $RUNNING / $EXPECTED_SERVICES containers running... (${ELAPSED}s)"
+    sleep 5
+    ELAPSED=$((ELAPSED + 5))
+done
+
+if [ $ELAPSED -ge $MAX_WAIT ]; then
+    echo "   [Warn] Timeout! Not all containers started within ${MAX_WAIT}s."
+    echo "   Check logs: $LOGFILE"
+    docker compose ps
+    exit 1
+fi
+
+# ── STEP 4: Service Health Checks ────────────────────────────────────────────
+echo ""
+echo "[Health] Running service health checks..."
+PASS=0
+FAIL=0
+
+# Helper function
+check_service() {
+    local name=$1
+    local url=$2
+    local max_retries=${3:-10}
+    local attempt=0
+
+    while [ $attempt -lt $max_retries ]; do
+        if curl -s --max-time 3 "$url" > /dev/null 2>&1; then
+            echo "   [OK] $name - responding"
+            PASS=$((PASS + 1))
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+
+    echo "   [Fail] $name - NOT responding at $url"
+    FAIL=$((FAIL + 1))
+    return 1
+}
+
+# Check Redis
+if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
+    echo "   [OK] Redis - PONG"
+    PASS=$((PASS + 1))
+else
+    echo "   [Fail] Redis - not responding"
+    FAIL=$((FAIL + 1))
+fi
+
+# Check PostgreSQL
+if docker compose exec -T db pg_isready -U user -d emotion_db 2>/dev/null | grep -q "accepting"; then
+    echo "   [OK] PostgreSQL - accepting connections"
+    PASS=$((PASS + 1))
+else
+    echo "   [Fail] PostgreSQL - not ready"
+    FAIL=$((FAIL + 1))
+fi
+
+# Check HTTP services
+check_service "Ingestion Service (API :8000)" "http://localhost:8000/health"
+check_service "API Service (WebSocket :8001)" "http://localhost:8001/conversation/conv-1/state"
+check_service "Frontend (UI :5173)" "http://localhost:5173"
+
+# Check Meta-Learner loaded
+if docker compose logs central_responder_service 2>/dev/null | grep -q "Running in META-LEARNER mode"; then
+    echo "   [OK] Meta-Learner - loaded and active"
+    PASS=$((PASS + 1))
+else
+    echo "   [Fail] Meta-Learner - not loaded (check central_responder_service logs)"
+    FAIL=$((FAIL + 1))
+fi
+
+# ── STEP 5: End-to-End Pipeline Test ─────────────────────────────────────────
+echo ""
+echo "[Test] Running end-to-end pipeline test..."
+
+RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/messages \
+    -H "Content-Type: application/json" \
+    -d '{"conversation_id": "healthcheck", "user_id": "system", "text": "I am happy!"}' 2>/dev/null)
+
+HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+BODY=$(echo "$RESPONSE" | head -1)
+
+if [ "$HTTP_CODE" = "200" ]; then
+    echo "   [OK] Pipeline test - message accepted (HTTP 200)"
+    PASS=$((PASS + 1))
+else
+    echo "   [Fail] Pipeline test - failed (HTTP $HTTP_CODE)"
+    FAIL=$((FAIL + 1))
+fi
+
+# ── STEP 6: Summary ─────────────────────────────────────────────────────────
+echo ""
+echo "=============================================================="
+if [ $FAIL -eq 0 ]; then
+    echo "    [Yay]  ALL CHECKS PASSED ($PASS/$PASS)"
+else
+    echo "    [Warn]   $PASS passed, $FAIL failed"
+fi
+echo "=============================================================="
+echo ""
+echo "    [Web]  Frontend:  http://localhost:5173"
+echo "    [API]  API:       http://localhost:8001"
+echo "    [In]   Ingestion: http://localhost:8000"
+echo "    [Log]  Logs:      $LOGFILE"
+echo ""
+echo "=============================================================="
+echo ""

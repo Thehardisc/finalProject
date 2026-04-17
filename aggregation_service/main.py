@@ -42,10 +42,6 @@ async def handle_dynamic_rules(conversation_id: str, text: str, r) -> tuple:
             trigger = match.group(1).strip().lower()
             meaning = match.group(2).strip().lower()
             
-            # Avoid matching commonly used phrases that technically match ".+ means .+" logic if not careful
-            # e.g. "that means yes" -> trigger="that", meaning="yes". This might be too aggressive, but let's try.
-            # We can filter out if trigger is too short or common stop words if needed.
-            
             print(f"LEARNING RULE: '{trigger}' -> '{meaning}'")
             await r.hset(rule_key, trigger, meaning)
             return None, None 
@@ -57,8 +53,6 @@ async def handle_dynamic_rules(conversation_id: str, text: str, r) -> tuple:
     if rules:
         text_lower = text.lower()
         for trigger, meaning in rules.items():
-            # Ensure we are checking the trigger against the text
-            # Redis hgetall returns dictionary. trigger is key.
             if trigger in text_lower:
                 print(f"RULE MATCHED: '{trigger}' detected. Overriding with meaning '{meaning}'")
                 return trigger, meaning
