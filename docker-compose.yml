@@ -124,6 +124,12 @@ services:
     environment:
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      # ── Periodic retraining (background thread inside this container) ────
+      RETRAIN_INTERVAL_SECONDS: 600 # retrain every 10 minutes
+      ACCURACY_GATE: 0.40 # min test accuracy to deploy a new model
+      MAX_SAMPLES: 10000 # GoEmotions samples per training run
+    volumes:
+      - ./central_responder_service/models:/app/models # use host directory directly
 
   aggregation_service:
     build:
@@ -165,6 +171,12 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      central_responder_service:
+        condition: service_started
+      aggregation_service:
+        condition: service_started
+      persistence_service:
+        condition: service_started
     networks:
       - emotion_net
     environment:
