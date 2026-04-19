@@ -23,8 +23,13 @@ import sys
 import json
 import pickle
 import datetime
+import time
 import numpy as np
 from pathlib import Path
+from collections import Counter
+from shared.utils.logger import get_logger
+
+logger = get_logger("train_meta_learner")
 
 # ── Path setup ────────────────────────────────────────────────────────────────
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,65 +51,57 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 META_PATH = OUTPUT_DIR / (PKL_PATH.stem + "_meta.json")
 
 
-# ── Emotion label space (must match central_responder_service/main.py) ────────
-EMOTION_LABELS = [
-    'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
-    'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval',
-    'disgust', 'embarrassment', 'excitement', 'fear', 'gratitude', 'grief',
-    'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization',
-    'relief', 'remorse', 'sadness', 'surprise', 'neutral'
-]
+from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM
 LABEL_TO_IDX = {label: i for i, label in enumerate(EMOTION_LABELS)}
-
-# ── VADER labels (fixed order for consistent feature vector) ──────────────────
-VADER_KEYS = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
-
-# ── BERT (7 Ekman) labels ─────────────────────────────────────────────────────
-BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
-
-# Feature vector dimensions:
-#   VADER:       4
-#   BERT:        7
-#   GoEmotions: 28
-#   EmojiNet:   28  (mapped to GoEmotions label space, zeros if not applicable)
-# Total:        67
-FEATURE_DIM = len(VADER_KEYS) + len(BERT_LABELS) + len(EMOTION_LABELS) + len(EMOTION_LABELS)
 
 
 def build_feature_vector(vader_scores: dict, bert_scores: dict,
-                          goemotions_scores: dict, emojinet_scores: dict) -> np.ndarray:
-    """Assemble a consistent fixed-length feature vector from all 4 model outputs."""
+                          goemotions_scores: dict, emojinet_scores: dict,
+                          prev_valence: float = 0.0, prev_mood: str = "neutral") -> np.ndarray:
+    """
+    Assemble a consistent 96D fixed-length feature vector.
+    Must match meta_learner.py exact ordering.
+    """
     vec = []
 
-    # VADER block (4 dims)
+    # Block 1: VADER (4 dims)
     for k in VADER_KEYS:
         vec.append(vader_scores.get(k, 0.0))
 
-    # BERT block (7 dims, fixed order)
+    # Block 2: BERT (7 dims)
     for k in BERT_LABELS:
         vec.append(bert_scores.get(k, 0.0))
 
-    # GoEmotions block (28 dims, fixed order)
+    # Block 3: GoEmotions (28 dims)
     for k in EMOTION_LABELS:
         vec.append(goemotions_scores.get(k, 0.0))
 
-    # EmojiNet block (28 dims mapped to GoEmotions label space, zeros if no emojis)
+    # Block 4: EmojiNet (28 dims)
     for k in EMOTION_LABELS:
         vec.append(emojinet_scores.get(k, 0.0))
+        
+    # Block 5: Contextual Valence (1 dim)
+    vec.append(prev_valence)
+    
+    # Block 6: Previous Mood One-Hot (28 dims)
+    mood_vec = [0.0] * len(EMOTION_LABELS)
+    if prev_mood in LABEL_TO_IDX:
+        mood_vec[LABEL_TO_IDX[prev_mood]] = 1.0
+    vec.extend(mood_vec)
 
     return np.array(vec, dtype=np.float32)
 
 
 def init_models():
     """Load all 4 model analyzers. Heavy imports here so they only run once."""
-    print("Loading VADER...")
+    logger.info("Loading VADER...")
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     vader = SentimentIntensityAnalyzer()
 
     import torch
     device = 0 if torch.cuda.is_available() else -1
 
-    print("Loading BERT (j-hartmann/emotion-english-distilroberta-base)...")
+    logger.info("Loading BERT (j-hartmann/emotion-english-distilroberta-base)...")
     from transformers import pipeline as hf_pipeline
     bert = hf_pipeline(
         "text-classification",
@@ -113,7 +110,7 @@ def init_models():
         device=device
     )
 
-    print("Loading GoEmotions (SamLowe/roberta-base-go_emotions)...")
+    logger.info("Loading GoEmotions (SamLowe/roberta-base-go_emotions)...")
     goemotions = hf_pipeline(
         "text-classification",
         model="SamLowe/roberta-base-go_emotions",
@@ -121,7 +118,7 @@ def init_models():
         device=device
     )
 
-    print("All models loaded.\n")
+    logger.info("All models loaded.\n")
     return vader, bert, goemotions
 
 
@@ -140,7 +137,7 @@ def run_bert(bert_model, text: str) -> dict:
         results = bert_model(text[:512])  # transformer token limit
         return {r['label']: r['score'] for r in results[0]}
     except Exception as e:
-        print(f"  BERT error: {e}")
+        logger.warning(f"  BERT error: {e}")
         return {}
 
 
@@ -149,7 +146,7 @@ def run_goemotions(goemotions_model, text: str) -> dict:
         results = goemotions_model(text[:512])
         return {r['label']: r['score'] for r in results[0]}
     except Exception as e:
-        print(f"  GoEmotions error: {e}")
+        logger.warning(f"  GoEmotions error: {e}")
         return {}
 
 
@@ -189,11 +186,12 @@ def process_split(split_data, vader, bert, goemotions, split_name: str):
     """Run all 4 analyzers on a dataset split, return (X, y)."""
     X, y = [], []
     total = len(split_data)
-    print(f"\nProcessing {split_name} split ({total} samples)...")
+    logger.info(f"Processing {split_name} split ({total} samples)...")
+    t0 = time.time()
 
     for i, sample in enumerate(split_data):
         if i % 500 == 0:
-            print(f"  [{split_name}] {i}/{total}")
+            logger.info(f"  [{split_name}] {i}/{total}")
 
         text = sample["text"]
 
@@ -222,31 +220,73 @@ def process_split(split_data, vader, bert, goemotions, split_name: str):
         X.append(fv)
         y.append(gold_label)
 
-    print(f"  Done. {len(X)} usable samples from {split_name}.")
+    dur = time.time() - t0
+    logger.info(f"  Done. {len(X)} usable samples from {split_name}. Take {dur:.1f}s (avg {dur*1000/len(X):.2f}ms/smp)")
+    
+    # Log distribution
+    dist = Counter(y).most_common(5)
+    logger.log_stats(f"{split_name} distribution", dict(dist))
     return np.array(X), np.array(y)
+
+
+def log_feature_importance(pipeline, feature_names):
+    """Log the most influential features per model block."""
+    try:
+        clf = pipeline.named_steps['clf']
+        # For multinomial LogisticRegression, coef_ is (n_classes, n_features)
+        # We'll take the mean absolute coefficient across classes
+        importances = np.mean(np.abs(clf.coef_), axis=0)
+        
+        # Group by blocks
+        # Block 1: VADER (0-3)
+        # Block 2: BERT (4-10)
+        # Block 3: GoEmotions (11-38)
+        # Block 4: EmojiNet (39-66)
+        # Block 5: Valence (67)
+        # Block 6: Mood History (68-95)
+        
+        vader_imp = np.mean(importances[0:4])
+        bert_imp  = np.mean(importances[4:11])
+        goemo_imp = np.mean(importances[11:39])
+        emoji_imp = np.mean(importances[39:67])
+        ctx_imp   = np.mean(importances[67:96])
+        
+        sums = vader_imp + bert_imp + goemo_imp + emoji_imp + ctx_imp
+        
+        importance_report = {
+            "BERT Semantic Layer": f"{(bert_imp/sums):.2%}",
+            "GoEmotions Depth":   f"{(goemo_imp/sums):.2%}",
+            "Emoji Visual Signal": f"{(emoji_imp/sums):.2%}",
+            "VADER Lexicon":       f"{(vader_imp/sums):.2%}",
+            "Contextual Memory":   f"{(ctx_imp/sums):.2%}"
+        }
+        
+        logger.log_stats("Knowledge Distillation (Influence)", importance_report)
+    except Exception as e:
+        logger.warning(f"Could not calculate feature importance: {e}")
 
 
 def train(max_samples_per_split: int = 10000):
     """Full training pipeline."""
-    print("=" * 60)
-    print("Meta-Learner Training Script")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Meta-Learner Training Script")
+    logger.info("=" * 60)
 
     # ── Load GoEmotions dataset ───────────────────────────────────────────────
-    print("\nLoading GoEmotions dataset from HuggingFace...")
+    logger.info("Loading GoEmotions dataset from HuggingFace...")
     try:
         from datasets import load_dataset
         dataset = load_dataset("google-research-datasets/go_emotions", "simplified")
     except Exception as e:
-        print(f"ERROR: Could not load GoEmotions dataset: {e}")
-        print("Make sure 'datasets' is installed: pip install datasets")
+        logger.error(f"ERROR: Could not load GoEmotions dataset: {e}")
+        logger.error("Make sure 'datasets' is installed: pip install datasets")
         sys.exit(1)
 
     train_data = list(dataset["train"])[:max_samples_per_split]
     val_data   = list(dataset["validation"])[:max_samples_per_split // 5]
     test_data  = list(dataset["test"])[:max_samples_per_split // 5]
 
-    print(f"Dataset sizes — Train: {len(train_data)}, Val: {len(val_data)}, Test: {len(test_data)}")
+    logger.info(f"Dataset sizes — Train: {len(train_data)}, Val: {len(val_data)}, Test: {len(test_data)}")
 
     # ── Load analyzers ────────────────────────────────────────────────────────
     vader, bert, goemotions = init_models()
@@ -257,7 +297,7 @@ def train(max_samples_per_split: int = 10000):
     X_test,  y_test  = process_split(test_data,  vader, bert, goemotions, "test")
 
     # ── Train Logistic Regression ─────────────────────────────────────────────
-    print("\nTraining Logistic Regression meta-learner...")
+    logger.info("Training Logistic Regression meta-learner...")
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
@@ -276,20 +316,30 @@ def train(max_samples_per_split: int = 10000):
     ])
 
     meta_pipeline.fit(X_train, y_train)
+    
+    # ── Log Feature Importance ────────────────────────────────────────────────
+    log_feature_importance(meta_pipeline, [])
 
     # ── Evaluate ──────────────────────────────────────────────────────────────
     val_acc  = accuracy_score(y_val,  meta_pipeline.predict(X_val))
     test_acc = accuracy_score(y_test, meta_pipeline.predict(X_test))
 
-    print(f"\n── Results ──────────────────────────────────────")
-    print(f"  Validation accuracy : {val_acc:.4f}")
-    print(f"  Test accuracy       : {test_acc:.4f}")
-    print(f"\n── Classification Report (Test) ─────────────────")
-    print(classification_report(y_test, meta_pipeline.predict(X_test),
-                                 labels=list(set(y_test)), zero_division=0))
+    stats = {
+        "Validation Accuracy": f"{val_acc:.4f}",
+        "Test Accuracy":       f"{test_acc:.4f}",
+        "Train Samples":       len(X_train),
+        "Val Samples":         len(X_val),
+        "Test Samples":        len(X_test)
+    }
+    logger.log_stats("Final Results", stats)
+    
+    logger.info("Classification Report (Test):")
+    report = classification_report(y_test, meta_pipeline.predict(X_test),
+                                 labels=list(set(y_test)), zero_division=0)
+    logger.info("\n" + report)
 
     # ── Save model ────────────────────────────────────────────────────────────
-    print(f"\nSaving model to {PKL_PATH}...")
+    logger.info(f"Saving model to {PKL_PATH}...")
     with open(PKL_PATH, 'wb') as f:
         pickle.dump(meta_pipeline, f)
 
@@ -308,10 +358,10 @@ def train(max_samples_per_split: int = 10000):
     with open(META_PATH, 'w') as f:
         json.dump(metadata, f, indent=2)
 
-    print(f"Saved metadata to {META_PATH}")
-    print("\n[OK] Training complete!")
-    print(f"   PKL:  {PKL_PATH}")
-    print(f"   Meta: {META_PATH}")
+    logger.info(f"Saved metadata to {META_PATH}")
+    logger.info("[OK] Training complete!")
+    logger.info(f"   PKL:  {PKL_PATH}")
+    logger.info(f"   Meta: {META_PATH}")
 
 
 if __name__ == "__main__":

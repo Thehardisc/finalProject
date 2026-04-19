@@ -3,11 +3,15 @@ import sys
 import os
 import json
 import time
+from datetime import datetime
 
 # Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
+from shared.utils.logger import get_logger
+
+logger = get_logger("aggregation_service")
 
 redis_client = RedisClient()
 STREAM_KEY = "emotion_stream"
@@ -42,19 +46,19 @@ async def handle_dynamic_rules(conversation_id: str, text: str, r) -> tuple:
             trigger = match.group(1).strip().lower()
             meaning = match.group(2).strip().lower()
             
-            print(f"LEARNING RULE: '{trigger}' -> '{meaning}'")
+            logger.info(f"LEARNING RULE: '{trigger}' -> '{meaning}'")
             await r.hset(rule_key, trigger, meaning)
             return None, None 
 
     # 2. Check for EXISTING rules
     rules = await r.hgetall(rule_key) # returns {trigger: meaning}
-    print(f"Checking {len(rules)} rules for text: '{text}'")
+    logger.debug(f"Checking {len(rules)} rules for text: '{text}'")
     
     if rules:
         text_lower = text.lower()
         for trigger, meaning in rules.items():
             if trigger in text_lower:
-                print(f"RULE MATCHED: '{trigger}' detected. Overriding with meaning '{meaning}'")
+                logger.info(f"RULE MATCHED: '{trigger}' detected. Overriding with meaning '{meaning}'")
                 return trigger, meaning
                 
     return None, None
@@ -76,6 +80,7 @@ async def update_conversation_state(conversation_id: str, new_emotions: dict, r,
     # Parse values
     msg_count = int(current_state.get("message_count", 0))
     acc_valence = float(current_state.get("accumulated_valence", 0.0))
+    prev_mood = current_state.get("overall_mood", "Neutral")
     
     # Check for Dynamic Rules
     override_trigger, override_meaning = await handle_dynamic_rules(conversation_id, original_text, r)
@@ -100,7 +105,7 @@ async def update_conversation_state(conversation_id: str, new_emotions: dict, r,
             
     # APPLY OVERRIDE
     if override_meaning:
-        print(f"Applying override logic for meaning: {override_meaning}")
+        logger.info(f"Applying override logic for meaning: {override_meaning}")
         # Heuristic: If meaning contains positive words, force positive valence/emotion
         # This is a simple interpretation layer
         meaning_lower = override_meaning.lower()
@@ -136,6 +141,10 @@ async def update_conversation_state(conversation_id: str, new_emotions: dict, r,
         overall_mood = "Negative"
     else:
         overall_mood = "Hostile"
+ 
+    if overall_mood != prev_mood:
+        logger.info(f"[State Shift] Conversation {conversation_id}: MOOD TRANSITION | {prev_mood} -> {overall_mood}")
+        logger.info(f"             Reasoning: Current Average Valence is {avg_valence:.4f}")
 
     # Save new state
     new_state = {
@@ -154,7 +163,19 @@ async def update_conversation_state(conversation_id: str, new_emotions: dict, r,
     # We convert numbers to strings implicitly or explicitly
     mapping_to_store = {k: str(v) for k, v in new_state.items()}
     await r.hset(state_key, mapping=mapping_to_store)
-    
+ 
+    # Log Aggregation Stats
+    stats = {
+        "Session ID": conversation_id,
+        "Total Messages": msg_count,
+        "Last Valence": f"{new_valence:+.4f}",
+        "Average Valence": f"{avg_valence:.4f}",
+        "Current mood": overall_mood,
+        "Dominant Emo": f"{dominant_emotion} ({dominant_score:.2%})",
+        "Last Heartbeat": datetime.fromtimestamp(time.time()).strftime('%H:%M:%S')
+    }
+    logger.log_stats(f"AGGREGATION: {conversation_id}", stats)
+ 
     return new_state
 
 async def main():
@@ -166,9 +187,9 @@ async def main():
         await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            print(f"Error creating group: {e}")
+            logger.error(f"Error creating group: {e}")
 
-    print("Aggregation worker started...")
+    logger.info("Aggregation worker started.")
     
     while True:
         try:
@@ -199,8 +220,10 @@ async def main():
                         if dom_emo:
                             emotions_map["dominant_emotion"] = dom_emo
                             
-                        print(f"Aggregating state for conversation {conversation_id}")
+                        t0 = time.time()
                         updated_state = await update_conversation_state(conversation_id, new_emotions=emotions_map, r=r, original_text=original_text)
+                        elapsed = (time.time() - t0) * 1000
+                        logger.debug(f"Aggregation for {conversation_id} took {elapsed:.2f}ms")
                         
                         # Prepare output event
                         output_event = data.copy()
@@ -213,7 +236,7 @@ async def main():
                         await r.xack(STREAM_KEY, GROUP_NAME, message_id)
             
         except Exception as e:
-            print(f"Error in processing loop: {e}")
+            logger.log_exception("AGGREGATION WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

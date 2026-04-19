@@ -7,7 +7,10 @@ import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
+from shared.utils.logger import get_logger
 from transformers import pipeline
+
+logger = get_logger("bert_service")
 
 class BasicBertAnalyzer:
     def __init__(self):
@@ -39,9 +42,9 @@ OUTPUT_STREAM = "partial_analysis_stream"
 MODEL_NAME = "basic_bert"
 
 # Initialize model outside loop
-print("Loading BERT model...")
+logger.info("Loading BERT model...")
 analyzer = BasicBertAnalyzer()
-print("BERT model loaded.")
+logger.info("BERT model loaded.")
 
 async def main():
     await redis_client.connect()
@@ -52,9 +55,16 @@ async def main():
         await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            print(f"Error creating group: {e}")
+            logger.error(f"Error creating group: {e}")
 
-    print(f"{MODEL_NAME} Analysis worker started...")
+    # Log Ready State
+    logger.log_stats(f"{MODEL_NAME.upper()} Service Status", {
+        "Model": "DistilRoBERTa-Base (Ekman)",
+        "Device": analyzer.classifier.device.type,
+        "Status": "READY",
+        "Stream": STREAM_KEY
+    })
+    logger.info(f"{MODEL_NAME} Analysis worker started.")
     
     while True:
         try:
@@ -68,16 +78,28 @@ async def main():
                         # Process message
                         # BERT models prefer demojized text
                         text_to_analyze = data.get("processed_text_demojized", "") or data.get("processed_text", "")
-                        
-                        print(f"Analyzing message {message_id} with {MODEL_NAME}...")
+                        import time
+                        start_time = time.time()
+                        logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
                         
                         scores = analyzer.analyze(text_to_analyze)
+                        elapsed = (time.time() - start_time) * 1000
+                        
+                        # Structured Stats Reporting
+                        top_emo = max(scores.items(), key=lambda x: x[1])
+                        stats = {
+                            "Message ID": data.get("message_id", "N/A"),
+                            "Dominant": f"{top_emo[0]} ({top_emo[1]:.2%})",
+                            "Latency": f"{elapsed:.2f}ms"
+                        }
+                        logger.log_stats(f"{MODEL_NAME.upper()} Inference", stats)
                         
                         output_event = {
                             "message_id": data.get("message_id", message_id), 
                             "original_data": data, 
                             "model_name": MODEL_NAME,
-                            "scores": scores
+                            "scores": scores,
+                            "latency_ms": elapsed
                         }
                         
                         await redis_client.publish_event(OUTPUT_STREAM, output_event)
@@ -86,7 +108,7 @@ async def main():
                         await r.xack(STREAM_KEY, GROUP_NAME, message_id)
             
         except Exception as e:
-            print(f"Error in processing loop: {e}")
+            logger.log_exception(f"{MODEL_NAME.upper()} WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

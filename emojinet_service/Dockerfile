@@ -15,4 +15,8 @@ COPY emojinet_service /app
 
 ENV PYTHONUNBUFFERED=1
 
+# Health check verifies the EmojiNet analysis process is active
+HEALTHCHECK --interval=30s --timeout=15s --start-period=5s --retries=3 \
+  CMD ps aux | grep "python main.py" || exit 1
+
 CMD ["python", "main.py"]

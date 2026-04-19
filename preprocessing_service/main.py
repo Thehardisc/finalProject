@@ -7,7 +7,10 @@ import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
+from shared.utils.logger import get_logger
 from preprocessing_service.utils import clean_text, demojize_text
+
+logger = get_logger("preprocessing_service")
 
 redis_client = RedisClient()
 STREAM_KEY = "message_stream"
@@ -24,9 +27,9 @@ async def main():
         await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            print(f"Error creating group: {e}")
+            logger.error(f"Error creating group: {e}")
 
-    print("Preprocessing worker started...")
+    logger.info("Preprocessing worker started.")
     
     while True:
         try:
@@ -38,7 +41,7 @@ async def main():
                 for stream, msgs in messages:
                     for message_id, data in msgs:
                         # Process message
-                        print(f"Processing message {message_id}")
+                        logger.debug(f"Processing message {message_id}")
                         
                         original_text = data.get("text", "")
                         
@@ -58,11 +61,19 @@ async def main():
                         # Publish to next stage
                         await redis_client.publish_event(OUTPUT_STREAM, output_event)
                         
+                        # Structured Stats Reporting
+                        stats = {
+                            "Message ID": data.get("message_id", "N/A"),
+                            "Original": (original_text[:40] + '...') if len(original_text) > 40 else original_text,
+                            "Demojized": (processed_text_demojized[:40] + '...') if len(processed_text_demojized) > 40 else processed_text_demojized
+                        }
+                        logger.log_stats("PREPROCESSING COMPLETE", stats)
+                        
                         # Ack message
                         await r.xack(STREAM_KEY, GROUP_NAME, message_id)
             
         except Exception as e:
-            print(f"Error in processing loop: {e}")
+            logger.log_exception("PREPROCESSING WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":
