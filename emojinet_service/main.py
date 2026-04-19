@@ -9,13 +9,15 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 try:
     from shared.utils.redis_client import RedisClient
+    from shared.utils.logger import get_logger
 except ImportError:
     # Fallback if shared not found in path (local dev vs docker)
-    # In Docker, we might need to adjust path if structure is different
-    # But usually copying shared to /app/shared works if we added sys.path
-    print("Shared module not found, attempting to adjust path...")
+    import sys
     sys.path.append('/app')
     from shared.utils.redis_client import RedisClient
+    from shared.utils.logger import get_logger
+
+logger = get_logger("emojinet_service")
 
 import emoji
 
@@ -117,7 +119,7 @@ async def analyze_emojis(text):
     if not found_emojis:
         return None
 
-    print(f"Emojis found: {found_emojis}")
+    logger.debug(f"Emojis found: {found_emojis}")
 
     for char in found_emojis:
         # Try direct match
@@ -173,9 +175,9 @@ async def main():
         await r.xgroup_create(INPUT_STREAM, GROUP_NAME, mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            print(f"Error creating group: {e}")
+            logger.error(f"Error creating group: {e}")
 
-    print("EmojiNet Service started...")
+    logger.info("EmojiNet Service started.")
     
     while True:
         try:
@@ -185,13 +187,16 @@ async def main():
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
-                        print(f"[DEBUG] Emojinet received message {message_id}")
+                        logger.debug(f"Emojinet received message {message_id}")
                         # Parse inputs
                         text = data.get("text", "")
                         id_val = data.get("message_id")
                         
                         # Analyze
+                        start_time = time.time()
                         result = await analyze_emojis(text)
+                        elapsed = (time.time() - start_time) * 1000
+                        logger.debug(f"Emojinet inference took {elapsed:.2f}ms")
                         
                         if result:
                             # Publish Result
@@ -199,24 +204,35 @@ async def main():
                                 "message_id": id_val,
                                 "model_name": "emojinet",
                                 "scores": json.dumps(result["emotions"]),
-                                "original_data": json.dumps(data) 
+                                "original_data": json.dumps(data),
+                                "latency_ms": elapsed
                             }
                             await redis_client.publish_event(OUTPUT_STREAM, output_event)
-                            print(f"Published EmojiNet analysis for {id_val}")
+                            
+                            # Structured Stats Reporting
+                            stats = {
+                                "Message ID": id_val,
+                                "Emoji Count": result["metadata"]["emoji_count"],
+                                "Emojis Found": ", ".join(result["metadata"]["emojis"]),
+                                "Dominant Map": max(result["emotions"].items(), key=lambda x: x[1])[0],
+                                "Latency": f"{elapsed:.2f}ms"
+                            }
+                            logger.log_stats("EMOJINET INFERENCE", stats)
                         else:
                              # Publish empty
                              output_event = {
                                 "message_id": id_val,
                                 "model_name": "emojinet",
                                 "scores": json.dumps({}),
-                                "original_data": json.dumps(data)
+                                "original_data": json.dumps(data),
+                                "latency_ms": elapsed
                             }
                              await redis_client.publish_event(OUTPUT_STREAM, output_event)
                         
                         await r.xack(INPUT_STREAM, GROUP_NAME, message_id)
             
         except Exception as e:
-            print(f"Error in EmojiNet loop: {e}")
+            logger.log_exception("EMOJINET WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

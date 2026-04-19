@@ -7,7 +7,10 @@ import json
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
+from shared.utils.logger import get_logger
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+
+logger = get_logger("vader_service")
 
 class VaderAnalyzer:
     def __init__(self):
@@ -40,9 +43,9 @@ async def main():
         await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            print(f"Error creating group: {e}")
+            logger.error(f"Error creating group: {e}")
 
-    print(f"{MODEL_NAME} Analysis worker started...")
+    logger.info(f"{MODEL_NAME} Analysis worker started.")
     
     while True:
         try:
@@ -57,19 +60,31 @@ async def main():
                         text_raw = data.get("processed_text", "")
                         # VADER handles raw emojis well, so we use raw text if available, or demojized
                         text_to_analyze = data.get("processed_text", "") or data.get("processed_text_demojized", "")
-                        
-                        print(f"Analyzing message {message_id} with {MODEL_NAME}...")
+                        import time
+                        start_time = time.time()
+                        logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
                         
                         scores = analyzer.analyze(text_to_analyze)
+                        elapsed = (time.time() - start_time) * 1000
+                        
+                        # Structured Stats Reporting
+                        stats = {
+                            "Message ID": data.get("message_id", "N/A"),
+                            "Text Snippet": (text_to_analyze[:30] + '...') if len(text_to_analyze) > 30 else text_to_analyze,
+                            "Latency": f"{elapsed:.2f}ms",
+                            "VADER Compound": scores["vader_compound"],
+                            "Positive": scores["vader_pos"],
+                            "Negative": scores["vader_neg"]
+                        }
+                        logger.log_stats(f"{MODEL_NAME.upper()} Inference", stats)
                         
                         # Prepare output event for the Central Responder
-                        # We publish to a 'partial' stream.
-                        # The Central Responder will collect these.
                         output_event = {
-                            "message_id": data.get("message_id", message_id), # Link back to original UUID
-                            "original_data": data, # Pass through context
+                            "message_id": data.get("message_id", message_id),
+                            "original_data": data,
                             "model_name": MODEL_NAME,
-                            "scores": scores
+                            "scores": scores,
+                            "latency_ms": elapsed
                         }
                         
                         await redis_client.publish_event(OUTPUT_STREAM, output_event)
@@ -78,7 +93,7 @@ async def main():
                         await r.xack(STREAM_KEY, GROUP_NAME, message_id)
             
         except Exception as e:
-            print(f"Error in processing loop: {e}")
+            logger.log_exception("UNHANDLED VADER WORKER ERROR", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

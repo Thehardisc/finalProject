@@ -19,4 +19,8 @@ RUN mkdir -p /app/models
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
+# Health check verifies the intelligence layer (.ready marker) is ready
+HEALTHCHECK --interval=5s --timeout=5s --start-period=5s --retries=100 \
+  CMD test -f /app/models/.ready || exit 1
+
 CMD ["python", "central_responder_service/main.py"]

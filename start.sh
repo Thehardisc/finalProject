@@ -10,7 +10,11 @@ echo "    [System]  Emotion Analysis System - Launcher"
 echo "=============================================================="
 echo ""
 
-# ── STEP 1: Detect Hardware ──────────────────────────────────────────────────
+# ── STEP 1: Load Environment ──────────────────────────────────────────────────
+# Extract API key for health checks
+API_KEY=$(grep "^INTERNAL_API_KEY=" .env | cut -d'=' -f2 | tr -d '"'\'' ')
+API_KEY=${API_KEY:-dev-secret-key}
+
 echo "[Search] Detecting host environment..."
 
 if command -v nvidia-smi &> /dev/null; then
@@ -25,13 +29,26 @@ echo ""
 $COMPOSE_CMD
 echo ""
 
-# ── STEP 2: Logging ──────────────────────────────────────────────────────────
-mkdir -p logs
+# ── STEP 2: Per-Service Logging ──────────────────────────────────────────────
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-LOGFILE="logs/run_${TIMESTAMP}.log"
-echo "[Logs] Log file: ${LOGFILE}"
-docker compose logs -f > "${LOGFILE}" 2>&1 &
-LOG_PID=$!
+LOGDIR="logs/run_${TIMESTAMP}"
+mkdir -p "${LOGDIR}"
+
+echo "[Logs] Writing per-service logs to: ${LOGDIR}/"
+
+# Spawn a background log process for each service into its own file
+SERVICES=$(docker compose config --services 2>/dev/null)
+for SERVICE in $SERVICES; do
+    docker compose logs -f "${SERVICE}" > "${LOGDIR}/${SERVICE}.log" 2>&1 &
+done
+
+# Also write a combined log that strips noisy health-check pings
+# Filters out: GET /health, OPTIONS /health, 200 OK health responses
+docker compose logs -f 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
+
+# Keep a full combined log as well (for debugging)
+docker compose logs -f > "${LOGDIR}/all.log" 2>&1 &
+LOGFILE="${LOGDIR}/all.log"
 
 # ── STEP 3: Wait for all containers to be running ────────────────────────────
 echo ""
@@ -75,7 +92,7 @@ check_service() {
     local attempt=0
 
     while [ $attempt -lt $max_retries ]; do
-        if curl -s --max-time 3 "$url" > /dev/null 2>&1; then
+        if curl -s --max-time 3 -H "X-API-Key: $API_KEY" "$url" > /dev/null 2>&1; then
             echo "   [OK] $name - responding"
             PASS=$((PASS + 1))
             return 0
@@ -121,12 +138,11 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# ── STEP 5: End-to-End Pipeline Test ─────────────────────────────────────────
-echo ""
 echo "[Test] Running end-to-end pipeline test..."
 
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/messages \
     -H "Content-Type: application/json" \
+    -H "X-API-Key: $API_KEY" \
     -d '{"conversation_id": "healthcheck", "user_id": "system", "text": "I am happy!"}' 2>/dev/null)
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
@@ -150,10 +166,17 @@ else
 fi
 echo "=============================================================="
 echo ""
-echo "    [Web]  Frontend:  http://localhost:5173"
-echo "    [API]  API:       http://localhost:8001"
-echo "    [In]   Ingestion: http://localhost:8000"
-echo "    [Log]  Logs:      $LOGFILE"
+echo "    [Web]  Frontend:     http://localhost:5173"
+echo "    [API]  API:          http://localhost:8001"
+echo "    [In]   Ingestion:    http://localhost:8000"
 echo ""
+echo "    [Logs] Directory:    ${LOGDIR}/"
+echo "    [Log]  Brain only:   ${LOGDIR}/important.log           (no health pings)"
+echo "    [Log]  Responder:    ${LOGDIR}/central_responder_service.log"
+echo "    [Log]  Database:     ${LOGDIR}/db.log"
+echo "    [Log]  Full dump:    ${LOGDIR}/all.log"
+echo ""
+echo "    Tip: tail -f ${LOGDIR}/important.log"
+echo "    Tip: tail -f ${LOGDIR}/central_responder_service.log"
 echo "=============================================================="
 echo ""

@@ -11,4 +11,9 @@ COPY shared /app/shared
 COPY persistence_service /app/persistence_service
 
 ENV PYTHONPATH=/app
+
+# Health check verifies the process is active
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD ps aux | grep "python persistence_service/main.py" || exit 1
+
 CMD ["python", "persistence_service/main.py"]
