@@ -187,7 +187,16 @@ def fetch_live_data(vader, bert, goe):
     X, y = [], []
     try:
         engine = create_engine(DATABASE_URL)
-        with engine.connect() as conn:
+        with engine.begin() as conn:
+            # ── Self-Healing Layer ──────────────────────────────────────
+            # Ensure the table is ready for context-tracking even if the 
+            # persistence healer hasn't caught up yet.
+            try:
+                conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS ground_truth_emotion VARCHAR(50);"))
+            except Exception as e:
+                # Silently continue if another service is already patching the table (locks)
+                logger.debug(f"  [SQL] Schema repair concurrent lock or failure: {e}")
+
             query = text("""
                 WITH ranked_messages AS (
                     SELECT m.message_id, m.text, a.ground_truth_emotion, m.conversation_id, m.timestamp,

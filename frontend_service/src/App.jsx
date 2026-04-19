@@ -160,6 +160,7 @@ function App() {
     const [currentAnalysis, setCurrentAnalysis] = useState(null);
     const [vibeAnalysis, setVibeAnalysis] = useState(null); // Separate vibe state
     const [analyticsData, setAnalyticsData] = useState(null); // Calibration state
+    const [systemReady, setSystemReady] = useState(false); // APPLICATION GATE
 
     // WebSocket
     const socketRef = useRef(null);
@@ -234,56 +235,78 @@ function App() {
         } catch (e) { console.error("Failed to fetch analytics", e); }
     };
 
+    const checkSystemStatus = async () => {
+        try {
+            const res = await axios.get(`${API_BASE}/health/status`, {
+                headers: { 'X-API-Key': API_KEY }
+            });
+            if (res.data.ready) {
+                setSystemReady(true);
+                return true;
+            }
+        } catch (e) { console.warn("System status check failed, retrying..."); }
+        return false;
+    };
+
     // WebSocket Connection
     useEffect(() => {
         if (view === 'analytics') {
             fetchAnalytics();
         }
     }, [view]);
+
     useEffect(() => {
-        // Fetch initial state first
         const fetchInitialState = async () => {
             try {
-                // Fetch last 50 messages for history
                 const res = await axios.get(`${API_BASE}/conversation/conv-1/messages?limit=50`, {
                     headers: { 'X-API-Key': API_KEY }
                 });
                 if (res.data && res.data.length > 0) {
-                    // 1. Populate Chat History
                     const historyMsgs = res.data.slice().reverse().map(m => {
                         const parsed = parseAnalysis(m);
                         const isSelf = m.sender_id === 'User 1' || m.sender_id === 'User 2' ? (m.sender_id === userId) : false;
-
                         return {
                             id: m.id,
-                            sender: isSelf ? 'user' : 'ai', // Visual distinction
+                            sender: isSelf ? 'user' : 'ai',
                             text: m.content,
                             senderName: m.sender_id || 'System',
                             analysis: parsed
                         };
                     });
                     setMessages(historyMsgs);
-
-                    // 2. Set Analysis Dashboard to the LATEST message's analysis
                     const lastMsg = res.data[0];
                     const initialAnalysis = parseAnalysis(lastMsg);
                     if (initialAnalysis) {
                         setCurrentAnalysis(initialAnalysis);
                         applyTheme(initialAnalysis.data.final_dominant_emotion);
                     }
-
-                    // 3. Fetch Vibe
                     await fetchVibe();
                 }
-            } catch (err) {
-                console.error("Initial fetch failed:", err);
+            } catch (err) { console.error("Initial fetch failed:", err); }
+        };
+
+        // ── System Readiness Polling (Soft Gate) ──────────────────────────
+        let pollInterval;
+        const init = async () => {
+            const isReady = await checkSystemStatus();
+            if (!isReady) {
+                pollInterval = setInterval(async () => {
+                    const nowReady = await checkSystemStatus();
+                    if (nowReady) {
+                        clearInterval(pollInterval);
+                        await fetchInitialState();
+                    }
+                }, 3000);
+            } else {
+                await fetchInitialState();
             }
         };
-        fetchInitialState();
 
         const clientId = `client_${Math.floor(Math.random() * 9999)}`;
         const ws = new WebSocket(`${WS_BASE}/ws/${clientId}?api_key=${API_KEY}`);
 
+        init();
+        
         ws.onopen = () => {
             console.log("Connected to WS");
             setStatus('Live');
@@ -388,10 +411,26 @@ function App() {
     };
 
 
-    // --- Render Helpers ---
-
     return (
         <div className="app-shell">
+            {/* Soft Landing Gate */}
+            {!systemReady && (
+                <div className="learning-gate glass fade-in">
+                    <div className="gate-content">
+                        <div className="brain-loader">
+                            <div className="pulse-ring"></div>
+                            <div className="pulse-ring"></div>
+                            <div className="brain-icon">🧠</div>
+                        </div>
+                        <h3>InnerLink is Learning</h3>
+                        <p>Optimizing neuro-filters and calibrating meta-learner...</p>
+                        <div className="gate-status">
+                            <span className="pulse"></span> [GATEKEEPER] Warming Up
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Background */}
             <div className="bg-gradient"></div>
             <div className="glow-orb" id="orb-1"></div>

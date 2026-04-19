@@ -29,13 +29,26 @@ echo ""
 $COMPOSE_CMD
 echo ""
 
-# ── STEP 2: Logging ──────────────────────────────────────────────────────────
-mkdir -p logs
+# ── STEP 2: Per-Service Logging ──────────────────────────────────────────────
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-LOGFILE="logs/run_${TIMESTAMP}.log"
-echo "[Logs] Log file: ${LOGFILE}"
-docker compose logs -f > "${LOGFILE}" 2>&1 &
-LOG_PID=$!
+LOGDIR="logs/run_${TIMESTAMP}"
+mkdir -p "${LOGDIR}"
+
+echo "[Logs] Writing per-service logs to: ${LOGDIR}/"
+
+# Spawn a background log process for each service into its own file
+SERVICES=$(docker compose config --services 2>/dev/null)
+for SERVICE in $SERVICES; do
+    docker compose logs -f "${SERVICE}" > "${LOGDIR}/${SERVICE}.log" 2>&1 &
+done
+
+# Also write a combined log that strips noisy health-check pings
+# Filters out: GET /health, OPTIONS /health, 200 OK health responses
+docker compose logs -f 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
+
+# Keep a full combined log as well (for debugging)
+docker compose logs -f > "${LOGDIR}/all.log" 2>&1 &
+LOGFILE="${LOGDIR}/all.log"
 
 # ── STEP 3: Wait for all containers to be running ────────────────────────────
 echo ""
@@ -153,10 +166,17 @@ else
 fi
 echo "=============================================================="
 echo ""
-echo "    [Web]  Frontend:  http://localhost:5173"
-echo "    [API]  API:       http://localhost:8001"
-echo "    [In]   Ingestion: http://localhost:8000"
-echo "    [Log]  Logs:      $LOGFILE"
+echo "    [Web]  Frontend:     http://localhost:5173"
+echo "    [API]  API:          http://localhost:8001"
+echo "    [In]   Ingestion:    http://localhost:8000"
 echo ""
+echo "    [Logs] Directory:    ${LOGDIR}/"
+echo "    [Log]  Brain only:   ${LOGDIR}/important.log           (no health pings)"
+echo "    [Log]  Responder:    ${LOGDIR}/central_responder_service.log"
+echo "    [Log]  Database:     ${LOGDIR}/db.log"
+echo "    [Log]  Full dump:    ${LOGDIR}/all.log"
+echo ""
+echo "    Tip: tail -f ${LOGDIR}/important.log"
+echo "    Tip: tail -f ${LOGDIR}/central_responder_service.log"
 echo "=============================================================="
 echo ""

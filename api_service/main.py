@@ -23,6 +23,16 @@ logger = get_logger("api_service")
 
 app = FastAPI(title="Emotion API", version="1.0.0")
 
+@app.get("/health/status")
+async def get_system_status():
+    """Checks if the intelligence layer (meta-learner) is ready."""
+    ready_marker = "/app/models/.ready"
+    return {
+        "ready": os.path.exists(ready_marker),
+        "timestamp": time.time(),
+        "status": "online"
+    }
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

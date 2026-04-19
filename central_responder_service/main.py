@@ -50,13 +50,23 @@ def on_model_reload(new_model):
     logger.info("Meta-learner hot-reloaded in memory.")
 
 # ── Start periodic retraining thread ────────────────────────────────────
-# Ensure the gate is CLOSED on startup
+# Smart startup: only force a retrain if there is no valid model.
+# If a good model already exists, open the gate immediately and just
+# run periodic background retraining to keep it fresh.
 ready_marker = os.path.join(os.path.dirname(__file__), "..", "models", ".ready")
-if os.path.exists(ready_marker):
-    try:
-        os.remove(ready_marker)
-    except:
-        pass
+
+if META_LEARNER is not None:
+    # ✅ Valid model already loaded — open the gate immediately
+    open(ready_marker, 'w').close()
+    logger.info("✅ [GATEKEEPER] Valid model found. Gate is OPEN. Background retraining will run periodically.")
+else:
+    # 🔒 No valid model — close the gate and force an initial training cycle
+    if os.path.exists(ready_marker):
+        try:
+            os.remove(ready_marker)
+        except:
+            pass
+    logger.info("🔒 [GATEKEEPER] No valid model. Gate is CLOSED. Training required before the UI becomes available.")
 
 start_trainer_thread(on_model_reload)
 logger.info("Background meta-learner retraining daemon is ACTIVATED with transient auto-garbage collection.")
