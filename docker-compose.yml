@@ -196,6 +196,8 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       DB_HOST: db
+    volumes:
+      - ./central_responder_service/models:/app/models:ro # Read-only access to readiness marker
 
   api_service:
     build:
@@ -209,7 +211,7 @@ services:
       db:
         condition: service_healthy
       central_responder_service:
-        condition: service_healthy
+        condition: service_started
       aggregation_service:
         condition: service_started
       persistence_service:
