@@ -16,6 +16,11 @@ central_responder_service/models/*.json
 # ── Runtime logs ──────────────────────────────
 logs/
 
+# ── Secrets — never commit these ──────────────
+.env
+.env.*
+!.env.example
+
 # ── IDE / OS ──────────────────────────────────
 .DS_Store
 .vscode/

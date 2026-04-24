@@ -47,9 +47,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-secret-key}
-      RATE_LIMIT_MAX: 60
-      RATE_LIMIT_WINDOW: 60
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
 
   preprocessing_service:
     build:
@@ -142,9 +142,10 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       # ── Periodic retraining (background thread inside this container) ────
-      RETRAIN_INTERVAL_SECONDS: 1800 # retrain every 30 minutes
-      ACCURACY_GATE: 0.40 # min test accuracy to deploy a new model
-      MAX_SAMPLES: 2500 # Optimized for CPU-mode stability
+      RETRAIN_INTERVAL_SECONDS: ${RETRAIN_INTERVAL_SECONDS:-1800}
+      ACCURACY_GATE: ${ACCURACY_GATE:-0.40}
+      MAX_SAMPLES: ${MAX_SAMPLES:-2500}
+      MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
     volumes:
       - ./central_responder_service/models:/app/models # use host directory directly
 
@@ -162,7 +163,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-      LLM_PROVIDER: MOCK
+      LLM_PROVIDER: ${LLM_PROVIDER:-RULE_BASED}
 
   aggregation_service:
     build:
@@ -221,10 +222,19 @@ services:
     environment:
       REDIS_HOST: redis
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-dev-secret-key}
-      RATE_LIMIT_MAX: 60
-      RATE_LIMIT_WINDOW: 60
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
+      # DB credentials (used by asyncpg in analytics/messages endpoints)
+      DB_HOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-emotion_db}
+    volumes:
+      - ./central_responder_service/models:/app/models:ro
+
 
   frontend_service:
     build:

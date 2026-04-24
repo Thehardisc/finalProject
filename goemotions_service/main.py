@@ -2,6 +2,7 @@ import asyncio
 import sys
 import os
 import json
+import time
 import torch
 from transformers import pipeline
 
@@ -69,7 +70,7 @@ async def main():
 
     # Log Ready State
     logger.log_stats(f"{MODEL_NAME.upper()} Service Status", {
-        "Model": "RoBERTa-Base (28 Emotions)",
+        "Model": "BERT-Base (bhadresh-savani/bert-base-go-emotion, 28 classes)",
         "Device": analyzer.classifier.device.type,
         "Status": "READY",
         "Stream": STREAM_KEY
@@ -78,47 +79,47 @@ async def main():
     
     while True:
         try:
-            # Read new messages
             streams = {STREAM_KEY: ">"}
             messages = await r.xreadgroup(GROUP_NAME, CONSUMER_NAME, streams, count=1, block=2000)
-            
+
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
-                        # Process message
-                        text_to_analyze = data.get("processed_text_demojized", "") or data.get("processed_text", "")
-                        
-                        import time
-                        start_time = time.time()
-                        logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
-                        
-                        scores = analyzer.analyze(text_to_analyze)
-                        elapsed = (time.time() - start_time) * 1000
-                        
-                        # Structured Stats Reporting
-                        top_3 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]
-                        stats = {
-                            "Message ID": data.get("message_id", "N/A"),
-                            "Top Emotions": ", ".join([f"{e} ({s:.2%})" for e, s in top_3]),
-                            "Inference Time": f"{elapsed:.2f}ms"
-                        }
-                        logger.log_stats(f"{MODEL_NAME.upper()} Inference", stats)
-                        
-                        output_event = {
-                            "message_id": data.get("message_id", message_id), 
-                            "original_data": data, 
-                            "model_name": MODEL_NAME,
-                            "scores": scores,
-                            "latency_ms": elapsed
-                        }
-                        
-                        await redis_client.publish_event(OUTPUT_STREAM, output_event)
-                        
-                        # Ack message
-                        await r.xack(STREAM_KEY, GROUP_NAME, message_id)
-            
+                        try:
+                            text_to_analyze = data.get("processed_text_demojized", "") or data.get("processed_text", "")
+                            start_time = time.time()
+                            logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
+
+                            scores = analyzer.analyze(text_to_analyze)
+                            elapsed = (time.time() - start_time) * 1000
+
+                            top_3 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]
+                            stats = {
+                                "Message ID": data.get("message_id", "N/A"),
+                                "Top Emotions": ", ".join([f"{e} ({s:.2%})" for e, s in top_3]),
+                                "Inference Time": f"{elapsed:.2f}ms"
+                            }
+                            logger.log_stats(f"{MODEL_NAME.upper()} Inference", stats)
+
+                            output_event = {
+                                "message_id": data.get("message_id", message_id),
+                                "original_data": data,
+                                "model_name": MODEL_NAME,
+                                "scores": scores,
+                                "latency_ms": elapsed
+                            }
+                            await redis_client.publish_event(OUTPUT_STREAM, output_event)
+                            await r.xack(STREAM_KEY, GROUP_NAME, message_id)
+
+                        except Exception as msg_err:
+                            logger.error(f"[GOEMOTIONS] Failed on {message_id}: {msg_err}. ACKing to prevent requeue.")
+                            try:
+                                await r.xack(STREAM_KEY, GROUP_NAME, message_id)
+                            except Exception:
+                                pass
+
         except Exception as e:
-            logger.log_exception(f"{MODEL_NAME.upper()} WORKER FATAL ERROR", e)
+            logger.log_exception(f"{MODEL_NAME.upper()} WORKER — Redis error, retrying in 1s", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

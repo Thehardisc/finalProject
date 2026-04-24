@@ -1,10 +1,12 @@
 {
-  "trained_at": "2026-04-19T16:05:07.422492Z",
+  "trained_at": "2026-04-24T16:19:59.022987Z",
   "training_samples": 1714,
   "filtered_samples": 786,
-  "validation_accuracy": 0.512,
-  "test_accuracy": 0.552,
-  "previous_accuracy": 0.552,
+  "validation_accuracy": 0.494,
+  "validation_f1_macro": 0.4043,
+  "test_accuracy": 0.524,
+  "test_f1_macro": 0.4315,
+  "previous_accuracy": 0.524,
   "improvement": 0.0,
   "accuracy_gate": 0.4
 }

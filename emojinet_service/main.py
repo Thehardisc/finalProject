@@ -11,7 +11,7 @@ try:
     from shared.utils.redis_client import RedisClient
     from shared.utils.logger import get_logger
 except ImportError:
-    # Fallback if shared not found in path (local dev vs docker)
+    # setup fallback path
     import sys
     sys.path.append('/app')
     from shared.utils.redis_client import RedisClient
@@ -21,7 +21,7 @@ logger = get_logger("emojinet_service")
 
 import emoji
 
-# EMBEDDED EMOJINET DATA (User Request)
+# emojinet dataset
 EMOJINET_DB = {
     "😂": {
         "definition": "face with tears of joy",
@@ -145,7 +145,7 @@ async def analyze_emojis(text):
             
             emoji_count += 1
         else:
-            # Fallback for unknown emojis?
+            # missing emojis handled later
             pass
 
     if emoji_count == 0:

@@ -28,7 +28,7 @@ DEFAULT_MODEL_PATH = os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"
 DEFAULT_META_PATH  = DEFAULT_MODEL_PATH.replace(".pkl", "_meta.json")
 
 
-# ── Public API ────────────────────────────────────────────────────────────────
+# public api
 
 def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
     """
@@ -133,7 +133,7 @@ def predict_with_meta_learner(
 
     Args:
         model: Loaded sklearn Pipeline (from load_meta_learner).
-        feature_vector: np.ndarray of shape (1, 67) from build_feature_vector().
+        feature_vector: np.ndarray of shape (1, 96) from build_feature_vector().
 
     Returns:
         (dominant_emotion: str, confidence: float, all_scores: dict)
@@ -253,7 +253,7 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
         return {}
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# helpers
 
 def _log_metadata():
     """Log training metadata if the meta JSON file exists."""

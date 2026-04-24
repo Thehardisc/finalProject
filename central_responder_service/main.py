@@ -4,7 +4,7 @@ import os
 import json
 import time
 
-# Meta-learner module (safe — returns None on any load failure)
+# import meta learner
 from meta_learner import (
     load_meta_learner,
     build_feature_vector,
@@ -12,7 +12,7 @@ from meta_learner import (
     calculate_feature_impacts
 )
 
-# Periodic retraining daemon (runs as a background thread)
+# import background trainer
 from trainer import start_trainer_thread
 
 # Add parent directory to path to import shared
@@ -32,41 +32,35 @@ PENDING_KEY_PREFIX = "pending_aggregation:"
 
 AGGREGATION_TIMEOUT_MS = 5000
 
-# ── Meta-learner startup load ─────────────────────────────────────────────────
-# The trained .pkl from models/ is STRICTLY REQUIRED.
-# If missing, we crash immediately so the user knows they must run training.
+# load weights
+# requires the pkl file
 META_LEARNER = load_meta_learner()
 if META_LEARNER is None:
     logger.warning("No compatible meta_weights.pkl found. Falling back to Rule-Based Aggregation until trainer finishes.")
 else:
     logger.info("Running in META-LEARNER mode.")
 
-# ── Hot-reload callback ─────────────────────────────────────────────────
-# Called by the trainer thread after a successful deploy.
-# Swaps the in-memory model immediately — no container restart needed.
+# update model when retrained
 def on_model_reload(new_model):
     global META_LEARNER
     META_LEARNER = new_model
     logger.info("Meta-learner hot-reloaded in memory.")
 
-# ── Start periodic retraining thread ────────────────────────────────────
-# Smart startup: only force a retrain if there is no valid model.
-# If a good model already exists, open the gate immediately and just
-# run periodic background retraining to keep it fresh.
+# check model status for gate
 ready_marker = os.path.join(os.path.dirname(__file__), "..", "models", ".ready")
 
 if META_LEARNER is not None:
-    # ✅ Valid model already loaded — open the gate immediately
+    # model ok - write ready file
     open(ready_marker, 'w').close()
     logger.info("✅ [GATEKEEPER] Valid model found. Gate is OPEN. Background retraining will run periodically.")
 else:
-    # 🔒 No valid model — close the gate and force an initial training cycle
+    # missing model - remove ready file
     if os.path.exists(ready_marker):
         try:
             os.remove(ready_marker)
         except:
             pass
-    logger.info("🔒 [GATEKEEPER] No valid model. Gate is CLOSED. Training required before the UI becomes available.")
+    logger.info("No valid model found. Missing ready file.")
 
 start_trainer_thread(on_model_reload)
 logger.info("Background meta-learner retraining daemon is ACTIVATED with transient auto-garbage collection.")
@@ -86,14 +80,14 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
     
-    # ── 1. Gather scores from analyzers ───────────────────────────────────────
+    # format model outputs
     model_outputs = {}
     for res in partial_results:
         model_name = res.get("model_name")
         scores = res.get("scores", {})
         model_outputs[model_name] = scores
 
-    # ── 2. Fetch Conversation Context (Memory) ──────────────────────────────
+    # get context
     conv_id = original_data.get("conversation_id", "conv-1")
     context = {"avg_valence": 0.0, "prev_emotion": "neutral"}
     try:
@@ -106,12 +100,11 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     except Exception as e:
         logger.warning(f"Failed to fetch context for {conv_id}: {e}")
 
-    # ── 3. Meta-Learner Inference ─────────────────────────────────────────────
-    # The meta-learner is mandatory. It consumes all 4 model outputs + context
+    # predict logic
     fv = build_feature_vector(model_outputs, context=context)
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc = predict_with_meta_learner(META_LEARNER, fv)
 
-    # ── 4. Latency Analysis ────────────────────────────────────────
+    # calculate latency
     # E2E Latency (from ingestion)
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
@@ -131,7 +124,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
 
     logger.log_stats(f"Meta-Inference: {message_id}", stats)
 
-    # ── 3. Sarcasm / Conflict Check (Internal reasoning layer) ────────────────
+    # evaluate sarcasm
     reasoning = None
     if conflict_desc or sarcasm_score > 0.3:
          reasoning = {
@@ -144,7 +137,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     # Calculate Logic Map (Impact Scores)
     logic_map = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion)
 
-    # ── 5. Construct Output ───────────────────────────────────────────────────
+    # format output
     pipeline_log = {
         "models": model_outputs,
         "aggregated": final_scores,
@@ -235,43 +228,49 @@ async def main():
                                  pass
 
                         pending_key = f"{PENDING_KEY_PREFIX}{msg_id}"
-                        
-                        # Tracking arrival of first partial result for aggregation latency stats
-                        if not await r.exists(pending_key):
+
+                        # setup pending object
+                        # add expiration
+                        is_new_key = not await r.exists(pending_key)
+                        if is_new_key:
                             await r.hset(pending_key, "arrival_timestamp", time.time())
-                        
+                            await r.expire(pending_key, 30)  # 30s TTL — prevents zombie keys
+
                         await r.hset(pending_key, model_name, json.dumps(full_packet))
-                        
-                        # We need to know which models are required before aggregating.
+
+                        # Expected models: all 4 must arrive before aggregation
                         expected_models = ["go_emotions", "basic_bert", "vader", "emojinet"]
-                        
+
                         current_results = await r.hgetall(pending_key)
                         received_models = [k for k in current_results.keys() if k != "arrival_timestamp"]
-                        
+
                         if all(m in received_models for m in expected_models):
-                            # READY TO AGGREGATE
+                            # all results complete
                             logger.debug(f"All models received for {msg_id}. Aggregating.")
-                            
+
                             all_packets = []
                             arrival_ts = float(current_results.get("arrival_timestamp", time.time()))
                             agg_lat = (time.time() - arrival_ts) * 1000
-                            
+
                             for m, packet_str in current_results.items():
                                 if m == "arrival_timestamp":
                                     continue
                                 try:
                                     all_packets.append(json.loads(packet_str))
-                                except:
+                                except Exception:
                                     logger.error(f"Failed to parse packet for model {m}")
-                            
-                            await aggregate_and_publish(msg_id, all_packets, r, agg_lat=agg_lat)
+
+                            try:
+                                await aggregate_and_publish(msg_id, all_packets, r, agg_lat=agg_lat)
+                            except Exception as agg_err:
+                                logger.error(f"[AGGREGATION FAILED] {msg_id}: {agg_err}")
                         else:
-                             missing = list(set(expected_models) - set(received_models))
-                             logger.debug(f"Message {msg_id} waiting for: {missing}")
-                        
-                        # Ack
+                            missing = list(set(expected_models) - set(received_models))
+                            logger.debug(f"Message {msg_id} waiting for: {missing}")
+
+                        # ACK the stream record regardless of outcome
                         await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
-            
+
         except Exception as e:
             logger.log_exception("CENTRAL RESPONDER CRITICAL ERROR", e)
             await asyncio.sleep(1)

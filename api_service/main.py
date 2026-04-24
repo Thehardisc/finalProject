@@ -17,7 +17,6 @@ from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
 from shared.constants import EMOTION_LABELS
-from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
 
 logger = get_logger("api_service")
 
@@ -25,13 +24,55 @@ app = FastAPI(title="Emotion API", version="1.0.0")
 
 @app.get("/health/status")
 async def get_system_status():
-    """Checks if the intelligence layer (meta-learner) is ready."""
+    """
+    Returns readiness status for subsystems.
+    Used by frontend to know when to stop loading.
+    Returns 503 if not ready, 200 if OK.
+    """
     ready_marker = "/app/models/.ready"
-    return {
-        "ready": os.path.exists(ready_marker),
+    meta_ready = os.path.exists(ready_marker)
+
+    # Check Redis
+    redis_ok = False
+    try:
+        if redis_client.redis:
+            await redis_client.redis.ping()
+            redis_ok = True
+    except Exception:
+        pass
+
+    # Check DB
+    db_ok = False
+    try:
+        import asyncpg
+        db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
+        conn = await asyncpg.connect(db_url)
+        try:
+            await conn.fetchval("SELECT 1 FROM messages LIMIT 0")
+            db_ok = True
+        finally:
+            await conn.close()
+    except Exception:
+        pass
+
+    all_ready = meta_ready and redis_ok and db_ok
+
+    payload = {
+        "ready": all_ready,
         "timestamp": time.time(),
-        "status": "online"
+        "status": "online" if all_ready else "warming_up",
+        "components": {
+            "database": db_ok,
+            "redis": redis_ok,
+            "meta_learner": meta_ready,
+        }
     }
+
+    if not all_ready:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(content=payload, status_code=503)
+
+    return payload
 
 app.add_middleware(
     CORSMiddleware,
@@ -43,7 +84,7 @@ app.add_middleware(
 
 redis_client = RedisClient()
 
-# --- WebSocket Manager ---
+# Websocket Manager
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -112,9 +153,9 @@ async def _handle_reasoning_update(message_id, data):
     }
     await manager.broadcast(payload)
 
-# --- Background Task for Redis Listener ---
+# Listener for Redis
 async def redis_listener():
-    """Listens to conversation_update_stream and broadcasts updates to WebSocket clients."""
+    """Listen to updates and broadcast to clients."""
     logger.info("Starting Redis Listener for WebSockets...")
     
     r = redis_client.redis
@@ -159,30 +200,31 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, api_key: str 
             data = await websocket.receive_text()
             
             # Rate Limit Check for WebSocket messages
-            if not await rate_limiter.is_allowed(api_key):
-                # We don't close the connection, just drop the message and send a warning
+            # Use client_id, not api_key — all WS clients share the same key,
+            # so bucketing by api_key would let one user drain the limit for everyone.
+            if not await rate_limiter.is_allowed(client_id):
                 await websocket.send_json({"type": "error", "message": "Rate limit exceeded"})
                 continue
 
-            # If client sends a chat message, we need to inject it into Ingestion Service
-            # The user JS sends: { text, recipient_id: 'system' }
+            # handle incoming messages
+            # formats: { text, recipient_id: 'system' }
             try:
                 msg_obj = json.loads(data)
                 text = msg_obj.get("text")
                 if text:
-                    # Prefer explicit sender_id from client, fallback to client_id
                     sender = msg_obj.get("sender_id", client_id)
-                    
+                    # use existing conversation id or create new one
+                    conversation_id = msg_obj.get("conversation_id") or client_id
+
                     event = {
                         "text": text,
-                        "conversation_id": "conv-1", 
+                        "conversation_id": conversation_id,
                         "user_id": sender,
                         "timestamp": time.time(),
                         "message_id": str(uuid.uuid4()),
                         "metadata": {"source": "websocket"}
                     }
                     await redis_client.publish_event("message_stream", event)
-                    
             except Exception as e:
                 logger.log_exception("FAILED TO PROCESS CLIENT WEBSOCKET MESSAGE", e)
             
@@ -210,7 +252,7 @@ async def get_conversation_state(conversation_id: str):
     r = redis_client.redis
     state = await r.hgetall(f"conversation:{conversation_id}")
     if not state:
-        # Return a default empty state instead of 404
+        # return default state
         return {
             "message_count": 0,
             "overall_mood": "Neutral",
@@ -222,7 +264,7 @@ async def get_conversation_state(conversation_id: str):
 
 @app.get("/conversation/{conversation_id}/messages", dependencies=[Depends(validate_api_key)])
 async def get_conversation_messages(conversation_id: str, limit: int = 50):
-    """Fetch recent messages for a conversation directly from PostgreSQL (CQRS read path)."""
+    """Get messages for a conversation."""
     import os
     import asyncpg
     
@@ -230,19 +272,20 @@ async def get_conversation_messages(conversation_id: str, limit: int = 50):
     
     try:
         conn = await asyncpg.connect(db_url)
-        # Fetch messages with their latest analysis
-        # We join messages with emotion_analysis
-        query = """
-            SELECT m.message_id as id, m.text as content, m.timestamp, m.user_id as sender_id, 
-                   a.emotions_json as emotions, a.reasoning_json as reasoning, a.pipeline_log_json as pipeline_log
-            FROM messages m
-            LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
-            WHERE m.conversation_id = $1
-            ORDER BY m.timestamp DESC
-            LIMIT $2
-        """
-        rows = await conn.fetch(query, conversation_id, limit)
-        await conn.close()
+        try:
+            # get messages and latest analysis
+            query = """
+                SELECT m.message_id as id, m.text as content, m.timestamp, m.user_id as sender_id, 
+                       a.emotions_json as emotions, a.reasoning_json as reasoning, a.pipeline_log_json as pipeline_log
+                FROM messages m
+                LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
+                WHERE m.conversation_id = $1
+                ORDER BY m.timestamp DESC
+                LIMIT $2
+            """
+            rows = await conn.fetch(query, conversation_id, limit)
+        finally:
+            await conn.close()
         
         messages = []
         for row in rows:
@@ -276,7 +319,7 @@ async def post_message_feedback(message_id: str, payload: dict):
 
 @app.get("/analytics/calibration", dependencies=[Depends(validate_api_key)])
 async def get_calibration_analytics():
-    """Calculate model performance metrics based on verified human feedback."""
+    """Get model performance metrics."""
     import os
     import asyncpg
     from collections import Counter
@@ -285,14 +328,16 @@ async def get_calibration_analytics():
     
     try:
         conn = await asyncpg.connect(db_url)
-        # Fetch verified records
-        query = """
-            SELECT ground_truth_emotion, emotions_json
-            FROM emotion_analysis
-            WHERE is_verified = TRUE
-        """
-        rows = await conn.fetch(query)
-        await conn.close()
+        try:
+            # get verified records
+            query = """
+                SELECT ground_truth_emotion, emotions_json
+                FROM emotion_analysis
+                WHERE is_verified = TRUE
+            """
+            rows = await conn.fetch(query)
+        finally:
+            await conn.close()
         
         if not rows:
             return {"status": "no_data", "message": "Provide more feedback to see calibration stats."}
@@ -305,7 +350,7 @@ async def get_calibration_analytics():
         fp = Counter() # False Positives
         fn = Counter() # False Negatives
         
-        # Confusion matrix data: [Actual][Predicted] = Count
+        # confusion matrix: [Actual][Predicted] = count
         confusion = {} 
         
         for row in rows:
@@ -324,7 +369,7 @@ async def get_calibration_analytics():
                 fp[predicted] += 1
                 fn[actual] += 1
                 
-        # Calculate Precision/Recall/F1
+        # calc stats
         emotion_stats = {}
         for emo in EMOTION_LABELS:
             # We only show stats for emotions that appear in the verified set
