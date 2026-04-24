@@ -31,7 +31,7 @@ from shared.utils.logger import get_logger
 
 logger = get_logger("train_meta_learner")
 
-# ── Path setup ────────────────────────────────────────────────────────────────
+# paths
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -151,39 +151,31 @@ def run_goemotions(goemotions_model, text: str) -> dict:
 
 
 def run_emojinet(text: str) -> dict:
-    """Simplified inline EmojiNet — same DB as emojinet_service/main.py."""
-    import emoji as emoji_lib
-    EMOJINET_DB = {
-        "😂": {"emotions": {"joy": 0.9, "amusement": 0.95}},
-        "😭": {"emotions": {"sadness": 0.8, "grief": 0.6, "joy": 0.2}},
-        "😍": {"emotions": {"love": 0.95, "admiration": 0.9, "joy": 0.8}},
-        "🔥": {"emotions": {"excitement": 0.9, "admiration": 0.8, "joy": 0.7}},
-        "💀": {"emotions": {"amusement": 0.9, "joy": 0.7, "fear": 0.1}},
-        "🙃": {"emotions": {"amusement": 0.4, "annoyance": 0.6, "confusion": 0.3}},
-        "🤔": {"emotions": {"curiosity": 0.8, "confusion": 0.4, "disapproval": 0.2}},
-        "🙄": {"emotions": {"annoyance": 0.9, "disapproval": 0.8, "disgust": 0.5}},
-        "💩": {"emotions": {"disgust": 0.8, "amusement": 0.5, "annoyance": 0.4}},
-        "❤️": {"emotions": {"love": 1.0, "caring": 0.9, "joy": 0.8}},
-        "✨": {"emotions": {"excitement": 0.7, "admiration": 0.6, "joy": 0.5}},
-    }
-    found = emoji_lib.distinct_emoji_list(text)
-    if not found:
+    """EmojiNet feature extractor — uses shared EMOJI_EMOTION_DB (single source of truth)."""
+    try:
+        import emoji as emoji_lib
+        from shared.constants import EMOJI_EMOTION_DB
+        found = emoji_lib.distinct_emoji_list(text)
+        if not found:
+            return {}
+        scores, count = {}, 0
+        for char in found:
+            entry = EMOJI_EMOTION_DB.get(char) or EMOJI_EMOTION_DB.get(char.replace('\ufe0f', ''))
+            if entry:
+                for emo, score in entry["emotions"].items():
+                    scores[emo] = scores.get(emo, 0.0) + score
+                count += 1
+        return {k: v / count for k, v in scores.items()} if count else {}
+    except Exception as e:
+        logger.warning(f"  EmojiNet error: {e}")
         return {}
-    scores = {}
-    count = 0
-    for char in found:
-        entry = EMOJINET_DB.get(char) or EMOJINET_DB.get(char.replace('\ufe0f', ''))
-        if entry:
-            for emo, score in entry["emotions"].items():
-                scores[emo] = scores.get(emo, 0.0) + score
-            count += 1
-    if count == 0:
-        return {}
-    return {k: v / count for k, v in scores.items()}
 
 
 def process_split(split_data, vader, bert, goemotions, split_name: str):
     """Run all 4 analyzers on a dataset split, return (X, y)."""
+    import random
+    rng = random.Random(42)  # Seeded for reproducibility
+
     X, y = [], []
     total = len(split_data)
     logger.info(f"Processing {split_name} split ({total} samples)...")
@@ -196,22 +188,29 @@ def process_split(split_data, vader, bert, goemotions, split_name: str):
         text = sample["text"]
 
         # Run analyzers
-        vader_scores = run_vader(vader, text)
-        bert_scores = run_bert(bert, text)
+        vader_scores      = run_vader(vader, text)
+        bert_scores       = run_bert(bert, text)
         goemotions_scores = run_goemotions(goemotions, text)
-        emojinet_scores = run_emojinet(text)
+        emojinet_scores   = run_emojinet(text)
 
-        fv = build_feature_vector(vader_scores, bert_scores, goemotions_scores, emojinet_scores)
+        # synthetic context injection
+        # avg_valence uniformly sampled from [-1, 1]; prev_mood randomly sampled
+        # from EMOTION_LABELS. This ensures the model learns from context features
+        # instead of treating them as always-zero noise.
+        synthetic_valence = rng.uniform(-1.0, 1.0)
+        synthetic_mood    = rng.choice(EMOTION_LABELS)
 
-        # GoEmotions uses multi-label — pick label with highest id value, or first positive
+        fv = build_feature_vector(
+            vader_scores, bert_scores, goemotions_scores, emojinet_scores,
+            prev_valence=synthetic_valence, prev_mood=synthetic_mood
+        )
+
+        # GoEmotions uses multi-label — take first (highest confidence) label
         label_ids = sample.get("labels", [])
         if not label_ids:
-            continue  # skip unlabeled samples
+            continue
 
-        # Use the first label (or max confidence from goemotions_scores as proxy)
-        # Map GoEmotions label index (0-27) to our EMOTION_LABELS
-        # GoEmotions label indices match our EMOTION_LABELS ordering 
-        gold_label_idx = label_ids[0]  # take first label for single-label training
+        gold_label_idx = label_ids[0]
         if gold_label_idx >= len(EMOTION_LABELS):
             continue
 
@@ -221,9 +220,8 @@ def process_split(split_data, vader, bert, goemotions, split_name: str):
         y.append(gold_label)
 
     dur = time.time() - t0
-    logger.info(f"  Done. {len(X)} usable samples from {split_name}. Take {dur:.1f}s (avg {dur*1000/len(X):.2f}ms/smp)")
-    
-    # Log distribution
+    logger.info(f"  Done. {len(X)} usable samples from {split_name}. Took {dur:.1f}s (avg {dur*1000/max(len(X),1):.2f}ms/smp)")
+
     dist = Counter(y).most_common(5)
     logger.log_stats(f"{split_name} distribution", dict(dist))
     return np.array(X), np.array(y)
@@ -272,7 +270,7 @@ def train(max_samples_per_split: int = 10000):
     logger.info("Meta-Learner Training Script")
     logger.info("=" * 60)
 
-    # ── Load GoEmotions dataset ───────────────────────────────────────────────
+    # load dataset
     logger.info("Loading GoEmotions dataset from HuggingFace...")
     try:
         from datasets import load_dataset
@@ -288,20 +286,20 @@ def train(max_samples_per_split: int = 10000):
 
     logger.info(f"Dataset sizes — Train: {len(train_data)}, Val: {len(val_data)}, Test: {len(test_data)}")
 
-    # ── Load analyzers ────────────────────────────────────────────────────────
+    # load models
     vader, bert, goemotions = init_models()
 
-    # ── Process splits ────────────────────────────────────────────────────────
+    # generate features
     X_train, y_train = process_split(train_data, vader, bert, goemotions, "train")
     X_val,   y_val   = process_split(val_data,   vader, bert, goemotions, "val")
     X_test,  y_test  = process_split(test_data,  vader, bert, goemotions, "test")
 
-    # ── Train Logistic Regression ─────────────────────────────────────────────
+    # train model
     logger.info("Training Logistic Regression meta-learner...")
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
-    from sklearn.metrics import accuracy_score, classification_report
+    from sklearn.metrics import accuracy_score, classification_report, f1_score
 
     meta_pipeline = Pipeline([
         ('scaler', StandardScaler()),
@@ -317,28 +315,34 @@ def train(max_samples_per_split: int = 10000):
 
     meta_pipeline.fit(X_train, y_train)
     
-    # ── Log Feature Importance ────────────────────────────────────────────────
+    # check feature influence
     log_feature_importance(meta_pipeline, [])
 
-    # ── Evaluate ──────────────────────────────────────────────────────────────
-    val_acc  = accuracy_score(y_val,  meta_pipeline.predict(X_val))
-    test_acc = accuracy_score(y_test, meta_pipeline.predict(X_test))
+    # test performance
+    y_val_pred  = meta_pipeline.predict(X_val)
+    y_test_pred = meta_pipeline.predict(X_test)
+
+    val_acc   = accuracy_score(y_val,  y_val_pred)
+    test_acc  = accuracy_score(y_test, y_test_pred)
+    val_f1    = f1_score(y_val,  y_val_pred,  average='macro', zero_division=0)
+    test_f1   = f1_score(y_test, y_test_pred, average='macro', zero_division=0)
 
     stats = {
-        "Validation Accuracy": f"{val_acc:.4f}",
-        "Test Accuracy":       f"{test_acc:.4f}",
-        "Train Samples":       len(X_train),
-        "Val Samples":         len(X_val),
-        "Test Samples":        len(X_test)
+        "Validation Accuracy":  f"{val_acc:.4f}",
+        "Validation F1 (macro)": f"{val_f1:.4f}",
+        "Test Accuracy":        f"{test_acc:.4f}",
+        "Test F1 (macro)":      f"{test_f1:.4f}",
+        "Train Samples":        len(X_train),
+        "Val Samples":          len(X_val),
+        "Test Samples":         len(X_test)
     }
     logger.log_stats("Final Results", stats)
     
     logger.info("Classification Report (Test):")
-    report = classification_report(y_test, meta_pipeline.predict(X_test),
-                                 labels=list(set(y_test)), zero_division=0)
+    report = classification_report(y_test, y_test_pred, labels=list(set(y_test)), zero_division=0)
     logger.info("\n" + report)
 
-    # ── Save model ────────────────────────────────────────────────────────────
+    # export model
     logger.info(f"Saving model to {PKL_PATH}...")
     with open(PKL_PATH, 'wb') as f:
         pickle.dump(meta_pipeline, f)

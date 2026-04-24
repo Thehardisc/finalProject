@@ -7,7 +7,7 @@ echo      [Brain]  Emotion Analysis System - Launcher
 echo ==============================================================
 echo.
 
-REM ── STEP 1: Detect Hardware ──────────────────────────────────────────────────
+REM Detect Hardware
 echo [Search] Detecting host environment...
 
 where nvidia-smi >nul 2>nul
@@ -23,7 +23,7 @@ echo.
 %COMPOSE_CMD%
 echo.
 
-REM ── STEP 2: Logging ──────────────────────────────────────────────────────────
+REM Setup Logging
 if not exist logs mkdir logs
 
 set TIMESTAMP=%date:~-4,4%-%date:~-10,2%-%date:~-7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%
@@ -33,7 +33,7 @@ set LOGFILE=logs\run_%TIMESTAMP%.log
 echo [Logs] Log file: %LOGFILE%
 start /b cmd /c "docker compose logs -f > %LOGFILE% 2>&1"
 
-REM ── STEP 3: Wait for all containers to be running ────────────────────────────
+REM Wait for containers
 echo.
 echo [Wait] Waiting for all containers to start...
 
@@ -69,7 +69,7 @@ docker compose ps
 exit /b 1
 
 :HEALTH_CHECKS
-REM ── STEP 4: Service Health Checks ────────────────────────────────────────────
+REM Health Checks
 echo.
 echo [Health] Running service health checks...
 set PASS=0
@@ -110,7 +110,7 @@ if %ERRORLEVEL% equ 0 (
     set /a FAIL+=1
 )
 
-REM ── STEP 5: End-to-End Pipeline Test ─────────────────────────────────────────
+REM Test Pipeline
 echo.
 echo [Test] Running end-to-end pipeline test...
 
@@ -128,7 +128,7 @@ if "%HTTP_CODE%"=="200" (
     set /a FAIL+=1
 )
 
-REM ── STEP 6: Summary ─────────────────────────────────────────────────────────
+REM Print summary
 echo.
 echo ==============================================================
 if %FAIL% equ 0 (

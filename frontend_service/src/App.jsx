@@ -8,9 +8,9 @@ ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointE
 
 const API_BASE = 'http://localhost:8001';
 const WS_BASE = 'ws://localhost:8001';
-const API_KEY = 'dev-secret-key'; // Matches INTERNAL_API_KEY in docker-compose
+const API_KEY = 'il-9fA3mK7wXrPq2nZeVtYs'; // Matches INTERNAL_API_KEY in .env
 
-// --- Constants ---
+// constants
 const EMOTION_COLORS = {
     'joy': '#00ff88', 'happy': '#00ff88', 'love': '#ff66b2', 'admiration': '#00ffcc',
     'anger': '#ff0055', 'annoyance': '#ff6600', 'disgust': '#ff00aa',
@@ -29,7 +29,7 @@ const EMOTIONAL_WORDS = {
     'wow': 'surprise', 'shock': 'surprise', 'amazing': 'surprise'
 };
 
-// --- Sub-components ---
+// sub components
 
 // Word Highlighter Component
 const EmotionalTextOverlay = ({ text }) => {
@@ -56,12 +56,12 @@ const EmotionalTextOverlay = ({ text }) => {
     );
 };
 
-// Simple Plutchik Wheel Visualization (SVG)
+// Plutchik wheel
 const PlutchikWheel = ({ dominantEmotion }) => {
     const defaultColor = 'rgba(255,255,255,0.05)';
     const activeColor = 'var(--accent-primary)';
 
-    // Mapping dominant emotions to Plutchik cores
+    // map emotion to core
     const mapping = {
         "admiration": "trust", "amusement": "joy", "approval": "trust", "caring": "trust",
         "desire": "anticipation", "excitement": "joy", "gratitude": "joy", "joy": "joy",
@@ -114,7 +114,7 @@ const BuildupChart = ({ steps }) => {
         return top;
     });
 
-    // Attempt to map point colors
+    // map point colors
     const pointColors = steps.map(s => {
         const emo = s.dominant?.toLowerCase();
         return EMOTION_COLORS[emo] || '#00f2ff';
@@ -158,29 +158,35 @@ function App() {
     const [userId, setUserId] = useState('User 1');
     const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const [currentAnalysis, setCurrentAnalysis] = useState(null);
-    const [vibeAnalysis, setVibeAnalysis] = useState(null); // Separate vibe state
-    const [analyticsData, setAnalyticsData] = useState(null); // Calibration state
-    const [systemReady, setSystemReady] = useState(false); // APPLICATION GATE
+    const [vibeAnalysis, setVibeAnalysis] = useState(null);
+    const [analyticsData, setAnalyticsData] = useState(null);
+    const [systemReady, setSystemReady] = useState(false);
+    const [componentStatus, setComponentStatus] = useState({
+        database: false,
+        redis: false,
+        meta_learner: false,
+    });
+    const [gateVisible, setGateVisible] = useState(true);
 
-    // WebSocket
+    // refs
     const socketRef = useRef(null);
     const chatContainerRef = useRef(null);
     const messagesEndRef = useRef(null);
 
-    // Initial Helper
+    // helpers
     const applyTheme = (emotion) => {
         const e = emotion?.toLowerCase();
         const color = EMOTION_COLORS[e] || '#00f2ff';
         document.documentElement.style.setProperty('--accent-primary', color);
     };
 
-    // Helper: Parse Analysis
+    // parse message
     const parseAnalysis = (msg) => {
         if (!msg.emotions) return null;
         try {
             const ems = typeof msg.emotions === 'string' ? JSON.parse(msg.emotions) : msg.emotions;
 
-            // Adapt to WS payload structure
+            // transform data
             const bert_list = [];
             for (const [k, v] of Object.entries(ems)) {
                 if (!['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion', 'sentiment_positive', 'sentiment_negative'].includes(k)) {
@@ -238,17 +244,26 @@ function App() {
     const checkSystemStatus = async () => {
         try {
             const res = await axios.get(`${API_BASE}/health/status`, {
-                headers: { 'X-API-Key': API_KEY }
+                headers: { 'X-API-Key': API_KEY },
+                validateStatus: (s) => s === 200 || s === 503, // Accept 503 as valid data
             });
-            if (res.data.ready) {
-                setSystemReady(true);
+            const data = res.data;
+            if (data.components) {
+                setComponentStatus(data.components);
+            }
+            if (data.ready) {
+                // fade out and hide
+                setGateVisible(false);
+                setTimeout(() => setSystemReady(true), 800);
                 return true;
             }
-        } catch (e) { console.warn("System status check failed, retrying..."); }
+        } catch (e) {
+            console.warn("System status check failed, retrying...");
+        }
         return false;
     };
 
-    // WebSocket Connection
+    // websockets
     useEffect(() => {
         if (view === 'analytics') {
             fetchAnalytics();
@@ -285,8 +300,52 @@ function App() {
             } catch (err) { console.error("Initial fetch failed:", err); }
         };
 
-        // ── System Readiness Polling (Soft Gate) ──────────────────────────
+        // check if ready
         let pollInterval;
+        const connectWebSocket = () => {
+            const clientId = `client_${Math.floor(Math.random() * 9999)}`;
+            const ws = new WebSocket(`${WS_BASE}/ws/${clientId}?api_key=${API_KEY}`);
+
+            ws.onopen = () => {
+                console.log("Connected to WS");
+                setStatus('Live');
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const payload = JSON.parse(event.data);
+                    if (payload.type === 'analysis') {
+                        setCurrentAnalysis(prev => ({
+                            ...payload,
+                            ai_insight: null,
+                            loadingReasoning: true
+                        }));
+                        applyTheme(payload.data.final_dominant_emotion);
+
+                        if (payload.vibe) {
+                            setVibeAnalysis(payload.vibe);
+                        } else {
+                            fetchVibe();
+                        }
+                    } else if (payload.type === 'reasoning') {
+                        setCurrentAnalysis(prev => {
+                            if (prev && prev.data.id === payload.message_id) {
+                                return { ...prev, ai_insight: payload.ai_insight, loadingReasoning: false };
+                            }
+                            return prev;
+                        });
+                    }
+                } catch (e) {
+                    console.error("WS Parse error", e);
+                }
+            };
+
+            ws.onclose = () => setStatus('Offline');
+
+            socketRef.current = ws;
+            return ws;
+        };
+
         const init = async () => {
             const isReady = await checkSystemStatus();
             if (!isReady) {
@@ -294,66 +353,28 @@ function App() {
                     const nowReady = await checkSystemStatus();
                     if (nowReady) {
                         clearInterval(pollInterval);
+                        connectWebSocket();
                         await fetchInitialState();
                     }
                 }, 3000);
             } else {
+                connectWebSocket();
                 await fetchInitialState();
             }
         };
 
-        const clientId = `client_${Math.floor(Math.random() * 9999)}`;
-        const ws = new WebSocket(`${WS_BASE}/ws/${clientId}?api_key=${API_KEY}`);
-
         init();
-        
-        ws.onopen = () => {
-            console.log("Connected to WS");
-            setStatus('Live');
+
+        return () => {
+            clearInterval(pollInterval);
+            if (socketRef.current) socketRef.current.close();
         };
-
-        ws.onmessage = (event) => {
-            try {
-                const payload = JSON.parse(event.data);
-                if (payload.type === 'analysis') {
-                    setCurrentAnalysis(prev => ({
-                        ...payload,
-                        ai_insight: null,
-                        loadingReasoning: true
-                    }));
-                    applyTheme(payload.data.final_dominant_emotion);
-
-                    // Also update vibe if present
-                    if (payload.vibe) {
-                        setVibeAnalysis(payload.vibe);
-                    } else {
-                        // Force fetch new vibe
-                        fetchVibe();
-                    }
-                } else if (payload.type === 'reasoning') {
-                    setCurrentAnalysis(prev => {
-                        if (prev && prev.data.id === payload.message_id) {
-                            return { ...prev, ai_insight: payload.ai_insight, loadingReasoning: false };
-                        }
-                        return prev;
-                    });
-                }
-            } catch (e) {
-                console.error("WS Parse error", e);
-            }
-        };
-
-        ws.onclose = () => setStatus('Offline');
-
-        socketRef.current = ws;
-
-        return () => ws.close();
     }, []); // Run once on mount. Changing userId doesn't reconnect WS, just changes sent ID.
 
     const sendMessage = () => {
         if (!inputValue.trim()) return;
 
-        // Optimistic UI update
+        // optimistic update
         const newMsg = {
             id: Date.now(),
             sender: 'user',
@@ -363,9 +384,9 @@ function App() {
         };
         setMessages(prev => [...prev, newMsg]);
 
-        // Send via WS
+        // send message over socket
         if (socketRef.current) {
-            // Send explicit sender_id
+            // send sender id
             socketRef.current.send(JSON.stringify({
                 text: inputValue,
                 recipient_id: 'system',
@@ -377,7 +398,7 @@ function App() {
         setView('live');
     };
 
-    // Auto-scroll chat: robust
+    // scroll on new message
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages, view]);
@@ -389,7 +410,7 @@ function App() {
                 { label: newLabel },
                 { headers: { 'X-API-Key': API_KEY } }
             );
-            // Optionally update local state
+            // update state
             setMessages(prev => prev.map(m => m.id === msgId ? { ...m, verified: true, feedbackLabel: newLabel } : m));
             if (currentAnalysis && currentAnalysis.data.id === msgId) {
                 setCurrentAnalysis(prev => ({ ...prev, verified: true, feedbackLabel: newLabel }));
@@ -404,7 +425,7 @@ function App() {
         if (msg.analysis) {
             setCurrentAnalysis(msg.analysis);
             applyTheme(msg.analysis.data.final_dominant_emotion);
-            setView('live'); // Switch to analysis view
+            setView('live'); // show analysis
         } else {
             console.log("No analysis data for this message yet", msg);
         }
@@ -413,30 +434,48 @@ function App() {
 
     return (
         <div className="app-shell">
-            {/* Soft Landing Gate */}
+            {/* loading gate */ }
             {!systemReady && (
-                <div className="learning-gate glass fade-in">
+                <div className={`loading-gate ${gateVisible ? '' : 'gate-exit'}`}>
+                    <div className="gate-backdrop"></div>
                     <div className="gate-content">
                         <div className="brain-loader">
                             <div className="pulse-ring"></div>
-                            <div className="pulse-ring"></div>
+                            <div className="pulse-ring delay"></div>
                             <div className="brain-icon">🧠</div>
                         </div>
-                        <h3>InnerLink is Learning</h3>
-                        <p>Optimizing neuro-filters and calibrating meta-learner...</p>
-                        <div className="gate-status">
-                            <span className="pulse"></span> [GATEKEEPER] Warming Up
+                        <h2 className="gate-title">InnerLink is Initializing</h2>
+                        <p className="gate-subtitle">Warming up neural pipelines and calibrating the meta-learner...</p>
+                        
+                        <div className="gate-checklist">
+                            <div className={`gate-check-item ${componentStatus.redis ? 'ready' : 'pending'}`}>
+                                <span className="check-icon">{componentStatus.redis ? '✓' : '◌'}</span>
+                                <span className="check-label">Redis Stream Engine</span>
+                            </div>
+                            <div className={`gate-check-item ${componentStatus.database ? 'ready' : 'pending'}`}>
+                                <span className="check-icon">{componentStatus.database ? '✓' : '◌'}</span>
+                                <span className="check-label">PostgreSQL Database</span>
+                            </div>
+                            <div className={`gate-check-item ${componentStatus.meta_learner ? 'ready' : 'pending'}`}>
+                                <span className="check-icon">{componentStatus.meta_learner ? '✓' : '◌'}</span>
+                                <span className="check-label">Meta-Learner Intelligence</span>
+                            </div>
+                        </div>
+
+                        <div className="gate-footer">
+                            <div className="gate-spinner"></div>
+                            <span>Checking every 3 seconds...</span>
                         </div>
                     </div>
                 </div>
             )}
 
-            {/* Background */}
+            {/* background */}
             <div className="bg-gradient"></div>
             <div className="glow-orb" id="orb-1"></div>
             <div className="glow-orb" id="orb-2"></div>
 
-            {/* Sidebar */}
+            {/* sidebar */}
             <aside className="sidebar glass">
                 <header className="app-header">
                     <div className="logo">
@@ -561,7 +600,7 @@ function App() {
                 </div>
             </aside>
 
-            {/* Main Dashboard */}
+            {/* main dashboard */}
             <main className="dashboard">
                 <div className="dashboard-header">
                     <h2>Discovery Module</h2>
@@ -570,7 +609,7 @@ function App() {
                     </div>
                 </div>
 
-                {/* IDLE VIEW */}
+                {/* idle state */}
                 {!currentAnalysis && view === 'live' && (
                     <div className="idle-view">
                         <div className="visualizer-mock">
@@ -584,10 +623,10 @@ function App() {
                     </div>
                 )}
 
-                {/* LIVE ANALYSIS VIEW */}
+                {/* active analysis */}
                 {currentAnalysis && view === 'live' && (
                     <div className="analysis-view">
-                        {/* Vibe Dashboard */}
+                        {/* vibe section */}
                         <section className="vibe-dashboard glass">
                             <div className="vibe-header">
                                 <div className="vibe-title">
@@ -635,7 +674,7 @@ function App() {
                             )}
                         </section>
 
-                        {/* Dominant Emotion */}
+                        {/* dominant emotion */}
                         <section className="hero-emotion glass">
                             <div className="hero-emotion">
                                 <span className="label">Dominant Resonance</span>
@@ -673,7 +712,7 @@ function App() {
                                 </div>
                             </div>
  
-                            {/* Word Highlighting Overlay */}
+                            {/* word highlights */}
                             <EmotionalTextOverlay text={currentAnalysis.data.raw_text} />
 
                             <div className="valence-container">
@@ -688,7 +727,7 @@ function App() {
                         </section>
 
                         <div className="detailed-grid">
-                            {/* BERT Breakdown */}
+                            {/* bert breakdown */}
                             <section className="analysis-card glass">
                                 <div className="card-header">
                                     <h4>Neural Breakdown (BERT)</h4>
@@ -709,7 +748,7 @@ function App() {
                                 </div>
                             </section>
 
-                            {/* Dissonance / Sarcasm Meter (New) */}
+                            {/* conflict / sarcasm meter */}
                         {currentAnalysis.data.sarcasm_score > 0.1 && (
                             <div className={`dissonance-meter glass ${currentAnalysis.data.sarcasm_score > 0.5 ? 'high-alert' : ''}`}>
                                 <div className="meter-label">
@@ -728,7 +767,7 @@ function App() {
                             </div>
                         )}
 
-                        {/* AI Insight Card */}
+                        {/* text insight */}
                             <div className={`ai-insight-card glass ${currentAnalysis.loadingReasoning ? 'thinking' : ''}`}>
                                 <div className="card-header">
                                     <span className="icon">🧠</span>

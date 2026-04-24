@@ -60,7 +60,11 @@ class CustomLogger:
                 val_str = f"{value:.4f}"
             else:
                 val_str = str(value)
-            
+
+            # Truncate long values to prevent box overflow
+            if len(val_str) > 27:
+                val_str = val_str[:24] + "..."
+
             line = f"|  {key:<25} : {val_str:<27}|"
             lines.append(line)
         

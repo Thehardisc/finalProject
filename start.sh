@@ -10,7 +10,7 @@ echo "    [System]  Emotion Analysis System - Launcher"
 echo "=============================================================="
 echo ""
 
-# ── STEP 1: Load Environment ──────────────────────────────────────────────────
+# Load environment
 # Extract API key for health checks
 API_KEY=$(grep "^INTERNAL_API_KEY=" .env | cut -d'=' -f2 | tr -d '"'\'' ')
 API_KEY=${API_KEY:-dev-secret-key}
@@ -29,7 +29,7 @@ echo ""
 $COMPOSE_CMD
 echo ""
 
-# ── STEP 2: Per-Service Logging ──────────────────────────────────────────────
+# Setup logging
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGDIR="logs/run_${TIMESTAMP}"
 mkdir -p "${LOGDIR}"
@@ -46,11 +46,15 @@ done
 # Filters out: GET /health, OPTIONS /health, 200 OK health responses
 docker compose logs -f 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
 
+# Errors-only log: captures actual ERROR/CRITICAL/FATAL lines from services
+# Excludes false positives like logger names (uvicorn.error) and Python deprecation warnings
+docker compose logs -f 2>&1 | grep -E '\] ERROR |\] CRITICAL |\] WARNING |FATAL|CRASH|ROLLBACK|Traceback' | grep -v 'uvicorn.error' > "${LOGDIR}/errors.log" 2>&1 &
+
 # Keep a full combined log as well (for debugging)
 docker compose logs -f > "${LOGDIR}/all.log" 2>&1 &
 LOGFILE="${LOGDIR}/all.log"
 
-# ── STEP 3: Wait for all containers to be running ────────────────────────────
+# Wait for containers
 echo ""
 echo "[Wait] Waiting for all containers to start..."
 
@@ -78,7 +82,7 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     exit 1
 fi
 
-# ── STEP 4: Service Health Checks ────────────────────────────────────────────
+# Health checks
 echo ""
 echo "[Health] Running service health checks..."
 PASS=0
@@ -156,7 +160,7 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# ── STEP 6: Summary ─────────────────────────────────────────────────────────
+# Print summary
 echo ""
 echo "=============================================================="
 if [ $FAIL -eq 0 ]; then
@@ -171,12 +175,13 @@ echo "    [API]  API:          http://localhost:8001"
 echo "    [In]   Ingestion:    http://localhost:8000"
 echo ""
 echo "    [Logs] Directory:    ${LOGDIR}/"
+echo "    [Log]  Errors only:  ${LOGDIR}/errors.log              (ERROR/WARN/CRITICAL)"
 echo "    [Log]  Brain only:   ${LOGDIR}/important.log           (no health pings)"
 echo "    [Log]  Responder:    ${LOGDIR}/central_responder_service.log"
 echo "    [Log]  Database:     ${LOGDIR}/db.log"
 echo "    [Log]  Full dump:    ${LOGDIR}/all.log"
 echo ""
+echo "    Tip: tail -f ${LOGDIR}/errors.log"
 echo "    Tip: tail -f ${LOGDIR}/important.log"
-echo "    Tip: tail -f ${LOGDIR}/central_responder_service.log"
 echo "=============================================================="
 echo ""

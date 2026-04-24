@@ -21,46 +21,54 @@ OUTPUT_STREAM = "conversation_update_stream"
 
 import re
 
-async def handle_dynamic_rules(conversation_id: str, text: str, r) -> tuple:
+from typing import Tuple, Optional
+
+async def handle_dynamic_rules(
+    conversation_id: str, text: str, r
+) -> Tuple[Optional[str], Optional[str]]:
+
     """
     1. Parses text for new rules (e.g. "when i say X it means Y").
     2. Stores rules in Redis.
     3. Checks text against existing rules and returns an override emotion if matched.
+
+    Returns (trigger, meaning) on match/rule-learn, or (None, None).
     """
     rule_key = f"conversation:{conversation_id}:rules"
-    
-    # 1. Parse for NEW rules
-    # Patterns:
-    # "when i say <trigger> it means <meaning>"
-    # "<trigger> means <meaning>"
-    # "define <trigger> as <meaning>"
+
+    # extract new rules
+    # Use anchored, non-greedy patterns to prevent false positives.
+    # e.g. "I think happiness means a lot" should NOT create a rule.
     patterns = [
-        r"when i say (.+) it means (.+)",
-        r"(.+) means (.+)",
-        r"define (.+) as (.+)"
+        r"^when i say (.+?) it means (.+)$",   # most specific — check first
+        r"^define (.+?) as (.+)$",
+        # "X means Y" is intentionally removed as a standalone pattern —
+        # it is too broad and causes too many false positives in normal sentences.
     ]
-    
+
+    text_stripped = text.strip()
     for pattern in patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, text_stripped, re.IGNORECASE)
         if match:
             trigger = match.group(1).strip().lower()
             meaning = match.group(2).strip().lower()
-            
             logger.info(f"LEARNING RULE: '{trigger}' -> '{meaning}'")
             await r.hset(rule_key, trigger, meaning)
-            return None, None 
+            return None, None
 
-    # 2. Check for EXISTING rules
-    rules = await r.hgetall(rule_key) # returns {trigger: meaning}
-    logger.debug(f"Checking {len(rules)} rules for text: '{text}'")
-    
+    # test text against existing rules
+    # Fetch once per call (cached locally for this call's loop).
+    rules: dict = await r.hgetall(rule_key)
+    logger.debug(f"Checking {len(rules)} rules for text: '{text_stripped}'")
+
     if rules:
-        text_lower = text.lower()
+        text_lower = text_stripped.lower()
         for trigger, meaning in rules.items():
-            if trigger in text_lower:
-                logger.info(f"RULE MATCHED: '{trigger}' detected. Overriding with meaning '{meaning}'")
+            # Use word-boundary match to avoid "sad" matching "saddle", etc.
+            if re.search(rf"\b{re.escape(trigger)}\b", text_lower):
+                logger.info(f"RULE MATCHED: '{trigger}' -> meaning '{meaning}'")
                 return trigger, meaning
-                
+
     return None, None
 
 async def update_conversation_state(conversation_id: str, new_emotions: dict, r, original_text: str = ""):
@@ -111,7 +119,7 @@ async def update_conversation_state(conversation_id: str, new_emotions: dict, r,
         meaning_lower = override_meaning.lower()
         if any(w in meaning_lower for w in ["love", "happy", "good", "great", "joy"]):
             new_valence = 0.9
-            dominant_emotion = "love" # Force neural emotion
+            dominant_emotion = "love"  # Force to a positive emotion
             dominant_score = 1.0
         elif any(w in meaning_lower for w in ["hate", "bad", "angry", "kill", "sad"]):
             new_valence = -0.9
@@ -196,48 +204,57 @@ async def main():
             # Read new messages
             streams = {STREAM_KEY: ">"}
             messages = await r.xreadgroup(GROUP_NAME, CONSUMER_NAME, streams, count=1, block=2000)
-            
+
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
-                        # Process message
-                        conversation_id = data.get("conversation_id")
-                        original_text = data.get("original_text", "")
-                        
-                        # Data structure handling:
-                        # Central Responder sends: 
-                        # emotions: JSON_STRING (map)
-                        # dominant_emotion: STRING
-                        
-                        emotions_json = data.get("emotions", "{}")
+                        # handle message error
+                        # Isolate each message so one bad payload can't
+                        # kill the entire aggregation worker.
                         try:
-                            emotions_map = json.loads(emotions_json)
-                        except:
-                            emotions_map = {}
-                            
-                        # Add dominant_emotion to the map so update_conversation_state can find it
-                        dom_emo = data.get("dominant_emotion")
-                        if dom_emo:
-                            emotions_map["dominant_emotion"] = dom_emo
-                            
-                        t0 = time.time()
-                        updated_state = await update_conversation_state(conversation_id, new_emotions=emotions_map, r=r, original_text=original_text)
-                        elapsed = (time.time() - t0) * 1000
-                        logger.debug(f"Aggregation for {conversation_id} took {elapsed:.2f}ms")
-                        
-                        # Prepare output event
-                        output_event = data.copy()
-                        output_event["conversation_state"] = json.dumps(updated_state)
-                        
-                        # Publish to next stage (Persistence / API notification)
-                        await redis_client.publish_event(OUTPUT_STREAM, output_event)
-                        
-                        # Ack message
-                        await r.xack(STREAM_KEY, GROUP_NAME, message_id)
-            
+                            conversation_id = data.get("conversation_id")
+                            original_text = data.get("original_text", "")
+
+                            emotions_json = data.get("emotions", "{}")
+                            try:
+                                emotions_map = json.loads(emotions_json)
+                            except json.JSONDecodeError:
+                                emotions_map = {}
+
+                            dom_emo = data.get("dominant_emotion")
+                            if dom_emo:
+                                emotions_map["dominant_emotion"] = dom_emo
+
+                            t0 = time.time()
+                            updated_state = await update_conversation_state(
+                                conversation_id, new_emotions=emotions_map,
+                                r=r, original_text=original_text
+                            )
+                            elapsed = (time.time() - t0) * 1000
+                            logger.debug(f"Aggregation for {conversation_id} took {elapsed:.2f}ms")
+
+                            output_event = data.copy()
+                            output_event["conversation_state"] = json.dumps(updated_state)
+                            await redis_client.publish_event(OUTPUT_STREAM, output_event)
+
+                            # ACK — message processed successfully
+                            await r.xack(STREAM_KEY, GROUP_NAME, message_id)
+
+                        except Exception as msg_err:
+                            logger.error(
+                                f"[AGGREGATION] Failed to process message {message_id}: {msg_err}. "
+                                f"ACKing to prevent infinite requeue."
+                            )
+                            # ACK even on failure to prevent the message from
+                            # re-entering the queue and causing a processing loop.
+                            try:
+                                await r.xack(STREAM_KEY, GROUP_NAME, message_id)
+                            except Exception:
+                                pass  # If ACK itself fails, Redis will re-deliver eventually
+
         except Exception as e:
-            logger.log_exception("AGGREGATION WORKER FATAL ERROR", e)
-            await asyncio.sleep(1)
+            logger.log_exception("AGGREGATION WORKER — Redis connection error, retrying in 2s", e)
+            await asyncio.sleep(2)
 
 if __name__ == "__main__":
     asyncio.run(main())

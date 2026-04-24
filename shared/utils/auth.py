@@ -5,7 +5,7 @@ from shared.utils.logger import get_logger
 
 logger = get_logger("shared.auth")
 
-# ── API Key Validation ────────────────────────────────────────────────────────
+# api key validation
 # Default key for internal use/local dev. 
 # In production, set INTERNAL_API_KEY environment variable.
 VALID_API_KEYS = os.environ.get("INTERNAL_API_KEY", "dev-secret-key").split(",")
@@ -30,7 +30,7 @@ async def validate_api_key(x_api_key: str = Header(None)):
     
     return x_api_key
 
-# ── Rate Limiter ──────────────────────────────────────────────────────────────
+# rate limiter
 class RateLimiter:
     """
     Simple Redis-backed Fixed Window Rate Limiter.

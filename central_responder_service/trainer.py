@@ -2,8 +2,8 @@
 trainer.py — Periodic retraining background thread for central_responder_service.
 
 Runs in a daemon thread alongside the main Redis consumer loop.
-After each successful cycle, hot-reloads the model into the global META_LEARNER
-variable so predictions immediately use the new weights — no restart needed.
+After each successful cycle, reloads the model into META_LEARNER
+variable so predictions use the new weights immediately.
 
 Configuration (read from environment via docker-compose):
   RETRAIN_INTERVAL_SECONDS  (default: 600)
@@ -27,14 +27,14 @@ from shared.utils.logger import get_logger
  
 logger = get_logger("trainer")
  
-# ── Database Config ──────────────────────────────────────────────────────────
+# db settings
 DB_USER = os.getenv("POSTGRES_USER", "user")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 DB_NAME = os.getenv("POSTGRES_DB", "emotion_db")
 DB_HOST = os.getenv("DB_HOST", "db")
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}"
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# configuration
 RETRAIN_INTERVAL = int(os.environ.get("RETRAIN_INTERVAL_SECONDS", 1800))
 ACCURACY_GATE    = float(os.environ.get("ACCURACY_GATE", 0.40))
 MAX_SAMPLES      = int(os.environ.get("MAX_SAMPLES", 2500))
@@ -44,33 +44,35 @@ META_PATH        = MODEL_PATH.with_name("meta_weights_meta.json")
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS
 
 
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  CLI Reporter                                                        ║
-# ╚══════════════════════════════════════════════════════════════════════╝
-
+# reporter
 def _bar(value: float, width: int = 25) -> str:
+    """Renders a unicode progress bar for logging."""
     filled = int(value * width)
     return "█" * filled + "░" * (width - filled)
 
+
+def print_report(prev_meta: dict, new_acc: float, new_f1: float, n_train: int, n_filtered: int, deployed: bool) -> None:
+    """Log a structured summary after each training cycle."""
+    prev_acc = prev_meta.get("test_accuracy")
+    delta = (new_acc - prev_acc) if prev_acc is not None else None
+
     stats = {
         "Previous Accuracy": f"{prev_acc:.4f}" if prev_acc is not None else "N/A",
-        "New Accuracy":      f"{new_acc:.4f}",
-        "Samples Trained":   n_train,
-        "Samples Filtered":  n_filtered,
-        "Deployment":        "DEPLOYED (Success)" if deployed else "REJECTED (Low Accuracy/Regression)"
+        "New Accuracy (test)": f"{new_acc:.4f}  {_bar(new_acc)}",
+        "New F1 (macro)":     f"{new_f1:.4f}  {_bar(new_f1)}",
+        "Samples Trained":    n_train,
+        "Samples Filtered":   n_filtered,
+        "Deployment":         "✅ DEPLOYED" if deployed else "❌ REJECTED (accuracy/regression)"
     }
-    
+
     if delta is not None:
-        direction = "UP" if delta >= 0 else "DOWN"
+        direction = "↑" if delta >= 0 else "↓"
         stats["Delta"] = f"{direction} {delta*100:+.2f}%"
 
-    logger.log_stats("Retraining report", stats)
+    logger.log_stats("Retraining Report", stats)
 
 
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  Feature Builder                                                     ║
-# ╚══════════════════════════════════════════════════════════════════════╝
-
+# feature generation
 def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict, context: dict = None) -> np.ndarray:
     context = context or {}
     vec = []
@@ -89,10 +91,7 @@ def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict, context: dict = No
     return np.array(vec, dtype=np.float32)
 
 
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  Bad-Data Filters                                                    ║
-# ╚══════════════════════════════════════════════════════════════════════╝
-
+# outliner filters
 def filter_outliers(X, y, goe_list):
     """Layer 2: Drop samples where GoEmotions gives < 5% confidence to the gold label."""
     cX, cy, removed = [], [], 0
@@ -120,10 +119,7 @@ def filter_balance(X, y):
     return cX, cy
 
 
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  Analyzer Helpers                                                    ║
-# ╚══════════════════════════════════════════════════════════════════════╝
-
+# model utilities
 def _get_analyzers(device):
     logger.info("Loading analyzers transiently into RAM...")
     import torch
@@ -157,28 +153,20 @@ def _run(model, text):
 def _emojinet(text):
     try:
         import emoji as emoji_lib
-        DB = {
-            "😂":{"joy":0.9,"amusement":0.95}, "😭":{"sadness":0.8,"grief":0.6,"joy":0.2},
-            "😍":{"love":0.95,"admiration":0.9,"joy":0.8}, "🔥":{"excitement":0.9,"admiration":0.8,"joy":0.7},
-            "💀":{"amusement":0.9,"joy":0.7,"fear":0.1}, "🙃":{"amusement":0.4,"annoyance":0.6,"confusion":0.3},
-            "🤔":{"curiosity":0.8,"confusion":0.4,"disapproval":0.2}, "🙄":{"annoyance":0.9,"disapproval":0.8,"disgust":0.5},
-            "💩":{"disgust":0.8,"amusement":0.5,"annoyance":0.4}, "❤️":{"love":1.0,"caring":0.9,"joy":0.8},
-            "✨":{"excitement":0.7,"admiration":0.6,"joy":0.5},
-        }
+        from shared.constants import EMOJI_EMOTION_DB
         found = emoji_lib.distinct_emoji_list(text)
         scores, count = {}, 0
         for ch in found:
-            entry = DB.get(ch) or DB.get(ch.replace('\ufe0f',''))
+            entry = EMOJI_EMOTION_DB.get(ch) or EMOJI_EMOTION_DB.get(ch.replace('\ufe0f', ''))
             if entry:
-                for e, sc in entry.items(): scores[e] = scores.get(e, 0.0) + sc
+                for e, sc in entry.get("emotions", {}).items():
+                    scores[e] = scores.get(e, 0.0) + sc
                 count += 1
-        return {k: v/count for k,v in scores.items()} if count else {}
-    except: return {}
+        return {k: v / count for k, v in scores.items()} if count else {}
+    except Exception:
+        return {}
  
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  SQL Data Fetcher                                                    ║
-# ╚══════════════════════════════════════════════════════════════════════╝
- 
+# fetch data 
 def fetch_live_data(vader, bert, goe):
     """
     Fetch verified samples from PostgreSQL (emotion_analysis joined with messages).
@@ -188,7 +176,7 @@ def fetch_live_data(vader, bert, goe):
     try:
         engine = create_engine(DATABASE_URL)
         with engine.begin() as conn:
-            # ── Self-Healing Layer ──────────────────────────────────────
+            # check column
             # Ensure the table is ready for context-tracking even if the 
             # persistence healer hasn't caught up yet.
             try:
@@ -234,10 +222,7 @@ def fetch_live_data(vader, bert, goe):
         return [], []
 
 
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  Training Cycle                                                      ║
-# ╚══════════════════════════════════════════════════════════════════════╝
-
+# run cycle
 def run_one_cycle(reload_callback):
     """
     Full training + filter + gate + deploy cycle.
@@ -272,10 +257,13 @@ def run_one_cycle(reload_callback):
     device = 0 if torch.cuda.is_available() else -1
     vader, bert, goe = _get_analyzers(device)
 
+    import random
+    rng = random.Random(42)  # Seeded for reproducibility
+
     def process(split, name):
         X, y, gs_list = [], [], []
         for i, s in enumerate(split):
-            if i % 100 == 0: 
+            if i % 100 == 0:
                 pct = (i / len(split)) * 100
                 logger.info(f"  [Trainer] {name} Building Features: {i}/{len(split)} ({pct:.0f}%)")
             lids = s.get("labels", [])
@@ -286,9 +274,15 @@ def run_one_cycle(reload_callback):
             gs = _run(goe,  text)
             es = _emojinet(text)
             gs_list.append(gs)
-            # Dummy context for base dataset training
-            context = {"avg_valence": 0.0, "prev_emotion": "neutral"}
-            X.append(build_fv(vs, bs, gs, es, context=context))
+            # setup dummy context data
+            # Instead of zeroing out all 29 context features, we inject
+            # randomly sampled values so the model actually learns to use them.
+            # avg_valence: uniform [-1, 1]; prev_emotion: random GoEmotions label.
+            synthetic_context = {
+                "avg_valence":  rng.uniform(-1.0, 1.0),
+                "prev_emotion": rng.choice(EMOTION_LABELS)
+            }
+            X.append(build_fv(vs, bs, gs, es, context=synthetic_context))
             y.append(EMOTION_LABELS[lids[0]])
         pt = (time.time() - t0) / len(X) if X else 0
         logger.info(f"  [Trainer] {name}: {len(X)} samples. Avg {pt*1000:.2f}ms/sample.")
@@ -345,7 +339,7 @@ def run_one_cycle(reload_callback):
     from sklearn.linear_model import LogisticRegression
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
-    from sklearn.metrics import accuracy_score
+    from sklearn.metrics import accuracy_score, f1_score
 
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
@@ -354,10 +348,19 @@ def run_one_cycle(reload_callback):
                                     random_state=42))
     ])
     pipeline.fit(np.array(X_tr), y_tr)
-    val_acc  = accuracy_score(y_v,  pipeline.predict(np.array(X_v)))
-    test_acc = accuracy_score(y_te, pipeline.predict(np.array(X_te)))
 
-    # Layer 4: accuracy gate
+    y_v_pred  = pipeline.predict(np.array(X_v))
+    y_te_pred = pipeline.predict(np.array(X_te))
+
+    val_acc   = accuracy_score(y_v,  y_v_pred)
+    test_acc  = accuracy_score(y_te, y_te_pred)
+    # Macro F1 is the right metric for imbalanced multi-class (28 emotions)
+    val_f1    = f1_score(y_v,  y_v_pred,  average='macro', zero_division=0)
+    test_f1   = f1_score(y_te, y_te_pred, average='macro', zero_division=0)
+    logger.info(f"  [Metrics] Val  — Acc: {val_acc:.4f}  |  Macro-F1: {val_f1:.4f}")
+    logger.info(f"  [Metrics] Test — Acc: {test_acc:.4f}  |  Macro-F1: {test_f1:.4f}")
+
+    # Layer 4: accuracy gate (uses test accuracy to match industry convention)
     deployed = test_acc >= ACCURACY_GATE
 
     if deployed:
@@ -368,34 +371,33 @@ def run_one_cycle(reload_callback):
 
         with open(META_PATH, 'w') as f:
             json.dump({
-                "trained_at":         datetime.datetime.utcnow().isoformat() + "Z",
-                "training_samples":   len(X_tr),
-                "filtered_samples":   n_filtered,
+                "trained_at":          datetime.datetime.utcnow().isoformat() + "Z",
+                "training_samples":    len(X_tr),
+                "filtered_samples":    n_filtered,
                 "validation_accuracy": round(val_acc,  4),
+                "validation_f1_macro": round(val_f1,   4),
                 "test_accuracy":       round(test_acc, 4),
+                "test_f1_macro":       round(test_f1,  4),
                 "previous_accuracy":   round(prev_meta.get("test_accuracy", 0), 4),
                 "improvement":         round(test_acc - prev_meta.get("test_accuracy", 0), 4),
                 "accuracy_gate":       ACCURACY_GATE,
             }, f, indent=2)
 
-        # Hot-reload — no container restart needed
+        # swap model
         reload_callback(pipeline)
-        
+
         # Gating feedback: Create a definitive signal that a VALID model is live
         ready_marker = MODEL_PATH.parent / ".ready"
         ready_marker.touch()
-        
+
         if not hasattr(start_trainer_thread, '_initial_trained'):
-            logger.info("✅ [GATEKEEPER] Initial training complete. Opening system gates.")
+            logger.info("Training complete. Opening system gates.")
             setattr(start_trainer_thread, '_initial_trained', True)
 
-    print_report(prev_meta, test_acc, len(X_tr), n_filtered, deployed)
+    print_report(prev_meta, test_acc, test_f1, len(X_tr), n_filtered, deployed)
 
 
-# ╔══════════════════════════════════════════════════════════════════════╗
-# ║  Daemon Thread Entry Point                                           ║
-# ╚══════════════════════════════════════════════════════════════════════╝
-
+# background worker thread
 def start_trainer_thread(reload_callback):
     """
     Spawn a daemon thread that runs run_one_cycle() every RETRAIN_INTERVAL seconds.
@@ -404,7 +406,7 @@ def start_trainer_thread(reload_callback):
     """
     def _loop():
         logger.info(f"🚀 Started. Interval={RETRAIN_INTERVAL}s, Gate={ACCURACY_GATE}, Samples={MAX_SAMPLES}")
-        logger.info("🔒 [GATEKEEPER] Intelligence layer is warming up. API access will be enabled upon initial model completion.")
+        logger.info("Trainer started. API access will be enabled on first model completion.")
         while True:
             try:
                 run_one_cycle(reload_callback)

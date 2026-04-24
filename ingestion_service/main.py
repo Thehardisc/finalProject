@@ -13,7 +13,6 @@ from shared.utils.redis_client import RedisClient
 from shared.models import MessageEvent
 from shared.utils.logger import get_logger
 from shared.utils.auth import validate_api_key, RateLimiter
-from fastapi import FastAPI, HTTPException, Depends
 
 logger = get_logger("ingestion_service")
 
@@ -49,9 +48,9 @@ async def shutdown_event():
 
 @app.post("/messages")
 async def ingest_message(msg: MessageInput, api_key: str = Depends(validate_api_key)):
-    # Rate Limit Check
-    if not await rate_limiter.is_allowed(api_key):
-        logger.warning(f"Rate limit exceeded for API Key: {api_key[:8]}...")
+    # rate limit by user_id
+    if not await rate_limiter.is_allowed(msg.user_id):
+        logger.warning(f"Rate limit exceeded for user: {msg.user_id}, conv={msg.conversation_id}")
         raise HTTPException(status_code=429, detail="Too Many Requests: Rate limit exceeded")
     
     logger.debug(f"Received ingestion request: conv={msg.conversation_id}, user={msg.user_id}, len={len(msg.text)}")
@@ -66,7 +65,7 @@ async def ingest_message(msg: MessageInput, api_key: str = Depends(validate_api_
     )
     
     try:
-        # Publish to 'message_stream'
+        # write to stream
         await redis_client.publish_event("message_stream", event.dict())
         logger.info(f"Successfully ingested message {event.message_id} [conv={event.conversation_id}]")
         return {"status": "accepted", "message_id": event.message_id}
