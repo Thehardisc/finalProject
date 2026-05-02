@@ -7,8 +7,40 @@ echo      [Brain]  Emotion Analysis System - Launcher
 echo ==============================================================
 echo.
 
+REM Load config values from .env for display
+set MAX_SAMPLES_VAL=2500
+set RETRAIN_INTERVAL_VAL=1800
+set ACCURACY_GATE_VAL=0.40
+set LLM_PROVIDER_VAL=RULE_BASED
+set LOG_LEVEL_VAL=INFO
+set RATE_LIMIT_MAX_VAL=60
+set API_KEY_VAL=N/A
+
+for /f "tokens=1,* delims==" %%a in (.env) do (
+    if "%%a"=="MAX_SAMPLES"              set MAX_SAMPLES_VAL=%%b
+    if "%%a"=="RETRAIN_INTERVAL_SECONDS" set RETRAIN_INTERVAL_VAL=%%b
+    if "%%a"=="ACCURACY_GATE"            set ACCURACY_GATE_VAL=%%b
+    if "%%a"=="LLM_PROVIDER"             set LLM_PROVIDER_VAL=%%b
+    if "%%a"=="LOG_LEVEL"                set LOG_LEVEL_VAL=%%b
+    if "%%a"=="RATE_LIMIT_MAX"           set RATE_LIMIT_MAX_VAL=%%b
+    if "%%a"=="INTERNAL_API_KEY"         set API_KEY_VAL=%%b
+)
+
+echo [Config] Resolved environment from .env:
+echo ----------------------------------------------------------
+echo    LOG_LEVEL               = !LOG_LEVEL_VAL!
+echo    MAX_SAMPLES             = !MAX_SAMPLES_VAL!  ^(GoEmotions dataset size per run^)
+echo    RETRAIN_INTERVAL_SECS   = !RETRAIN_INTERVAL_VAL!s
+echo    ACCURACY_GATE           = !ACCURACY_GATE_VAL!  ^(min test accuracy to deploy model^)
+echo    LLM_PROVIDER            = !LLM_PROVIDER_VAL!
+echo    RATE_LIMIT_MAX          = !RATE_LIMIT_MAX_VAL! req/min per user
+echo    API_KEY                 = !API_KEY_VAL:~0,6!...  ^(redacted^)
+echo ----------------------------------------------------------
+echo.
+
 REM Detect Hardware
 echo [Search] Detecting host environment...
+
 
 where nvidia-smi >nul 2>nul
 if %ERRORLEVEL% equ 0 (

@@ -149,7 +149,10 @@ async def _handle_conversation_update(message_id, data):
         "top_emotions": [conv_state.get("dominant_emotion", "Neutral")]
     }
     
-    convo_id = data.get("conversation_id", "conv-1")
+    convo_id = data.get("conversation_id")
+    if not convo_id:
+        logger.warning("Received conversation update with no conversation_id — skipping broadcast.")
+        return
     if db_pool:
         async with db_pool.acquire() as conn:
             rows = await conn.fetch("SELECT user_id FROM conversation_participants WHERE conversation_id = $1", convo_id)
@@ -211,7 +214,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, api_key: str = 
         return
 
     await manager.connect(websocket, user_id)
-    rate_limiter = RateLimiter(redis_client)
+    # Use module-level rate_limiter (not per-connection instantiation)
     
     try:
         while True:
@@ -219,9 +222,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, api_key: str = 
             data = await websocket.receive_text()
             
             # Rate Limit Check for WebSocket messages
-            # Use client_id, not api_key — all WS clients share the same key,
-            # so bucketing by api_key would let one user drain the limit for everyone.
-            if not await rate_limiter.is_allowed(client_id):
+            # Rate-limit by user_id, not api_key, so users don't share the same bucket.
+            if not await rate_limiter.is_allowed(user_id):
                 await websocket.send_json({"type": "error", "message": "Rate limit exceeded"})
                 continue
 
@@ -259,11 +261,18 @@ async def startup_event():
     global db_pool
     import asyncpg
     db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
-    try:
-        db_pool = await asyncpg.create_pool(db_url)
-    except Exception as e:
-        logger.warning(f"DB pool fail: {e}")
-        
+    # Retry DB pool creation — DB may not be ready immediately
+    for attempt in range(5):
+        try:
+            db_pool = await asyncpg.create_pool(db_url, min_size=2, max_size=10)
+            logger.info("DB pool created successfully.")
+            break
+        except Exception as e:
+            logger.warning(f"DB pool attempt {attempt+1}/5 failed: {e}. Retrying in 3s...")
+            await asyncio.sleep(3)
+    else:
+        logger.error("CRITICAL: Could not create DB pool after 5 attempts. DB-dependent features will fail.")
+
     await redis_client.connect()
     # Start background listener
     asyncio.create_task(redis_listener())

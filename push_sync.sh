@@ -13,8 +13,13 @@ echo ""
 echo "-> Adding all changes..."
 git add .
 
-echo "-> Committing changes with message: '$MSG'"
-git commit -m "$MSG"
+# Only commit if there are staged changes
+if git diff --cached --quiet; then
+    echo "-> Nothing new to commit. Pushing existing commits..."
+else
+    echo "-> Committing changes with message: '$MSG'"
+    git commit -m "$MSG"
+fi
 
 # Get the name of the current branch
 CURRENT_BRANCH=$(git branch --show-current)
