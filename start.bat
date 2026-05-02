@@ -47,10 +47,7 @@ set ELAPSED=0
 if !ELAPSED! geq !MAX_WAIT! goto :TIMEOUT
 
 REM Count running services
-for /f %%b in ('docker compose ps --status running --format json 2^>nul ^| find /c ""State"":""running""') do set RUNNING=%%b
-if "!RUNNING!"=="" (
-    for /f %%b in ('docker compose ps --status running 2^>nul ^| find /c /v ""') do set /a RUNNING=%%b - 1
-)
+for /f %%b in ('docker compose ps --services --status running 2^>nul ^| find /c /v ""') do set RUNNING=%%b
 
 if !RUNNING! geq !EXPECTED_SERVICES! (
     echo    [OK] All !EXPECTED_SERVICES! containers are running!
@@ -58,7 +55,7 @@ if !RUNNING! geq !EXPECTED_SERVICES! (
 )
 
 echo    [Wait] !RUNNING! / !EXPECTED_SERVICES! containers running... (!ELAPSED!s)
-timeout /t 5 /nobreak >nul
+ping 127.0.0.1 -n 6 >nul
 set /a ELAPSED+=5
 goto :WAIT_LOOP
 
@@ -97,7 +94,7 @@ if %ERRORLEVEL% equ 0 (
 
 REM Check HTTP services (using PowerShell for curl equivalent)
 call :CheckHTTP "Ingestion Service (API :8000)" "http://localhost:8000/health"
-call :CheckHTTP "API Service (WebSocket :8001)" "http://localhost:8001/conversation/conv-1/state"
+call :CheckHTTP "API Service (WebSocket :8001)" "http://localhost:8001/health/status"
 call :CheckHTTP "Frontend (UI :5173)" "http://localhost:5173"
 
 REM Check Meta-Learner loaded
@@ -106,7 +103,7 @@ if %ERRORLEVEL% equ 0 (
     echo    [OK] Meta-Learner - loaded and active
     set /a PASS+=1
 ) else (
-    echo    [Fail] Meta-Learner - not loaded (check central_responder_service logs)
+    echo    [Fail] Meta-Learner - not loaded ^(check central_responder_service logs^)
     set /a FAIL+=1
 )
 
@@ -114,24 +111,27 @@ REM Test Pipeline
 echo.
 echo [Test] Running end-to-end pipeline test...
 
+REM Extract API key from .env
+for /f "tokens=1,2 delims==" %%A in (.env) do if "%%A"=="INTERNAL_API_KEY" set API_KEY=%%B
+
 set API_TEST_URL=http://localhost:8000/messages
 set CONTENT_TYPE=application/json
 set PAYLOAD={\"conversation_id\": \"healthcheck\", \"user_id\": \"system\", \"text\": \"I am happy!\"}
 
-for /f %%a in ('powershell -command "try { $response = Invoke-WebRequest -Uri '%API_TEST_URL%' -Method Post -ContentType '%CONTENT_TYPE%' -Body '%PAYLOAD%' -UseBasicParsing; Write-Output $response.StatusCode } catch { Write-Output $_.Exception.Response.StatusCode.value__ }" 2^>nul') do set HTTP_CODE=%%a
+for /f %%a in ('powershell -command "try { $response = Invoke-WebRequest -Uri '%API_TEST_URL%' -Method Post -ContentType '%CONTENT_TYPE%' -Headers @{ 'X-API-Key' = '%API_KEY%' } -Body '%PAYLOAD%' -UseBasicParsing; Write-Output $response.StatusCode } catch { Write-Output $_.Exception.Response.StatusCode.value__ }" 2^>nul') do set HTTP_CODE=%%a
 
 if "%HTTP_CODE%"=="200" (
-    echo    [OK] Pipeline test - message accepted (HTTP 200)
+    echo    [OK] Pipeline test - message accepted ^(HTTP 200^)
     set /a PASS+=1
 ) else (
-    echo    [Fail] Pipeline test - failed (HTTP %HTTP_CODE%)
+    echo    [Fail] Pipeline test - failed ^(HTTP %HTTP_CODE%^)
     set /a FAIL+=1
 )
 
 REM Print summary
 echo.
 echo ==============================================================
-if %FAIL% equ 0 (
+if !FAIL! equ 0 (
     echo    [Yay]  ALL CHECKS PASSED ^(%PASS%/%PASS%^)
 ) else (
     echo    [Warn]   %PASS% passed, %FAIL% failed
@@ -157,19 +157,19 @@ set MAX_RETRIES=10
 set ATTEMPT=0
 
 :CheckHTTPLoop
-if %ATTEMPT% geq %MAX_RETRIES% (
-    echo    [Fail] %NAME% - NOT responding at %URL%
+if !ATTEMPT! geq !MAX_RETRIES! (
+    echo    [Fail] !NAME! - NOT responding at !URL!
     set /a FAIL+=1
     exit /b
 )
 
-powershell -command "try { $response = Invoke-WebRequest -Uri '%URL%' -UseBasicParsing; if ($response.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    echo    [OK] %NAME% - responding
+powershell -command "try { $response = Invoke-WebRequest -Uri '!URL!' -UseBasicParsing; if ($response.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+if !ERRORLEVEL! equ 0 (
+    echo    [OK] !NAME! - responding
     set /a PASS+=1
     exit /b
 )
 
-timeout /t 2 /nobreak >nul
+ping 127.0.0.1 -n 3 >nul
 set /a ATTEMPT+=1
 goto :CheckHTTPLoop
