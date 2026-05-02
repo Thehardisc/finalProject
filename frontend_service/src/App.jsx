@@ -172,6 +172,7 @@ function App() {
         meta_learner: false,
     });
     const [gateVisible, setGateVisible] = useState(false); // Hidden until user logs in
+    const [trainingInProgress, setTrainingInProgress] = useState(false); // Shows banner when model training
 
     // refs
     const socketRef = useRef(null);
@@ -258,10 +259,15 @@ function App() {
                 setComponentStatus(data.components);
             }
             if (data.ready) {
-                // fade out and hide
+                // fade out and hide gate
                 setGateVisible(false);
                 setTimeout(() => setSystemReady(true), 800);
+                // Check if trainer is still on its first cycle (model is old/pre-existing)
+                setTrainingInProgress(data.training_in_progress === true);
                 return true;
+            } else {
+                // Not ready yet — check if training is at least underway
+                setTrainingInProgress(true);
             }
         } catch (e) {
             console.warn("System status check failed, retrying...");
@@ -568,6 +574,26 @@ return (
                         <span>Checking every 3 seconds...</span>
                     </div>
                 </div>
+            </div>
+        )}
+
+        {/* Training in progress banner */}
+        {systemReady && trainingInProgress && (
+            <div style={{
+                position: 'fixed', top: 0, left: 0, right: 0, zIndex: 500,
+                background: 'linear-gradient(90deg, #b45309, #d97706)',
+                color: '#fff', padding: '8px 20px',
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                fontSize: '0.85rem', fontWeight: 500, boxShadow: '0 2px 8px rgba(0,0,0,0.4)'
+            }}>
+                <span>
+                    🧠 <strong>AI is still learning</strong> — The meta-learner is training on new data.
+                    Emotion analysis is live but accuracy will improve once training completes.
+                </span>
+                <button onClick={() => setTrainingInProgress(false)} style={{
+                    background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff',
+                    borderRadius: '4px', padding: '2px 10px', cursor: 'pointer', fontSize: '0.85rem'
+                }}>✕ Dismiss</button>
             </div>
         )}
 

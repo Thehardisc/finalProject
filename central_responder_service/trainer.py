@@ -24,6 +24,7 @@ from pathlib import Path
 from collections import Counter
 from sqlalchemy import create_engine, text
 from shared.utils.logger import get_logger
+import redis as redis_sync
  
 logger = get_logger("trainer")
  
@@ -413,12 +414,29 @@ def start_trainer_thread(reload_callback):
             "MODEL_PATH":               str(MODEL_PATH),
         })
         logger.info("API access will be enabled on first model completion.")
+
+        # Connect a simple sync Redis client to set training flags
+        r = None
+        try:
+            r = redis_sync.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", 6379)),
+                decode_responses=True
+            )
+        except Exception as e:
+            logger.warning(f"Trainer could not connect to Redis for flags: {e}")
+
         while True:
             try:
+                if r:
+                    r.set("system:training_in_progress", "1")
                 run_one_cycle(reload_callback)
             except Exception as e:
                 logger.error(f"Unhandled error: {e}")
                 traceback.print_exc()
+            finally:
+                if r:
+                    r.set("system:training_in_progress", "0")
             logger.debug(f"Sleeping {RETRAIN_INTERVAL}s...")
             time.sleep(RETRAIN_INTERVAL)
 
