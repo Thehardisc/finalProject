@@ -53,10 +53,20 @@ async def get_system_status():
 
     all_ready = meta_ready and redis_ok and db_ok
 
+    # Check if trainer is still in its first cycle by reading a Redis flag
+    training_in_progress = False
+    try:
+        if redis_client.redis:
+            flag = await redis_client.redis.get("system:training_in_progress")
+            training_in_progress = flag == "1"
+    except Exception:
+        pass
+
     payload = {
         "ready": all_ready,
         "timestamp": time.time(),
         "status": "online" if all_ready else "warming_up",
+        "training_in_progress": training_in_progress,
         "components": {
             "database": db_ok,
             "redis": redis_ok,
