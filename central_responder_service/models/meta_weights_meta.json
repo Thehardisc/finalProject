@@ -1,11 +1,11 @@
 {
-  "trained_at": "2026-04-25T11:46:53.587753Z",
+  "trained_at": "2026-05-02T12:01:52.153344Z",
   "training_samples": 1714,
   "filtered_samples": 786,
   "validation_accuracy": 0.494,
-  "validation_f1_macro": 0.4043,
+  "validation_f1_macro": 0.4041,
   "test_accuracy": 0.524,
-  "test_f1_macro": 0.4315,
+  "test_f1_macro": 0.4311,
   "previous_accuracy": 0.524,
   "improvement": 0.0,
   "accuracy_gate": 0.4
