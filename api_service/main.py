@@ -41,17 +41,13 @@ async def get_system_status():
     except Exception:
         pass
 
-    # Check DB
+    # Check DB — reuse the shared pool, don't open a new connection every poll
     db_ok = False
     try:
-        import asyncpg
-        db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
-        conn = await asyncpg.connect(db_url)
-        try:
-            await conn.fetchval("SELECT 1 FROM messages LIMIT 0")
-            db_ok = True
-        finally:
-            await conn.close()
+        if db_pool:
+            async with db_pool.acquire() as conn:
+                await conn.fetchval("SELECT 1 FROM messages LIMIT 0")
+                db_ok = True
     except Exception:
         pass
 
