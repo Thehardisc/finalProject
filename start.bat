@@ -65,6 +65,8 @@ if not exist %LOGDIR% mkdir %LOGDIR%
 
 set INIT_LOG=%LOGDIR%\init.log
 set LOGFILE=%LOGDIR%\all.log
+set ERRORS_LOG=%LOGDIR%\errors.log
+set IMPORTANT_LOG=%LOGDIR%\important.log
 
 REM Write init log header
 (
@@ -86,9 +88,25 @@ REM Write init log header
     echo.
 ) > %INIT_LOG%
 
-echo [Logs] Log directory: %LOGDIR%
-echo [Logs] Init log: %INIT_LOG%
+echo [Logs] Log directory  : %LOGDIR%
+echo [Logs] Init log       : %INIT_LOG%
+echo [Logs] All logs       : %LOGFILE%
+echo [Logs] Errors only    : %ERRORS_LOG%
+echo [Logs] Important      : %IMPORTANT_LOG%
+
+REM Full combined log (all services, no filter)
 start /b cmd /c "docker compose logs -f > %LOGFILE% 2>&1"
+
+REM Errors-only log — filter for [ERROR], [CRITICAL], [WARNING], Traceback, Exception
+start /b cmd /c "docker compose logs -f 2>&1 | powershell -NoProfile -Command \"$input | Select-String -Pattern '\[ERROR', '\[CRITICAL', '\[WARNING', 'Traceback', 'Exception:', 'FATAL', 'CRASH' | Where-Object { $_ -notmatch 'uvicorn.error' }\" > %ERRORS_LOG%"
+
+REM Important log — combined without noisy health-check pings
+start /b cmd /c "docker compose logs -f 2>&1 | powershell -NoProfile -Command \"$input | Where-Object { $_ -notmatch 'GET /health' -and $_ -notmatch 'OPTIONS /health' }\" > %IMPORTANT_LOG%"
+
+REM Per-service log files — one file per service
+for /f %%s in ('docker compose config --services 2^>nul') do (
+    start /b cmd /c "docker compose logs -f %%s > %LOGDIR%\%%s.log 2>&1"
+)
 
 
 REM Wait for containers
@@ -201,9 +219,14 @@ echo    [API]  API:           http://localhost:8001
 echo    [In]   Ingestion:     http://localhost:8000
 echo.
 echo    [Logs] Directory:     %LOGDIR%
-echo    [Log]  Init report:   %INIT_LOG%
+echo    [Log]  Init report:   %INIT_LOG%           ^(config + health checks^)
+echo    [Log]  Errors only:   %ERRORS_LOG%         ^(ERROR/WARN/CRITICAL/Traceback^)
+echo    [Log]  Important:     %IMPORTANT_LOG%      ^(no health pings^)
 echo    [Log]  Full dump:     %LOGFILE%
+echo    [Log]  Per-service:   %LOGDIR%\^<service^>.log
 echo.
+echo    Tip: open %ERRORS_LOG%
+echo    Tip: open %IMPORTANT_LOG%
 echo ==============================================================
 echo.
 
