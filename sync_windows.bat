@@ -11,17 +11,4 @@ git fetch origin
 git checkout addConvo
 git pull origin addConvo
 
-echo.
-echo ==============================================================
-echo    [Docker] Rebuilding and starting the application...
-echo ==============================================================
-echo.
 
-:: Build and start the docker containers in detached mode
-docker compose up -d --build
-
-echo.
-echo ==============================================================
-echo    [Done] The system is now syncing and starting up!
-echo ==============================================================
-pause
