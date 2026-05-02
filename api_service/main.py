@@ -85,26 +85,36 @@ app.add_middleware(
 redis_client = RedisClient()
 
 # Websocket Manager
+db_pool = None
+
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        self.active_connections: dict = {}
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, user_id: str):
         await websocket.accept()
-        self.active_connections.append(websocket)
-        logger.info(f"Client connected. Active: {len(self.active_connections)}")
+        if user_id not in self.active_connections:
+            self.active_connections[user_id] = []
+        self.active_connections[user_id].append(websocket)
+        logger.info(f"Client {user_id} connected. Active: {len(self.active_connections)}")
 
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-        logger.info(f"Client disconnected. Active: {len(self.active_connections)}")
-
-    async def broadcast(self, message: dict):
-        # Broadcast to all connected clients
-        for connection in self.active_connections:
+    def disconnect(self, websocket: WebSocket, user_id: str):
+        if user_id in self.active_connections:
             try:
-                await connection.send_json(message)
-            except Exception as e:
-                logger.error(f"Error sending to client: {e}")
+                self.active_connections[user_id].remove(websocket)
+                if not self.active_connections[user_id]:
+                    del self.active_connections[user_id]
+            except ValueError:
+                pass
+        logger.info(f"Client {user_id} disconnected. Active: {len(self.active_connections)}")
+
+    async def broadcast_to_user(self, user_id: str, message: dict):
+        if user_id in self.active_connections:
+            for connection in self.active_connections[user_id]:
+                try:
+                    await connection.send_json(message)
+                except Exception as e:
+                    logger.error(f"Error sending to {user_id}: {e}")
 
 manager = ConnectionManager()
 
@@ -134,7 +144,8 @@ async def _handle_conversation_update(message_id, data):
         "bert_emotions": bert_list,
         "meta_confidence": float(pipeline_log.get("meta_confidence", 0.0)),
         "context_shift": json.loads(data.get("context_shift", "null")),
-        "logic_map": pipeline_log.get("logic_map", {})
+        "logic_map": pipeline_log.get("logic_map", {}),
+        "sender_id": data.get("user_id")
     }
     
     payload["vibe"] = {
@@ -142,7 +153,12 @@ async def _handle_conversation_update(message_id, data):
         "top_emotions": [conv_state.get("dominant_emotion", "Neutral")]
     }
     
-    await manager.broadcast(payload)
+    convo_id = data.get("conversation_id", "conv-1")
+    if db_pool:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch("SELECT user_id FROM conversation_participants WHERE conversation_id = $1", convo_id)
+            for r in rows:
+                await manager.broadcast_to_user(r["user_id"], payload)
 
 async def _handle_reasoning_update(message_id, data):
     payload = {
@@ -151,7 +167,14 @@ async def _handle_reasoning_update(message_id, data):
         "ai_insight": data.get("ai_insight"),
         "timestamp": float(data.get("timestamp", 0))
     }
-    await manager.broadcast(payload)
+    msg_id = data.get("message_id")
+    if db_pool and msg_id:
+        async with db_pool.acquire() as conn:
+            convo_id = await conn.fetchval("SELECT conversation_id FROM messages WHERE message_id = $1", msg_id)
+            if convo_id:
+                rows = await conn.fetch("SELECT user_id FROM conversation_participants WHERE conversation_id = $1", convo_id)
+                for r in rows:
+                    await manager.broadcast_to_user(r["user_id"], payload)
 
 # Listener for Redis
 async def redis_listener():
@@ -183,15 +206,15 @@ async def redis_listener():
             logger.log_exception("WebSocket Redis Listener Error", e)
             await asyncio.sleep(1)
 
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str, api_key: str = Query(None)):
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str, api_key: str = Query(None)):
     # WebSocket Auth Check (Query Parameter)
     if not api_key or api_key not in VALID_API_KEYS:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        logger.warning(f"WebSocket auth failed for {client_id}")
+        logger.warning(f"WebSocket auth failed for {user_id}")
         return
 
-    await manager.connect(websocket)
+    await manager.connect(websocket, user_id)
     rate_limiter = RateLimiter(redis_client)
     
     try:
@@ -212,9 +235,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, api_key: str 
                 msg_obj = json.loads(data)
                 text = msg_obj.get("text")
                 if text:
-                    sender = msg_obj.get("sender_id", client_id)
+                    sender = msg_obj.get("sender_id", user_id)
                     # use existing conversation id or create new one
-                    conversation_id = msg_obj.get("conversation_id") or client_id
+                    conversation_id = msg_obj.get("conversation_id") or user_id
 
                     event = {
                         "text": text,
@@ -229,23 +252,141 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str, api_key: str 
                 logger.log_exception("FAILED TO PROCESS CLIENT WEBSOCKET MESSAGE", e)
             
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        logger.info(f"Client {client_id} disconnected normally.")
+        manager.disconnect(websocket, user_id)
+        logger.info(f"Client {user_id} disconnected normally.")
     except Exception as e:
-        logger.log_exception(f"UNEXPECTED WEBSOCKET ERROR FOR {client_id}", e)
-        manager.disconnect(websocket)
+        logger.log_exception(f"UNEXPECTED WEBSOCKET ERROR FOR {user_id}", e)
+        manager.disconnect(websocket, user_id)
 
 @app.on_event("startup")
 async def startup_event():
+    global db_pool
+    import asyncpg
+    db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
+    try:
+        db_pool = await asyncpg.create_pool(db_url)
+    except Exception as e:
+        logger.warning(f"DB pool fail: {e}")
+        
     await redis_client.connect()
     # Start background listener
     asyncio.create_task(redis_listener())
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    global db_pool
+    if db_pool:
+        await db_pool.close()
     await redis_client.close()
 
-# Existing Endpoints...
+# Endpoints
+from pydantic import BaseModel
+
+class LoginRequest(BaseModel):
+    username: str
+
+@app.post("/login")
+async def login(req: LoginRequest):
+    import asyncpg
+    import time
+    db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
+    conn = await asyncpg.connect(db_url)
+    try:
+        # Ensure schema table exists (sanity check)
+        user = await conn.fetchrow("SELECT user_id, username FROM users WHERE username = $1", req.username)
+        if user:
+            return dict(user)
+        
+        user_id = str(uuid.uuid4())
+        await conn.execute("INSERT INTO users (user_id, username, created_at) VALUES ($1, $2, $3)", user_id, req.username, time.time())
+        return {"user_id": user_id, "username": req.username}
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail="Database Error")
+    finally:
+        await conn.close()
+
+@app.get("/users")
+async def get_users(current_user_id: str = Query(None)):
+    import asyncpg
+    db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
+    conn = await asyncpg.connect(db_url)
+    try:
+        if current_user_id:
+            rows = await conn.fetch("SELECT user_id, username FROM users WHERE user_id != $1", current_user_id)
+        else:
+            rows = await conn.fetch("SELECT user_id, username FROM users")
+        return [dict(r) for r in rows]
+    finally:
+        await conn.close()
+
+class CreateConversationRequest(BaseModel):
+    user_id: str
+    target_user_id: str
+
+@app.post("/conversations")
+async def create_conversation(req: CreateConversationRequest):
+    import asyncpg
+    import time
+    db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
+    conn = await asyncpg.connect(db_url)
+    try:
+        query = """
+            SELECT c.conversation_id 
+            FROM conversations c
+            JOIN conversation_participants p1 ON c.conversation_id = p1.conversation_id
+            JOIN conversation_participants p2 ON c.conversation_id = p2.conversation_id
+            WHERE c.type = 'direct' 
+              AND p1.user_id = $1 
+              AND p2.user_id = $2
+        """
+        existing = await conn.fetchval(query, req.user_id, req.target_user_id)
+        if existing:
+            return {"conversation_id": existing}
+            
+        conv_id = f"conv-{str(uuid.uuid4())[:8]}"
+        async with conn.transaction():
+            await conn.execute("INSERT INTO conversations (conversation_id, type, created_at) VALUES ($1, 'direct', $2)", conv_id, time.time())
+            await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id, joined_at) VALUES ($1, $2, $3)", conv_id, req.user_id, time.time())
+            await conn.execute("INSERT INTO conversation_participants (conversation_id, user_id, joined_at) VALUES ($1, $2, $3)", conv_id, req.target_user_id, time.time())
+            
+        return {"conversation_id": conv_id}
+    finally:
+        await conn.close()
+
+@app.get("/conversations/{user_id}")
+async def my_conversations(user_id: str):
+    import asyncpg
+    db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
+    conn = await asyncpg.connect(db_url)
+    try:
+        query = """
+            SELECT c.conversation_id, c.type, c.created_at, u.username as other_username, u.user_id as other_user_id
+            FROM conversations c
+            JOIN conversation_participants my_p ON my_p.conversation_id = c.conversation_id
+            JOIN conversation_participants other_p ON other_p.conversation_id = c.conversation_id AND other_p.user_id != $1
+            JOIN users u ON other_p.user_id = u.user_id
+            WHERE my_p.user_id = $1
+            ORDER BY c.created_at DESC
+        """
+        rows = await conn.fetch(query, user_id)
+        
+        # enrich with state
+        r = redis_client.redis
+        result = []
+        for row in rows:
+            d = dict(row)
+            state = await r.hgetall(f"conversation:{d['conversation_id']}")
+            if state:
+                d['average_valence'] = float(state.get("average_valence", 0.0))
+                d['dominant_emotion'] = state.get("dominant_emotion", "Neutral")
+            else:
+                d['average_valence'] = 0.0
+                d['dominant_emotion'] = "Neutral"
+            result.append(d)
+        return result
+    finally:
+        await conn.close()
 
 @app.get("/conversation/{conversation_id}/state", dependencies=[Depends(validate_api_key)])
 async def get_conversation_state(conversation_id: str):
