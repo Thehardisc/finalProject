@@ -422,9 +422,10 @@ useEffect(() => {
     if (!currentUser) return;
     const fetchChats = async () => {
         try {
+            const headers = { 'X-API-Key': API_KEY };
             const [chatsRes, usersRes] = await Promise.all([
-                axios.get(`${API_BASE}/conversations/${currentUser.user_id}`),
-                axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`)
+                axios.get(`${API_BASE}/conversations/${currentUser.user_id}`, { headers }),
+                axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`, { headers })
             ]);
             setConversations(chatsRes.data || []);
             setGlobalUsers(usersRes.data || []);

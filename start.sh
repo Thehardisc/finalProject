@@ -15,6 +15,26 @@ echo ""
 API_KEY=$(grep "^INTERNAL_API_KEY=" .env | cut -d'=' -f2 | tr -d '"'\'' ')
 API_KEY=${API_KEY:-dev-secret-key}
 
+# Load and display all config from .env so operators can verify before launch
+MAX_SAMPLES_VAL=$(grep '^MAX_SAMPLES=' .env 2>/dev/null | cut -d'=' -f2)
+RETRAIN_INTERVAL_VAL=$(grep '^RETRAIN_INTERVAL_SECONDS=' .env 2>/dev/null | cut -d'=' -f2)
+ACCURACY_GATE_VAL=$(grep '^ACCURACY_GATE=' .env 2>/dev/null | cut -d'=' -f2)
+LLM_PROVIDER_VAL=$(grep '^LLM_PROVIDER=' .env 2>/dev/null | cut -d'=' -f2)
+LOG_LEVEL_VAL=$(grep '^LOG_LEVEL=' .env 2>/dev/null | cut -d'=' -f2)
+RATE_LIMIT_MAX_VAL=$(grep '^RATE_LIMIT_MAX=' .env 2>/dev/null | cut -d'=' -f2)
+
+echo "[Config] Resolved environment from .env:"
+echo "──────────────────────────────────────────────────────────"
+echo "   LOG_LEVEL               = ${LOG_LEVEL_VAL:-INFO}"
+echo "   MAX_SAMPLES             = ${MAX_SAMPLES_VAL:-2500}  (GoEmotions dataset size per run)"
+echo "   RETRAIN_INTERVAL_SECS   = ${RETRAIN_INTERVAL_VAL:-1800}s"
+echo "   ACCURACY_GATE           = ${ACCURACY_GATE_VAL:-0.40}  (min test accuracy to deploy model)"
+echo "   LLM_PROVIDER            = ${LLM_PROVIDER_VAL:-RULE_BASED}"
+echo "   RATE_LIMIT_MAX          = ${RATE_LIMIT_MAX_VAL:-60} req/min per user"
+echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
+echo "──────────────────────────────────────────────────────────"
+echo ""
+
 echo "[Search] Detecting host environment..."
 
 if command -v nvidia-smi &> /dev/null; then

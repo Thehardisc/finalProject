@@ -97,12 +97,18 @@ async def main():
                             logic_map = pipeline_log.get("logic_map", {})
                             sarcasm_score = pipeline_log.get("sarcasm_score", 0.0)
                             conflict_desc = pipeline_log.get("conflict", None)
-                            context_shift = json.loads(data.get("context_shift", "false"))
+                            context_shift_raw = data.get("context_shift", "null")
+                            try:
+                                context_shift = json.loads(context_shift_raw)
+                            except (json.JSONDecodeError, TypeError):
+                                context_shift = None
+                            # context_shift is a dict object if a shift was detected, None otherwise
+                            is_context_shift = isinstance(context_shift, dict)
                             msg_uuid = data.get("message_id")
 
                             insight = await explainer.generate_insight(
                                 text, emotion, logic_map,
-                                sarcasm_score, conflict_desc, context_shift
+                                sarcasm_score, conflict_desc, is_context_shift
                             )
 
                             payload = {
