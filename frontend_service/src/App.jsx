@@ -171,7 +171,7 @@ function App() {
         redis: false,
         meta_learner: false,
     });
-    const [gateVisible, setGateVisible] = useState(true);
+    const [gateVisible, setGateVisible] = useState(false); // Hidden until user logs in
 
     // refs
     const socketRef = useRef(null);
@@ -269,7 +269,34 @@ function App() {
         return false;
     };
 
-    // websockets
+    // --- System Readiness Gate ---
+    // This effect fires as soon as a user logs in.
+    // It polls /health/status until all systems are ready, then hides the gate.
+    useEffect(() => {
+        if (!currentUser) return; // Only run when logged in
+
+        // Show the gate while we check
+        setGateVisible(true);
+        setSystemReady(false);
+
+        let pollInterval;
+
+        const checkAndSchedule = async () => {
+            const isReady = await checkSystemStatus();
+            if (isReady) {
+                clearInterval(pollInterval);
+            } else {
+                // pollInterval already running, just keep going
+            }
+        };
+
+        checkAndSchedule(); // immediate first check
+        pollInterval = setInterval(checkAndSchedule, 3000);
+
+        return () => clearInterval(pollInterval);
+    }, [currentUser]); // Only re-run on login/logout
+
+    // Analytics fetch on tab switch
     useEffect(() => {
         if (view === 'analytics') {
             fetchAnalytics();
@@ -379,29 +406,16 @@ function App() {
         };
 
         const init = async () => {
-            if (!currentUser) return;
-            const isReady = await checkSystemStatus();
-            if (!isReady) {
-                pollInterval = setInterval(async () => {
-                    const nowReady = await checkSystemStatus();
-                    if (nowReady) {
-                        clearInterval(pollInterval);
-                        connectWebSocket();
-                        await fetchInitialState();
-                    }
-                }, 3000);
-            } else {
-                connectWebSocket();
-                await fetchInitialState();
-            }
+            if (!currentUser || !systemReady) return; // Wait for system to be ready first
+            connectWebSocket();
+            await fetchInitialState();
         };
         init();
 
         return () => {
-            clearInterval(pollInterval);
             if (socketRef.current) socketRef.current.close();
         };
-    }, [activeConversationId, currentUser]); // Re-run when convo changes or login
+    }, [activeConversationId, currentUser, systemReady]); // Re-run when convo changes, login, or system becomes ready
 
 // Auth & Chat Fetching
 useEffect(() => {
