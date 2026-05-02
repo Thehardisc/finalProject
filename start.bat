@@ -55,15 +55,41 @@ echo.
 %COMPOSE_CMD%
 echo.
 
-REM Setup Logging
+REM Setup Logging — create timestamped run directory
 if not exist logs mkdir logs
 
 set TIMESTAMP=%date:~-4,4%-%date:~-10,2%-%date:~-7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%
 set TIMESTAMP=%TIMESTAMP: =0%
-set LOGFILE=logs\run_%TIMESTAMP%.log
+set LOGDIR=logs\run_%TIMESTAMP%
+if not exist %LOGDIR% mkdir %LOGDIR%
 
-echo [Logs] Log file: %LOGFILE%
+set INIT_LOG=%LOGDIR%\init.log
+set LOGFILE=%LOGDIR%\all.log
+
+REM Write init log header
+(
+    echo ==============================================================
+    echo    InnerLink Launcher - Init Log
+    echo    Timestamp : %TIMESTAMP%
+    echo ==============================================================
+    echo.
+    echo [Config] Resolved environment from .env:
+    echo ----------------------------------------------------------
+    echo    LOG_LEVEL               = !LOG_LEVEL_VAL!
+    echo    MAX_SAMPLES             = !MAX_SAMPLES_VAL!
+    echo    RETRAIN_INTERVAL_SECS   = !RETRAIN_INTERVAL_VAL!s
+    echo    ACCURACY_GATE           = !ACCURACY_GATE_VAL!
+    echo    LLM_PROVIDER            = !LLM_PROVIDER_VAL!
+    echo    RATE_LIMIT_MAX          = !RATE_LIMIT_MAX_VAL! req/min
+    echo    API_KEY                 = !API_KEY_VAL:~0,6!...  ^(redacted^)
+    echo ----------------------------------------------------------
+    echo.
+) > %INIT_LOG%
+
+echo [Logs] Log directory: %LOGDIR%
+echo [Logs] Init log: %INIT_LOG%
 start /b cmd /c "docker compose logs -f > %LOGFILE% 2>&1"
+
 
 REM Wait for containers
 echo.
@@ -170,12 +196,39 @@ if !FAIL! equ 0 (
 )
 echo ==============================================================
 echo.
-echo    [Web]  Frontend:  http://localhost:5173
-echo    [API]  API:       http://localhost:8001
-echo    [In]   Ingestion: http://localhost:8000
-echo    [Log]  Logs:      %LOGFILE%
+echo    [Web]  Frontend:      http://localhost:5173
+echo    [API]  API:           http://localhost:8001
+echo    [In]   Ingestion:     http://localhost:8000
+echo.
+echo    [Logs] Directory:     %LOGDIR%
+echo    [Log]  Init report:   %INIT_LOG%
+echo    [Log]  Full dump:     %LOGFILE%
 echo.
 echo ==============================================================
+echo.
+
+REM Append health check results to init.log
+(
+    echo [Health Checks]
+    echo    PASS : %PASS%
+    echo    FAIL : %FAIL%
+    if %FAIL% equ 0 (
+        echo    Result : ALL CHECKS PASSED
+    ) else (
+        echo    Result : %FAIL% check^(s^) FAILED - see all.log for details
+    )
+    echo.
+    echo [URLs]
+    echo    Frontend  : http://localhost:5173
+    echo    API       : http://localhost:8001
+    echo    Ingestion : http://localhost:8000
+    echo.
+    echo [Log Files]
+    echo    %LOGDIR%\all.log
+    echo    %LOGDIR%\init.log
+) >> %INIT_LOG%
+
+echo    [Log] Init report saved: %INIT_LOG%
 echo.
 
 pause

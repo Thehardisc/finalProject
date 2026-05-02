@@ -49,12 +49,36 @@ echo ""
 $COMPOSE_CMD
 echo ""
 
-# Setup logging
+# Setup logging — create timestamped run directory
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGDIR="logs/run_${TIMESTAMP}"
 mkdir -p "${LOGDIR}"
 
+# Write init log: capture the config + launch summary to a file
+INIT_LOG="${LOGDIR}/init.log"
+{
+    echo "=============================================================="
+    echo "    InnerLink Launcher — Init Log"
+    echo "    Timestamp : ${TIMESTAMP}"
+    echo "=============================================================="
+    echo ""
+    echo "[Config] Resolved environment from .env:"
+    echo "──────────────────────────────────────────────────────────"
+    echo "   LOG_LEVEL               = ${LOG_LEVEL_VAL:-INFO}"
+    echo "   MAX_SAMPLES             = ${MAX_SAMPLES_VAL:-2500}"
+    echo "   RETRAIN_INTERVAL_SECS   = ${RETRAIN_INTERVAL_VAL:-1800}s"
+    echo "   ACCURACY_GATE           = ${ACCURACY_GATE_VAL:-0.40}"
+    echo "   LLM_PROVIDER            = ${LLM_PROVIDER_VAL:-RULE_BASED}"
+    echo "   RATE_LIMIT_MAX          = ${RATE_LIMIT_MAX_VAL:-60} req/min"
+    echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
+    echo "──────────────────────────────────────────────────────────"
+    echo ""
+    echo "[Hardware] Compose command: ${COMPOSE_CMD}"
+    echo ""
+} > "${INIT_LOG}"
+
 echo "[Logs] Writing per-service logs to: ${LOGDIR}/"
+echo "[Logs] Init log: ${INIT_LOG}"
 
 # Spawn a background log process for each service into its own file
 SERVICES=$(docker compose config --services 2>/dev/null)
@@ -195,8 +219,9 @@ echo "    [API]  API:          http://localhost:8001"
 echo "    [In]   Ingestion:    http://localhost:8000"
 echo ""
 echo "    [Logs] Directory:    ${LOGDIR}/"
-echo "    [Log]  Errors only:  ${LOGDIR}/errors.log              (ERROR/WARN/CRITICAL)"
-echo "    [Log]  Brain only:   ${LOGDIR}/important.log           (no health pings)"
+echo "    [Log]  Init report:  ${LOGDIR}/init.log              (config + health checks)"
+echo "    [Log]  Errors only:  ${LOGDIR}/errors.log            (ERROR/WARN/CRITICAL)"
+echo "    [Log]  Brain only:   ${LOGDIR}/important.log         (no health pings)"
 echo "    [Log]  Responder:    ${LOGDIR}/central_responder_service.log"
 echo "    [Log]  Database:     ${LOGDIR}/db.log"
 echo "    [Log]  Full dump:    ${LOGDIR}/all.log"
@@ -204,4 +229,30 @@ echo ""
 echo "    Tip: tail -f ${LOGDIR}/errors.log"
 echo "    Tip: tail -f ${LOGDIR}/important.log"
 echo "=============================================================="
+
+# Append health check results to init.log
+{
+    echo "[Health Checks]"
+    echo "   PASS : ${PASS}"
+    echo "   FAIL : ${FAIL}"
+    if [ $FAIL -eq 0 ]; then
+        echo "   Result : ALL CHECKS PASSED"
+    else
+        echo "   Result : ${FAIL} check(s) FAILED — see errors.log for details"
+    fi
+    echo ""
+    echo "[URLs]"
+    echo "   Frontend  : http://localhost:5173"
+    echo "   API       : http://localhost:8001"
+    echo "   Ingestion : http://localhost:8000"
+    echo ""
+    echo "[Log Files]"
+    echo "   ${LOGDIR}/errors.log"
+    echo "   ${LOGDIR}/important.log"
+    echo "   ${LOGDIR}/all.log"
+} >> "${INIT_LOG}"
+
+echo ""
+echo "   [Log] Init report saved: ${INIT_LOG}"
+
 echo ""
