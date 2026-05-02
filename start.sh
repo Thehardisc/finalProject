@@ -81,21 +81,22 @@ echo "[Logs] Writing per-service logs to: ${LOGDIR}/"
 echo "[Logs] Init log: ${INIT_LOG}"
 
 # Spawn a background log process for each service into its own file
+# --since prevents old logs from previous runs bleeding into this session
+LAUNCH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 SERVICES=$(docker compose config --services 2>/dev/null)
 for SERVICE in $SERVICES; do
-    docker compose logs -f "${SERVICE}" > "${LOGDIR}/${SERVICE}.log" 2>&1 &
+    docker compose logs -f --since "${LAUNCH_TIME}" "${SERVICE}" > "${LOGDIR}/${SERVICE}.log" 2>&1 &
 done
 
-# Also write a combined log that strips noisy health-check pings
-# Filters out: GET /health, OPTIONS /health, 200 OK health responses
-docker compose logs -f 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
+# Combined log without noisy health-check pings
+docker compose logs -f --since "${LAUNCH_TIME}" 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
 
-# Errors-only log: captures actual ERROR/CRITICAL/FATAL lines from services
-# Excludes false positives like logger names (uvicorn.error) and Python deprecation warnings
-docker compose logs -f 2>&1 | grep -E '\] ERROR |\] CRITICAL |\] WARNING |FATAL|CRASH|ROLLBACK|Traceback' | grep -v 'uvicorn.error' > "${LOGDIR}/errors.log" 2>&1 &
+# Errors-only log — matches actual format: [ERROR   ] [CRITICAL ] plus Traceback/Exception lines
+# The logger outputs "[ERROR   ]" and "[CRITICAL]" with bracket-wrapped padded levels
+docker compose logs -f --since "${LAUNCH_TIME}" 2>&1 | grep -E '\[ERROR\s*\]|\[CRITICAL\]|\[WARNING\s*\]|Traceback|Exception:|FATAL|CRASH|ROLLBACK' | grep -v 'uvicorn.error' > "${LOGDIR}/errors.log" 2>&1 &
 
-# Keep a full combined log as well (for debugging)
-docker compose logs -f > "${LOGDIR}/all.log" 2>&1 &
+# Full combined log for deep debugging
+docker compose logs -f --since "${LAUNCH_TIME}" > "${LOGDIR}/all.log" 2>&1 &
 LOGFILE="${LOGDIR}/all.log"
 
 # Wait for containers
