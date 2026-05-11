@@ -8,7 +8,7 @@ import json
 import asyncio
 import time
 import uuid
-from typing import List
+from typing import List, Optional
 
 # Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
@@ -17,6 +17,7 @@ from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
 from shared.constants import EMOTION_LABELS
+from api_service.auth_utils import hash_password, verify_password, create_jwt, get_current_user, require_admin
 
 logger = get_logger("api_service")
 
@@ -89,6 +90,7 @@ app.add_middleware(
 )
 
 redis_client = RedisClient()
+rate_limiter = None
 
 # Websocket Manager
 db_pool = None
@@ -233,7 +235,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, api_key: str = 
             
             # Rate Limit Check for WebSocket messages
             # Rate-limit by user_id, not api_key, so users don't share the same bucket.
-            if not await rate_limiter.is_allowed(user_id):
+            if rate_limiter and not await rate_limiter.is_allowed(user_id):
                 await websocket.send_json({"type": "error", "message": "Rate limit exceeded"})
                 continue
 
@@ -268,7 +270,7 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str, api_key: str = 
 
 @app.on_event("startup")
 async def startup_event():
-    global db_pool
+    global db_pool, rate_limiter
     import asyncpg
     db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
     # Retry DB pool creation — DB may not be ready immediately
@@ -284,6 +286,7 @@ async def startup_event():
         logger.error("CRITICAL: Could not create DB pool after 5 attempts. DB-dependent features will fail.")
 
     await redis_client.connect()
+    rate_limiter = RateLimiter(redis_client)
     # Start background listener
     asyncio.create_task(redis_listener())
 
@@ -294,46 +297,157 @@ async def shutdown_event():
         await db_pool.close()
     await redis_client.close()
 
-# Endpoints
-from pydantic import BaseModel
+# ── Auth Endpoints ─────────────────────────────────────────────────────────────
+from pydantic import BaseModel, Field
+
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=3, max_length=30)
+    password: str = Field(..., min_length=8)
 
 class LoginRequest(BaseModel):
     username: str
+    password: str
 
-@app.post("/login")
-async def login(req: LoginRequest):
-    import asyncpg
-    import time
-    db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
-    conn = await asyncpg.connect(db_url)
-    try:
-        # Ensure schema table exists (sanity check)
-        user = await conn.fetchrow("SELECT user_id, username FROM users WHERE username = $1", req.username)
-        if user:
-            return dict(user)
-        
+
+@app.post("/auth/register", status_code=201)
+async def register(req: RegisterRequest):
+    """Register a new user account with bcrypt-hashed password."""
+    # Validate username characters
+    import re
+    if not re.match(r'^[a-zA-Z0-9_.-]+$', req.username):
+        raise HTTPException(status_code=400, detail="Username may only contain letters, numbers, underscores, hyphens, and dots.")
+
+    async with db_pool.acquire() as conn:
+        existing = await conn.fetchrow("SELECT user_id FROM users WHERE username = $1", req.username)
+        if existing:
+            raise HTTPException(status_code=409, detail="Username already taken.")
+
         user_id = str(uuid.uuid4())
-        await conn.execute("INSERT INTO users (user_id, username, created_at) VALUES ($1, $2, $3)", user_id, req.username, time.time())
-        return {"user_id": user_id, "username": req.username}
-    except Exception as e:
-        logger.error(f"Login error: {e}")
-        raise HTTPException(status_code=500, detail="Database Error")
-    finally:
-        await conn.close()
+        pw_hash = hash_password(req.password)
+        # First registered user OR matches ADMIN_USERNAME gets admin role
+        role = "admin" if req.username == ADMIN_USERNAME else "user"
+
+        await conn.execute(
+            """INSERT INTO users (user_id, username, password_hash, role, is_active, created_at)
+               VALUES ($1, $2, $3, $4, TRUE, $5)""",
+            user_id, req.username, pw_hash, role, time.time()
+        )
+        logger.info(f"New user registered: {req.username} (role={role})")
+        token = create_jwt(user_id, req.username, role)
+        return {"token": token, "user_id": user_id, "username": req.username, "role": role}
+
+
+@app.post("/auth/login")
+async def auth_login(req: LoginRequest):
+    """Authenticate user with password, return signed JWT."""
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow(
+            "SELECT user_id, username, password_hash, role, is_active FROM users WHERE username = $1",
+            req.username
+        )
+
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+    if not user["is_active"]:
+        raise HTTPException(status_code=403, detail="Account has been deactivated. Contact an admin.")
+    if not user["password_hash"] or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid username or password.")
+
+    # Update last_login timestamp
+    async with db_pool.acquire() as conn:
+        await conn.execute("UPDATE users SET last_login = $1 WHERE user_id = $2", time.time(), user["user_id"])
+
+    token = create_jwt(user["user_id"], user["username"], user["role"])
+    logger.info(f"User logged in: {user['username']}")
+    return {"token": token, "user_id": user["user_id"], "username": user["username"], "role": user["role"]}
+
+
+@app.get("/auth/me")
+async def auth_me(current_user: dict = Depends(get_current_user)):
+    """Return profile of the currently authenticated user."""
+    async with db_pool.acquire() as conn:
+        user = await conn.fetchrow(
+            "SELECT user_id, username, role, is_active, created_at, last_login FROM users WHERE user_id = $1",
+            current_user["sub"]
+        )
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found.")
+    return dict(user)
+
+
+# ── Admin Endpoints ────────────────────────────────────────────────────────────
+
+class UpdateUserRequest(BaseModel):
+    role: Optional[str] = None       # "user" | "admin"
+    is_active: Optional[bool] = None
+
+
+@app.get("/admin/users")
+async def admin_list_users(admin: dict = Depends(require_admin)):
+    """List all users with stats. Admin only."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id, username, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC"
+        )
+    return [dict(r) for r in rows]
+
+
+@app.patch("/admin/users/{user_id}")
+async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = Depends(require_admin)):
+    """Update a user's role or active status. Admin only."""
+    if user_id == admin["sub"]:
+        raise HTTPException(status_code=400, detail="Admins cannot modify their own account via this endpoint.")
+
+    updates = []
+    values = []
+    if req.role is not None:
+        if req.role not in ("user", "admin"):
+            raise HTTPException(status_code=400, detail="role must be 'user' or 'admin'.")
+        updates.append(f"role = ${len(values)+1}")
+        values.append(req.role)
+    if req.is_active is not None:
+        updates.append(f"is_active = ${len(values)+1}")
+        values.append(req.is_active)
+
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update.")
+
+    values.append(user_id)
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE user_id = ${len(values)}",
+            *values
+        )
+    if result == "UPDATE 0":
+        raise HTTPException(status_code=404, detail="User not found.")
+    logger.info(f"Admin {admin['username']} updated user {user_id}: {req.dict(exclude_none=True)}")
+    return {"status": "updated", "user_id": user_id}
+
+
+@app.delete("/admin/users/{user_id}", status_code=204)
+async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    """Permanently delete a user. Admin only."""
+    if user_id == admin["sub"]:
+        raise HTTPException(status_code=400, detail="Admins cannot delete their own account.")
+    async with db_pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM users WHERE user_id = $1", user_id)
+    if result == "DELETE 0":
+        raise HTTPException(status_code=404, detail="User not found.")
+    logger.info(f"Admin {admin['username']} deleted user {user_id}")
+    return
 
 @app.get("/users")
 async def get_users(current_user_id: str = Query(None)):
-    import asyncpg
-    db_url = f"postgresql://{os.getenv('POSTGRES_USER', 'user')}:{os.getenv('POSTGRES_PASSWORD', 'password')}@{os.getenv('DB_HOST', 'db')}:5432/{os.getenv('POSTGRES_DB', 'emotion_db')}"
-    conn = await asyncpg.connect(db_url)
-    try:
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="Database not ready")
+    async with db_pool.acquire() as conn:
         if current_user_id:
-            rows = await conn.fetch("SELECT user_id, username FROM users WHERE user_id != $1", current_user_id)
+            rows = await conn.fetch("SELECT user_id, username FROM users WHERE user_id != $1 AND is_active = TRUE", current_user_id)
         else:
-            rows = await conn.fetch("SELECT user_id, username FROM users")
-        return [dict(r) for r in rows]
-    finally:
-        await conn.close()
+            rows = await conn.fetch("SELECT user_id, username FROM users WHERE is_active = TRUE")
+    return [dict(r) for r in rows]
 
 class CreateConversationRequest(BaseModel):
     user_id: str

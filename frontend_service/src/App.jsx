@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler } from 'chart.js';
 import { Doughnut, Line } from 'react-chartjs-2';
 import axios from 'axios';
+import LoginModal from './components/LoginModal';
+import AdminDashboard from './components/AdminDashboard';
 
 // Register Chart.js components
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler);
@@ -156,7 +158,7 @@ function App() {
     const [messages, setMessages] = useState([]);
     const [inputValue, setInputValue] = useState('');
     const [currentUser, setCurrentUser] = useState(null);
-    const [loginUsername, setLoginUsername] = useState('');
+    const [token, setToken] = useState(() => localStorage.getItem('innerlink_token') || null);
     const [conversations, setConversations] = useState([]);
     const [globalUsers, setGlobalUsers] = useState([]);
     const [activeConversationId, setActiveConversationId] = useState(null);
@@ -171,8 +173,8 @@ function App() {
         redis: false,
         meta_learner: false,
     });
-    const [gateVisible, setGateVisible] = useState(false); // Hidden until user logs in
-    const [trainingInProgress, setTrainingInProgress] = useState(false); // Shows banner when model training
+    const [gateVisible, setGateVisible] = useState(false);
+    const [trainingInProgress, setTrainingInProgress] = useState(false);
 
     // refs
     const socketRef = useRef(null);
@@ -180,6 +182,26 @@ function App() {
     const messagesEndRef = useRef(null);
 
     // helpers
+    const authHeaders = token ? { Authorization: `Bearer ${token}` } : { 'X-API-Key': API_KEY };
+
+    const handleAuthSuccess = (data) => {
+        // Called after successful register or login
+        localStorage.setItem('innerlink_token', data.token);
+        setToken(data.token);
+        setCurrentUser({ user_id: data.user_id, username: data.username, role: data.role });
+    };
+
+    const handleLogout = () => {
+        localStorage.removeItem('innerlink_token');
+        setToken(null);
+        setCurrentUser(null);
+        setMessages([]);
+        setConversations([]);
+        setActiveConversationId(null);
+        setCurrentAnalysis(null);
+        if (socketRef.current) { socketRef.current.close(); socketRef.current = null; }
+    };
+
     const applyTheme = (emotion) => {
         const e = emotion?.toLowerCase();
         const color = EMOTION_COLORS[e] || '#00f2ff';
@@ -225,7 +247,7 @@ function App() {
         if (!activeConversationId) return;
         try {
             const stateRes = await axios.get(`${API_BASE}/conversation/${activeConversationId}/state`, {
-                headers: { 'X-API-Key': API_KEY }
+                headers: { ...authHeaders, 'X-API-Key': API_KEY }
             });
             if (stateRes.data) {
                 setVibeAnalysis({
@@ -242,7 +264,7 @@ function App() {
     const fetchAnalytics = async () => {
         try {
             const res = await axios.get(`${API_BASE}/analytics/calibration`, {
-                headers: { 'X-API-Key': API_KEY }
+                headers: { ...authHeaders, 'X-API-Key': API_KEY }
             });
             setAnalyticsData(res.data);
         } catch (e) { console.error("Failed to fetch analytics", e); }
@@ -428,7 +450,7 @@ useEffect(() => {
     if (!currentUser) return;
     const fetchChats = async () => {
         try {
-            const headers = { 'X-API-Key': API_KEY };
+            const headers = { ...authHeaders, 'X-API-Key': API_KEY };
             const [chatsRes, usersRes] = await Promise.all([
                 axios.get(`${API_BASE}/conversations/${currentUser.user_id}`, { headers }),
                 axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`, { headers })
@@ -443,12 +465,8 @@ useEffect(() => {
 }, [currentUser]);
 
 const handleLogin = async (e) => {
+    // Kept for legacy – now replaced by LoginModal
     e.preventDefault();
-    if (!loginUsername.trim()) return;
-    try {
-        const res = await axios.post(`${API_BASE}/login`, { username: loginUsername.trim() });
-        setCurrentUser(res.data);
-    } catch (err) { console.error("Login Error", err); }
 };
 
 const handleCreateChat = async (targetId) => {
@@ -527,19 +545,8 @@ const handleHistoryClick = (msg) => {
 
 return (
     <div className="app-shell">
-        {/* Login gate */}
-        {!currentUser && (
-            <div className="login-gate" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.9)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div className="glass" style={{ padding: '40px', borderRadius: '20px', textAlign: 'center' }}>
-                    <h2>Welcome to InnerLink</h2>
-                    <form onSubmit={handleLogin}>
-                        <input autoFocus placeholder="Enter Username" value={loginUsername} onChange={e => setLoginUsername(e.target.value)} style={{ padding: '10px', fontSize: '1.2rem', marginBottom: '20px', borderRadius: '5px', background: 'rgba(255,255,255,0.1)', color: 'white', border: '1px solid var(--accent-primary)' }} />
-                        <br />
-                        <button className="primary-btn" type="submit" style={{ padding: '10px 30px' }}>Login</button>
-                    </form>
-                </div>
-            </div>
-        )}
+        {/* Login gate — replaced by secure LoginModal */}
+        {!currentUser && <LoginModal onSuccess={handleAuthSuccess} />}
 
         {/* loading gate */}
         {(currentUser && !systemReady) && (
@@ -621,7 +628,18 @@ return (
             {currentUser && (
                 <div style={{ padding: '0 20px', marginBottom: '10px' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 style={{ color: 'var(--accent-primary)', marginBottom: '10px' }}>{currentUser.username}</h3>
+                        <h3 style={{ color: 'var(--accent-primary)', marginBottom: '10px' }}>
+                            {currentUser.role === 'admin' && <span title="Admin" style={{ marginRight: '6px' }}>👑</span>}
+                            {currentUser.username}
+                        </h3>
+                        <button
+                            id="logout-btn"
+                            onClick={handleLogout}
+                            title="Log out"
+                            style={{ background: 'rgba(255,80,80,0.15)', border: '1px solid rgba(255,80,80,0.2)', color: '#ff7070', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '0.8rem' }}
+                        >
+                            Log out
+                        </button>
                     </div>
                     <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
                         <button onClick={() => setActiveTab('chats')} style={{ flex: 1, padding: '5px', background: activeTab === 'chats' ? 'rgba(255,255,255,0.2)' : 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '5px' }}>Chats</button>
@@ -662,6 +680,11 @@ return (
                 <button className={`nav-btn ${view === 'analytics' ? 'active' : ''}`} onClick={() => setView('analytics')}>
                     <span className="btn-icon">📊</span> System Insights
                 </button>
+                {currentUser?.role === 'admin' && (
+                    <button id="nav-admin-btn" className={`nav-btn ${view === 'admin' ? 'active' : ''}`} onClick={() => setView('admin')}>
+                        <span className="btn-icon">👑</span> Admin
+                    </button>
+                )}
             </div>
 
             <div className="chat-container" ref={chatContainerRef}>
@@ -1099,6 +1122,12 @@ return (
                             ))}
                         </div>
                     )}
+                </div>
+            )}
+            {/* ADMIN VIEW */}
+            {view === 'admin' && currentUser?.role === 'admin' && (
+                <div className="analytics-view" style={{ padding: '24px' }}>
+                    <AdminDashboard token={token} currentUser={currentUser} />
                 </div>
             )}
 

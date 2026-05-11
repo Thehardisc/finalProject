@@ -14,16 +14,6 @@ logger = get_logger("llm_reasoning_service")
 
 # --- Explainer Logic ---
 class RuleBasedExplainer:
-    """
-    Generates human-readable explanations of emotion decisions.
-
-    Currently uses a rule/template-based approach keyed on which model
-    contributed most to the final decision (logic_map). This is deterministic
-    and reproducible — ideal for a demo environment.
-
-    To upgrade to a live LLM: set LLM_PROVIDER=OPENAI or LLM_PROVIDER=GROQ
-    in .env and implement the API call in generate_insight().
-    """
     def __init__(self):
         self.provider_type = os.getenv("LLM_PROVIDER", "RULE_BASED").upper()
         logger.info(f"Explainer initialized in mode: {self.provider_type}")
