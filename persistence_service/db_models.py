@@ -37,7 +37,11 @@ class User(Base):
     __tablename__ = 'users'
     user_id = Column(String, primary_key=True, default=gen_uuid)
     username = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=True)  # bcrypt hash (includes auto-generated salt). Nullable for migration safety.
+    role = Column(String, default="user")           # "user" | "admin"
+    is_active = Column(Boolean, default=True)       # Admins can deactivate accounts
     created_at = Column(Float, default=time.time)
+    last_login = Column(Float, nullable=True)       # Unix timestamp of last successful login
 
 class Conversation(Base):
     __tablename__ = 'conversations'
