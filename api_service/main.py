@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, status
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, status, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -17,7 +17,7 @@ from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
 from shared.constants import EMOTION_LABELS
-from api_service.auth_utils import hash_password, verify_password, create_jwt, get_current_user, require_admin
+from api_service.auth_utils import hash_password, verify_password, create_jwt, decode_jwt, get_current_user, require_admin, JWT_EXPIRY_HOURS
 
 logger = get_logger("api_service")
 
@@ -83,7 +83,7 @@ async def get_system_status():
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:5173", "http://localhost", "http://127.0.0.1", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -218,11 +218,20 @@ async def redis_listener():
             await asyncio.sleep(1)
 
 @app.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str, api_key: str = Query(None)):
-    # WebSocket Auth Check (Query Parameter)
-    if not api_key or api_key not in VALID_API_KEYS:
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    # WebSocket Auth Check via Cookie
+    token = websocket.cookies.get("_req_sid")
+    if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        logger.warning(f"WebSocket auth failed for {user_id}")
+        logger.warning(f"WebSocket auth failed: missing cookie for {user_id}")
+        return
+    try:
+        user_data = decode_jwt(token)
+        if user_data["sub"] != user_id:
+            raise Exception("User ID mismatch")
+    except Exception as e:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        logger.warning(f"WebSocket auth failed for {user_id}: {e}")
         return
 
     await manager.connect(websocket, user_id)
@@ -303,65 +312,87 @@ from pydantic import BaseModel, Field
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 
 class RegisterRequest(BaseModel):
-    username: str = Field(..., min_length=3, max_length=30)
+    email: str = Field(..., min_length=3, max_length=255)
+    first_name: str = Field(..., min_length=1, max_length=50)
+    last_name: str = Field(..., min_length=1, max_length=50)
     password: str = Field(..., min_length=8)
 
 class LoginRequest(BaseModel):
-    username: str
+    email: str
     password: str
 
 
 @app.post("/auth/register", status_code=201)
-async def register(req: RegisterRequest):
+async def register(req: RegisterRequest, response: Response):
     """Register a new user account with bcrypt-hashed password."""
-    # Validate username characters
     import re
-    if not re.match(r'^[a-zA-Z0-9_.-]+$', req.username):
-        raise HTTPException(status_code=400, detail="Username may only contain letters, numbers, underscores, hyphens, and dots.")
+    if not re.match(r'^[^@]+@[^@]+\.[^@]+$', req.email):
+        raise HTTPException(status_code=400, detail="Invalid email format.")
 
     async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("SELECT user_id FROM users WHERE username = $1", req.username)
+        existing = await conn.fetchrow("SELECT user_id FROM users WHERE email = $1", req.email)
         if existing:
-            raise HTTPException(status_code=409, detail="Username already taken.")
+            raise HTTPException(status_code=409, detail="Email already registered.")
 
         user_id = str(uuid.uuid4())
         pw_hash = hash_password(req.password)
         # First registered user OR matches ADMIN_USERNAME gets admin role
-        role = "admin" if req.username == ADMIN_USERNAME else "user"
+        role = "admin" if req.email == ADMIN_USERNAME else "user"
+        display_name = f"{req.first_name.strip()} {req.last_name.strip()}"
 
         await conn.execute(
-            """INSERT INTO users (user_id, username, password_hash, role, is_active, created_at)
-               VALUES ($1, $2, $3, $4, TRUE, $5)""",
-            user_id, req.username, pw_hash, role, time.time()
+            """INSERT INTO users (user_id, email, first_name, last_name, display_name, password_hash, role, is_active, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8)""",
+            user_id, req.email, req.first_name, req.last_name, display_name, pw_hash, role, time.time()
         )
-        logger.info(f"New user registered: {req.username} (role={role})")
-        token = create_jwt(user_id, req.username, role)
-        return {"token": token, "user_id": user_id, "username": req.username, "role": role}
+        logger.info(f"New user registered: {req.email} (role={role})")
+        token = create_jwt(user_id, display_name, role)
+        response.set_cookie(
+            key="_req_sid",
+            value=token,
+            httponly=True,
+            samesite="lax",
+            max_age=JWT_EXPIRY_HOURS * 3600
+        )
+        return {"user_id": user_id, "display_name": display_name, "email": req.email, "role": role}
 
 
 @app.post("/auth/login")
-async def auth_login(req: LoginRequest):
+async def auth_login(req: LoginRequest, response: Response):
     """Authenticate user with password, return signed JWT."""
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
-            "SELECT user_id, username, password_hash, role, is_active FROM users WHERE username = $1",
-            req.username
+            "SELECT user_id, email, display_name, password_hash, role, is_active FROM users WHERE email = $1",
+            req.email
         )
 
     if not user:
-        raise HTTPException(status_code=401, detail="Invalid username or password.")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
     if not user["is_active"]:
         raise HTTPException(status_code=403, detail="Account has been deactivated. Contact an admin.")
     if not user["password_hash"] or not verify_password(req.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password.")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     # Update last_login timestamp
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE users SET last_login = $1 WHERE user_id = $2", time.time(), user["user_id"])
 
-    token = create_jwt(user["user_id"], user["username"], user["role"])
-    logger.info(f"User logged in: {user['username']}")
-    return {"token": token, "user_id": user["user_id"], "username": user["username"], "role": user["role"]}
+    token = create_jwt(user["user_id"], user["display_name"], user["role"])
+    logger.info(f"User logged in: {user['email']}")
+    response.set_cookie(
+        key="_req_sid",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=JWT_EXPIRY_HOURS * 3600
+    )
+    return {"user_id": user["user_id"], "display_name": user["display_name"], "email": user["email"], "role": user["role"]}
+
+@app.post("/auth/logout")
+async def auth_logout(response: Response):
+    """Clear the authentication cookie."""
+    response.delete_cookie(key="_req_sid", samesite="lax")
+    return {"status": "logged_out"}
 
 
 @app.get("/auth/me")
@@ -369,7 +400,7 @@ async def auth_me(current_user: dict = Depends(get_current_user)):
     """Return profile of the currently authenticated user."""
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
-            "SELECT user_id, username, role, is_active, created_at, last_login FROM users WHERE user_id = $1",
+            "SELECT user_id, email, display_name, role, is_active, created_at, last_login FROM users WHERE user_id = $1",
             current_user["sub"]
         )
     if not user:
@@ -389,7 +420,7 @@ async def admin_list_users(admin: dict = Depends(require_admin)):
     """List all users with stats. Admin only."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT user_id, username, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC"
+            "SELECT user_id, email, display_name, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC"
         )
     return [dict(r) for r in rows]
 
@@ -444,9 +475,9 @@ async def get_users(current_user_id: str = Query(None)):
         raise HTTPException(status_code=503, detail="Database not ready")
     async with db_pool.acquire() as conn:
         if current_user_id:
-            rows = await conn.fetch("SELECT user_id, username FROM users WHERE user_id != $1 AND is_active = TRUE", current_user_id)
+            rows = await conn.fetch("SELECT user_id, display_name FROM users WHERE user_id != $1 AND is_active = TRUE", current_user_id)
         else:
-            rows = await conn.fetch("SELECT user_id, username FROM users WHERE is_active = TRUE")
+            rows = await conn.fetch("SELECT user_id, display_name FROM users WHERE is_active = TRUE")
     return [dict(r) for r in rows]
 
 class CreateConversationRequest(BaseModel):
@@ -490,7 +521,7 @@ async def my_conversations(user_id: str):
     conn = await asyncpg.connect(db_url)
     try:
         query = """
-            SELECT c.conversation_id, c.type, c.created_at, u.username as other_username, u.user_id as other_user_id
+            SELECT c.conversation_id, c.type, c.created_at, u.display_name as other_display_name, u.user_id as other_user_id
             FROM conversations c
             JOIN conversation_participants my_p ON my_p.conversation_id = c.conversation_id
             JOIN conversation_participants other_p ON other_p.conversation_id = c.conversation_id AND other_p.user_id != $1
@@ -517,7 +548,7 @@ async def my_conversations(user_id: str):
     finally:
         await conn.close()
 
-@app.get("/conversation/{conversation_id}/state", dependencies=[Depends(validate_api_key)])
+@app.get("/conversation/{conversation_id}/state", dependencies=[Depends(get_current_user)])
 async def get_conversation_state(conversation_id: str):
     r = redis_client.redis
     state = await r.hgetall(f"conversation:{conversation_id}")
@@ -532,7 +563,7 @@ async def get_conversation_state(conversation_id: str):
         }
     return state
 
-@app.get("/conversation/{conversation_id}/messages", dependencies=[Depends(validate_api_key)])
+@app.get("/conversation/{conversation_id}/messages", dependencies=[Depends(get_current_user)])
 async def get_conversation_messages(conversation_id: str, limit: int = 50):
     """Get messages for a conversation."""
     import os
@@ -567,7 +598,7 @@ async def get_conversation_messages(conversation_id: str, limit: int = 50):
         logger.error(f"DB Error: {e}")
         return []
 
-@app.post("/message/{message_id}/feedback", dependencies=[Depends(validate_api_key)])
+@app.post("/message/{message_id}/feedback", dependencies=[Depends(get_current_user)])
 async def post_message_feedback(message_id: str, payload: dict):
     label = payload.get("label")
     if not label or label not in EMOTION_LABELS:
@@ -587,7 +618,7 @@ async def post_message_feedback(message_id: str, payload: dict):
         logger.error(f"Failed to publish feedback: {e}")
         raise HTTPException(status_code=500, detail="Internal Server Error")
 
-@app.get("/analytics/calibration", dependencies=[Depends(validate_api_key)])
+@app.get("/analytics/calibration", dependencies=[Depends(get_current_user)])
 async def get_calibration_analytics():
     """Get model performance metrics."""
     import os

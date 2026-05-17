@@ -16,6 +16,8 @@ central_responder_service/models/*.json
 
 # ── Runtime logs ──────────────────────────────
 logs/
+output.txt
+output_utf8.txt
 
 # ── Secrets — never commit these ──────────────
 .env

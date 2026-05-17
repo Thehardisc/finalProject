@@ -7,7 +7,7 @@ const API_BASE = 'http://localhost:8001';
  * AdminDashboard
  * Props:
  *   token        — JWT token for Authorization header
- *   currentUser  — { user_id, username, role }
+ *   currentUser  — { user_id, display_name, email, role }
  */
 export default function AdminDashboard({ token, currentUser }) {
     const [users, setUsers] = useState([]);
@@ -95,7 +95,7 @@ export default function AdminDashboard({ token, currentUser }) {
                 <table style={styles.table}>
                     <thead>
                         <tr>
-                            {['Username', 'Role', 'Status', 'Joined', 'Last Login', 'Actions'].map(h => (
+                            {['User', 'Role', 'Status', 'Joined', 'Last Login', 'Actions'].map(h => (
                                 <th key={h} style={styles.th}>{h}</th>
                             ))}
                         </tr>
@@ -108,7 +108,10 @@ export default function AdminDashboard({ token, currentUser }) {
                                 <tr key={user.user_id} style={{ ...styles.tr, opacity: busy ? 0.5 : 1 }}>
                                     <td style={styles.td}>
                                         <span style={styles.usernameCell}>
-                                            {user.username}
+                                            <span style={{ display: 'flex', flexDirection: 'column' }}>
+                                                <span>{user.display_name}</span>
+                                                <span style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.4)', fontWeight: 'normal' }}>{user.email}</span>
+                                            </span>
                                             {isSelf && <span style={styles.youBadge}>you</span>}
                                         </span>
                                     </td>
@@ -190,7 +193,7 @@ export default function AdminDashboard({ token, currentUser }) {
                         {confirmModal.type === 'delete' ? (
                             <>
                                 <h3 style={{ color: '#ff5252', marginTop: 0 }}>⚠ Delete User</h3>
-                                <p>Permanently delete <strong style={{ color: '#fff' }}>{confirmModal.user.username}</strong>?<br />
+                                <p>Permanently delete <strong style={{ color: '#fff' }}>{confirmModal.user.display_name}</strong> ({confirmModal.user.email})?<br />
                                     This cannot be undone.</p>
                                 <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px' }}>
                                     <button style={styles.cancelBtn} onClick={() => setConfirmModal(null)}>Cancel</button>
@@ -206,8 +209,8 @@ export default function AdminDashboard({ token, currentUser }) {
                                 </h3>
                                 <p>
                                     {confirmModal.user.role === 'admin'
-                                        ? <>Remove admin privileges from <strong style={{ color: '#fff' }}>{confirmModal.user.username}</strong>?</>
-                                        : <>Grant admin privileges to <strong style={{ color: '#fff' }}>{confirmModal.user.username}</strong>? They will be able to manage all users.</>
+                                        ? <>Remove admin privileges from <strong style={{ color: '#fff' }}>{confirmModal.user.display_name}</strong>?</>
+                                        : <>Grant admin privileges to <strong style={{ color: '#fff' }}>{confirmModal.user.display_name}</strong>? They will be able to manage all users.</>
                                     }
                                 </p>
                                 <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '20px' }}>

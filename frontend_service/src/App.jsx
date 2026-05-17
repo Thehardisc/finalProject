@@ -10,8 +10,8 @@ ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointE
 
 const API_BASE = 'http://localhost:8001';
 const WS_BASE = 'ws://localhost:8001';
-const API_KEY = 'il-9fA3mK7wXrPq2nZeVtYs'; // Matches INTERNAL_API_KEY in .env
 
+axios.defaults.withCredentials = true;
 // constants
 const EMOTION_COLORS = {
     'joy': '#00ff88', 'happy': '#00ff88', 'love': '#ff66b2', 'admiration': '#00ffcc',
@@ -158,7 +158,7 @@ function App() {
     const [messages, setMessages] = useState([]);
     const [inputValue, setInputValue] = useState('');
     const [currentUser, setCurrentUser] = useState(null);
-    const [token, setToken] = useState(() => localStorage.getItem('innerlink_token') || null);
+    const [sessionChecked, setSessionChecked] = useState(false);
     const [conversations, setConversations] = useState([]);
     const [globalUsers, setGlobalUsers] = useState([]);
     const [activeConversationId, setActiveConversationId] = useState(null);
@@ -182,18 +182,23 @@ function App() {
     const messagesEndRef = useRef(null);
 
     // helpers
-    const authHeaders = token ? { Authorization: `Bearer ${token}` } : { 'X-API-Key': API_KEY };
+    const getSenderName = (senderId) => {
+        if (!senderId) return 'System';
+        if (currentUser && senderId === currentUser.user_id) return currentUser.display_name;
+        const conv = conversations.find(c => c.other_user_id === senderId);
+        if (conv) return conv.other_display_name;
+        const gu = globalUsers.find(u => u.user_id === senderId);
+        if (gu) return gu.display_name;
+        return senderId.substring(0, 8);
+    };
 
     const handleAuthSuccess = (data) => {
         // Called after successful register or login
-        localStorage.setItem('innerlink_token', data.token);
-        setToken(data.token);
-        setCurrentUser({ user_id: data.user_id, username: data.username, role: data.role });
+        setCurrentUser({ user_id: data.user_id, display_name: data.display_name, email: data.email, role: data.role });
     };
 
-    const handleLogout = () => {
-        localStorage.removeItem('innerlink_token');
-        setToken(null);
+    const handleLogout = async () => {
+        try { await axios.post(`${API_BASE}/auth/logout`); } catch(e) {}
         setCurrentUser(null);
         setMessages([]);
         setConversations([]);
@@ -201,6 +206,28 @@ function App() {
         setCurrentAnalysis(null);
         if (socketRef.current) { socketRef.current.close(); socketRef.current = null; }
     };
+
+    // Restore session on load
+    useEffect(() => {
+        const verifySession = async () => {
+            if (!currentUser) {
+                try {
+                    const res = await axios.get(`${API_BASE}/auth/me`);
+                    setCurrentUser({
+                        user_id: res.data.user_id,
+                        display_name: res.data.display_name,
+                        email: res.data.email,
+                        role: res.data.role
+                    });
+                } catch (e) {
+                    // No active session
+                } finally {
+                    setSessionChecked(true);
+                }
+            }
+        };
+        verifySession();
+    }, [currentUser]);
 
     const applyTheme = (emotion) => {
         const e = emotion?.toLowerCase();
@@ -246,9 +273,7 @@ function App() {
     const fetchVibe = async () => {
         if (!activeConversationId) return;
         try {
-            const stateRes = await axios.get(`${API_BASE}/conversation/${activeConversationId}/state`, {
-                headers: { ...authHeaders, 'X-API-Key': API_KEY }
-            });
+            const stateRes = await axios.get(`${API_BASE}/conversation/${activeConversationId}/state`);
             if (stateRes.data) {
                 setVibeAnalysis({
                     valence: parseFloat(stateRes.data.average_valence || 0),
@@ -263,9 +288,7 @@ function App() {
 
     const fetchAnalytics = async () => {
         try {
-            const res = await axios.get(`${API_BASE}/analytics/calibration`, {
-                headers: { ...authHeaders, 'X-API-Key': API_KEY }
-            });
+            const res = await axios.get(`${API_BASE}/analytics/calibration`);
             setAnalyticsData(res.data);
         } catch (e) { console.error("Failed to fetch analytics", e); }
     };
@@ -273,7 +296,6 @@ function App() {
     const checkSystemStatus = async () => {
         try {
             const res = await axios.get(`${API_BASE}/health/status`, {
-                headers: { 'X-API-Key': API_KEY },
                 validateStatus: (s) => s === 200 || s === 503, // Accept 503 as valid data
             });
             const data = res.data;
@@ -335,9 +357,7 @@ function App() {
         const fetchInitialState = async () => {
             if (!activeConversationId) return;
             try {
-                const res = await axios.get(`${API_BASE}/conversation/${activeConversationId}/messages?limit=50`, {
-                    headers: { 'X-API-Key': API_KEY }
-                });
+                const res = await axios.get(`${API_BASE}/conversation/${activeConversationId}/messages?limit=50`);
                 if (res.data && res.data.length > 0) {
                     const historyMsgs = res.data.slice().reverse().map(m => {
                         const parsed = parseAnalysis(m);
@@ -346,7 +366,7 @@ function App() {
                             id: m.id,
                             sender: isSelf ? 'user' : 'ai',
                             text: m.content,
-                            senderName: isSelf ? currentUser.username : (m.sender_id ? m.sender_id.substring(0,8) : 'System'),
+                            senderName: isSelf ? currentUser.display_name : getSenderName(m.sender_id),
                             analysis: parsed
                         };
                     });
@@ -366,7 +386,7 @@ function App() {
         let pollInterval;
         const connectWebSocket = () => {
             if (!currentUser) return null;
-            const ws = new WebSocket(`${WS_BASE}/ws/${currentUser.user_id}?api_key=${API_KEY}`);
+            const ws = new WebSocket(`${WS_BASE}/ws/${currentUser.user_id}`);
 
             ws.onopen = () => {
                 console.log("Connected to WS");
@@ -402,7 +422,7 @@ function App() {
                                 id: payload.data.id,
                                 sender: isSelf ? 'user' : 'ai',
                                 text: payload.data.raw_text,
-                                senderName: isSelf ? currentUser?.username : (payload.data.sender_id ? payload.data.sender_id.substring(0,8) : 'System'),
+                                senderName: isSelf ? currentUser?.display_name : getSenderName(payload.data.sender_id),
                                 analysis: payload
                             };
 
@@ -450,10 +470,9 @@ useEffect(() => {
     if (!currentUser) return;
     const fetchChats = async () => {
         try {
-            const headers = { ...authHeaders, 'X-API-Key': API_KEY };
             const [chatsRes, usersRes] = await Promise.all([
-                axios.get(`${API_BASE}/conversations/${currentUser.user_id}`, { headers }),
-                axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`, { headers })
+                axios.get(`${API_BASE}/conversations/${currentUser.user_id}`),
+                axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`)
             ]);
             setConversations(chatsRes.data || []);
             setGlobalUsers(usersRes.data || []);
@@ -490,7 +509,7 @@ const sendMessage = () => {
         id: Date.now(),
         sender: 'user',
         text: inputValue,
-        senderName: currentUser.username,
+        senderName: currentUser.display_name,
         analysis: null
     };
     setMessages(prev => [...prev, newMsg]);
@@ -517,10 +536,7 @@ useEffect(() => {
 
 const handleFeedback = async (msgId, newLabel) => {
     try {
-        await axios.post(`${API_BASE}/message/${msgId}/feedback`,
-            { label: newLabel },
-            { headers: { 'X-API-Key': API_KEY } }
-        );
+        await axios.post(`${API_BASE}/message/${msgId}/feedback`, { label: newLabel });
         // update state
         setMessages(prev => prev.map(m => m.id === msgId ? { ...m, verified: true, feedbackLabel: newLabel } : m));
         if (currentAnalysis && currentAnalysis.data.id === msgId) {
@@ -546,7 +562,7 @@ const handleHistoryClick = (msg) => {
 return (
     <div className="app-shell">
         {/* Login gate — replaced by secure LoginModal */}
-        {!currentUser && <LoginModal onSuccess={handleAuthSuccess} />}
+        {!currentUser && sessionChecked && <LoginModal onSuccess={handleAuthSuccess} />}
 
         {/* loading gate */}
         {(currentUser && !systemReady) && (
@@ -630,7 +646,7 @@ return (
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <h3 style={{ color: 'var(--accent-primary)', marginBottom: '10px' }}>
                             {currentUser.role === 'admin' && <span title="Admin" style={{ marginRight: '6px' }}>👑</span>}
-                            {currentUser.username}
+                            {currentUser.display_name}
                         </h3>
                         <button
                             id="logout-btn"
@@ -650,7 +666,7 @@ return (
                         <div className="users-list" style={{ maxHeight: '120px', overflowY: 'auto', marginBottom: '10px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px' }}>
                             {globalUsers.map(u => (
                                 <div key={u.user_id} onClick={() => handleCreateChat(u.user_id)} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                    {u.username} <span style={{ float: 'right' }}>+</span>
+                                    {u.display_name} <span style={{ float: 'right' }}>+</span>
                                 </div>
                             ))}
                         </div>
@@ -659,7 +675,7 @@ return (
                         <div className="chats-list" style={{ maxHeight: '120px', overflowY: 'auto', marginBottom: '10px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px' }}>
                             {conversations.map(c => (
                                 <div key={c.conversation_id} onClick={() => setActiveConversationId(c.conversation_id)} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)', background: activeConversationId === c.conversation_id ? 'rgba(0,180,255,0.3)' : 'transparent' }}>
-                                    <div style={{ fontWeight: 'bold' }}>Chat with {c.other_username}</div>
+                                    <div style={{ fontWeight: 'bold' }}>Chat with {c.other_display_name}</div>
                                     <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '4px' }}>
                                         Vibe: <span style={{ color: EMOTION_COLORS[c.dominant_emotion?.toLowerCase()] || '#00f2ff' }}>{c.dominant_emotion || 'Neutral'}</span> (Valence: {(c.average_valence || 0).toFixed(2)})
                                     </div>
