@@ -14,16 +14,6 @@ logger = get_logger("llm_reasoning_service")
 
 # --- Explainer Logic ---
 class RuleBasedExplainer:
-    """
-    Generates human-readable explanations of emotion decisions.
-
-    Currently uses a rule/template-based approach keyed on which model
-    contributed most to the final decision (logic_map). This is deterministic
-    and reproducible — ideal for a demo environment.
-
-    To upgrade to a live LLM: set LLM_PROVIDER=OPENAI or LLM_PROVIDER=GROQ
-    in .env and implement the API call in generate_insight().
-    """
     def __init__(self):
         self.provider_type = os.getenv("LLM_PROVIDER", "RULE_BASED").upper()
         logger.info(f"Explainer initialized in mode: {self.provider_type}")
@@ -97,12 +87,18 @@ async def main():
                             logic_map = pipeline_log.get("logic_map", {})
                             sarcasm_score = pipeline_log.get("sarcasm_score", 0.0)
                             conflict_desc = pipeline_log.get("conflict", None)
-                            context_shift = json.loads(data.get("context_shift", "false"))
+                            context_shift_raw = data.get("context_shift", "null")
+                            try:
+                                context_shift = json.loads(context_shift_raw)
+                            except (json.JSONDecodeError, TypeError):
+                                context_shift = None
+                            # context_shift is a dict object if a shift was detected, None otherwise
+                            is_context_shift = isinstance(context_shift, dict)
                             msg_uuid = data.get("message_id")
 
                             insight = await explainer.generate_insight(
                                 text, emotion, logic_map,
-                                sarcasm_score, conflict_desc, context_shift
+                                sarcasm_score, conflict_desc, is_context_shift
                             )
 
                             payload = {
