@@ -15,6 +15,26 @@ echo ""
 API_KEY=$(grep "^INTERNAL_API_KEY=" .env | cut -d'=' -f2 | tr -d '"'\'' ')
 API_KEY=${API_KEY:-dev-secret-key}
 
+# Load and display all config from .env so operators can verify before launch
+MAX_SAMPLES_VAL=$(grep '^MAX_SAMPLES=' .env 2>/dev/null | cut -d'=' -f2)
+RETRAIN_INTERVAL_VAL=$(grep '^RETRAIN_INTERVAL_SECONDS=' .env 2>/dev/null | cut -d'=' -f2)
+ACCURACY_GATE_VAL=$(grep '^ACCURACY_GATE=' .env 2>/dev/null | cut -d'=' -f2)
+LLM_PROVIDER_VAL=$(grep '^LLM_PROVIDER=' .env 2>/dev/null | cut -d'=' -f2)
+LOG_LEVEL_VAL=$(grep '^LOG_LEVEL=' .env 2>/dev/null | cut -d'=' -f2)
+RATE_LIMIT_MAX_VAL=$(grep '^RATE_LIMIT_MAX=' .env 2>/dev/null | cut -d'=' -f2)
+
+echo "[Config] Resolved environment from .env:"
+echo "──────────────────────────────────────────────────────────"
+echo "   LOG_LEVEL               = ${LOG_LEVEL_VAL:-INFO}"
+echo "   MAX_SAMPLES             = ${MAX_SAMPLES_VAL:-2500}  (GoEmotions dataset size per run)"
+echo "   RETRAIN_INTERVAL_SECS   = ${RETRAIN_INTERVAL_VAL:-1800}s"
+echo "   ACCURACY_GATE           = ${ACCURACY_GATE_VAL:-0.40}  (min test accuracy to deploy model)"
+echo "   LLM_PROVIDER            = ${LLM_PROVIDER_VAL:-RULE_BASED}"
+echo "   RATE_LIMIT_MAX          = ${RATE_LIMIT_MAX_VAL:-60} req/min per user"
+echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
+echo "──────────────────────────────────────────────────────────"
+echo ""
+
 echo "[Search] Detecting host environment..."
 
 if command -v nvidia-smi &> /dev/null; then
@@ -29,29 +49,54 @@ echo ""
 $COMPOSE_CMD
 echo ""
 
-# Setup logging
+# Setup logging — create timestamped run directory
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGDIR="logs/run_${TIMESTAMP}"
 mkdir -p "${LOGDIR}"
 
+# Write init log: capture the config + launch summary to a file
+INIT_LOG="${LOGDIR}/init.log"
+{
+    echo "=============================================================="
+    echo "    InnerLink Launcher — Init Log"
+    echo "    Timestamp : ${TIMESTAMP}"
+    echo "=============================================================="
+    echo ""
+    echo "[Config] Resolved environment from .env:"
+    echo "──────────────────────────────────────────────────────────"
+    echo "   LOG_LEVEL               = ${LOG_LEVEL_VAL:-INFO}"
+    echo "   MAX_SAMPLES             = ${MAX_SAMPLES_VAL:-2500}"
+    echo "   RETRAIN_INTERVAL_SECS   = ${RETRAIN_INTERVAL_VAL:-1800}s"
+    echo "   ACCURACY_GATE           = ${ACCURACY_GATE_VAL:-0.40}"
+    echo "   LLM_PROVIDER            = ${LLM_PROVIDER_VAL:-RULE_BASED}"
+    echo "   RATE_LIMIT_MAX          = ${RATE_LIMIT_MAX_VAL:-60} req/min"
+    echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
+    echo "──────────────────────────────────────────────────────────"
+    echo ""
+    echo "[Hardware] Compose command: ${COMPOSE_CMD}"
+    echo ""
+} > "${INIT_LOG}"
+
 echo "[Logs] Writing per-service logs to: ${LOGDIR}/"
+echo "[Logs] Init log: ${INIT_LOG}"
 
 # Spawn a background log process for each service into its own file
+# --since prevents old logs from previous runs bleeding into this session
+LAUNCH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 SERVICES=$(docker compose config --services 2>/dev/null)
 for SERVICE in $SERVICES; do
-    docker compose logs -f "${SERVICE}" > "${LOGDIR}/${SERVICE}.log" 2>&1 &
+    docker compose logs -f --since "${LAUNCH_TIME}" "${SERVICE}" > "${LOGDIR}/${SERVICE}.log" 2>&1 &
 done
 
-# Also write a combined log that strips noisy health-check pings
-# Filters out: GET /health, OPTIONS /health, 200 OK health responses
-docker compose logs -f 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
+# Combined log without noisy health-check pings
+docker compose logs -f --since "${LAUNCH_TIME}" 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
 
-# Errors-only log: captures actual ERROR/CRITICAL/FATAL lines from services
-# Excludes false positives like logger names (uvicorn.error) and Python deprecation warnings
-docker compose logs -f 2>&1 | grep -E '\] ERROR |\] CRITICAL |\] WARNING |FATAL|CRASH|ROLLBACK|Traceback' | grep -v 'uvicorn.error' > "${LOGDIR}/errors.log" 2>&1 &
+# Errors-only log — matches actual format: [ERROR   ] [CRITICAL ] plus Traceback/Exception lines
+# The logger outputs "[ERROR   ]" and "[CRITICAL]" with bracket-wrapped padded levels
+docker compose logs -f --since "${LAUNCH_TIME}" 2>&1 | grep -E '\[ERROR\s*\]|\[CRITICAL\]|\[WARNING\s*\]|Traceback|Exception:|FATAL|CRASH|ROLLBACK' | grep -v 'uvicorn.error' > "${LOGDIR}/errors.log" 2>&1 &
 
-# Keep a full combined log as well (for debugging)
-docker compose logs -f > "${LOGDIR}/all.log" 2>&1 &
+# Full combined log for deep debugging
+docker compose logs -f --since "${LAUNCH_TIME}" > "${LOGDIR}/all.log" 2>&1 &
 LOGFILE="${LOGDIR}/all.log"
 
 # Wait for containers
@@ -175,8 +220,9 @@ echo "    [API]  API:          http://localhost:8001"
 echo "    [In]   Ingestion:    http://localhost:8000"
 echo ""
 echo "    [Logs] Directory:    ${LOGDIR}/"
-echo "    [Log]  Errors only:  ${LOGDIR}/errors.log              (ERROR/WARN/CRITICAL)"
-echo "    [Log]  Brain only:   ${LOGDIR}/important.log           (no health pings)"
+echo "    [Log]  Init report:  ${LOGDIR}/init.log              (config + health checks)"
+echo "    [Log]  Errors only:  ${LOGDIR}/errors.log            (ERROR/WARN/CRITICAL)"
+echo "    [Log]  Brain only:   ${LOGDIR}/important.log         (no health pings)"
 echo "    [Log]  Responder:    ${LOGDIR}/central_responder_service.log"
 echo "    [Log]  Database:     ${LOGDIR}/db.log"
 echo "    [Log]  Full dump:    ${LOGDIR}/all.log"
@@ -184,4 +230,30 @@ echo ""
 echo "    Tip: tail -f ${LOGDIR}/errors.log"
 echo "    Tip: tail -f ${LOGDIR}/important.log"
 echo "=============================================================="
+
+# Append health check results to init.log
+{
+    echo "[Health Checks]"
+    echo "   PASS : ${PASS}"
+    echo "   FAIL : ${FAIL}"
+    if [ $FAIL -eq 0 ]; then
+        echo "   Result : ALL CHECKS PASSED"
+    else
+        echo "   Result : ${FAIL} check(s) FAILED — see errors.log for details"
+    fi
+    echo ""
+    echo "[URLs]"
+    echo "   Frontend  : http://localhost:5173"
+    echo "   API       : http://localhost:8001"
+    echo "   Ingestion : http://localhost:8000"
+    echo ""
+    echo "[Log Files]"
+    echo "   ${LOGDIR}/errors.log"
+    echo "   ${LOGDIR}/important.log"
+    echo "   ${LOGDIR}/all.log"
+} >> "${INIT_LOG}"
+
+echo ""
+echo "   [Log] Init report saved: ${INIT_LOG}"
+
 echo ""

@@ -44,7 +44,22 @@ def init_db():
             conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS ground_truth_emotion VARCHAR(50);"))
             conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;"))
             conn.execute(text("ALTER TABLE conversation_states ADD COLUMN IF NOT EXISTS escalation_score FLOAT DEFAULT 0.0;"))
-            logger.info("Self-healing schema check complete.")
+            # Auth columns — safe to run on existing DBs
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user';"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login FLOAT;"))
+            
+            # New user profile columns
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR;"))
+            
+            # Drop NOT NULL constraint on legacy username column
+            conn.execute(text("ALTER TABLE users ALTER COLUMN username DROP NOT NULL;"))
+            
+            logger.info("Self-healing schema check complete (including auth columns).")
 
         print("[persistence_service] init_db() SUCCESS", flush=True)
     except Exception as e:

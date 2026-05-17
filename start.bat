@@ -7,8 +7,40 @@ echo      [Brain]  Emotion Analysis System - Launcher
 echo ==============================================================
 echo.
 
+REM Load config values from .env for display
+set MAX_SAMPLES_VAL=2500
+set RETRAIN_INTERVAL_VAL=1800
+set ACCURACY_GATE_VAL=0.40
+set LLM_PROVIDER_VAL=RULE_BASED
+set LOG_LEVEL_VAL=INFO
+set RATE_LIMIT_MAX_VAL=60
+set API_KEY_VAL=N/A
+
+for /f "tokens=1,* delims==" %%a in (.env) do (
+    if "%%a"=="MAX_SAMPLES"              set MAX_SAMPLES_VAL=%%b
+    if "%%a"=="RETRAIN_INTERVAL_SECONDS" set RETRAIN_INTERVAL_VAL=%%b
+    if "%%a"=="ACCURACY_GATE"            set ACCURACY_GATE_VAL=%%b
+    if "%%a"=="LLM_PROVIDER"             set LLM_PROVIDER_VAL=%%b
+    if "%%a"=="LOG_LEVEL"                set LOG_LEVEL_VAL=%%b
+    if "%%a"=="RATE_LIMIT_MAX"           set RATE_LIMIT_MAX_VAL=%%b
+    if "%%a"=="INTERNAL_API_KEY"         set API_KEY_VAL=%%b
+)
+
+echo [Config] Resolved environment from .env:
+echo ----------------------------------------------------------
+echo    LOG_LEVEL               = !LOG_LEVEL_VAL!
+echo    MAX_SAMPLES             = !MAX_SAMPLES_VAL!  ^(GoEmotions dataset size per run^)
+echo    RETRAIN_INTERVAL_SECS   = !RETRAIN_INTERVAL_VAL!s
+echo    ACCURACY_GATE           = !ACCURACY_GATE_VAL!  ^(min test accuracy to deploy model^)
+echo    LLM_PROVIDER            = !LLM_PROVIDER_VAL!
+echo    RATE_LIMIT_MAX          = !RATE_LIMIT_MAX_VAL! req/min per user
+echo    API_KEY                 = !API_KEY_VAL:~0,6!...  ^(redacted^)
+echo ----------------------------------------------------------
+echo.
+
 REM Detect Hardware
 echo [Search] Detecting host environment...
+
 
 where nvidia-smi >nul 2>nul
 if %ERRORLEVEL% equ 0 (
@@ -23,15 +55,59 @@ echo.
 %COMPOSE_CMD%
 echo.
 
-REM Setup Logging
+REM Setup Logging — create timestamped run directory
 if not exist logs mkdir logs
 
 set TIMESTAMP=%date:~-4,4%-%date:~-10,2%-%date:~-7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%
 set TIMESTAMP=%TIMESTAMP: =0%
-set LOGFILE=logs\run_%TIMESTAMP%.log
+set LOGDIR=logs\run_%TIMESTAMP%
+if not exist %LOGDIR% mkdir %LOGDIR%
 
-echo [Logs] Log file: %LOGFILE%
+set INIT_LOG=%LOGDIR%\init.log
+set LOGFILE=%LOGDIR%\all.log
+set ERRORS_LOG=%LOGDIR%\errors.log
+set IMPORTANT_LOG=%LOGDIR%\important.log
+
+REM Write init log header
+(
+    echo ==============================================================
+    echo    InnerLink Launcher - Init Log
+    echo    Timestamp : %TIMESTAMP%
+    echo ==============================================================
+    echo.
+    echo [Config] Resolved environment from .env:
+    echo ----------------------------------------------------------
+    echo    LOG_LEVEL               = !LOG_LEVEL_VAL!
+    echo    MAX_SAMPLES             = !MAX_SAMPLES_VAL!
+    echo    RETRAIN_INTERVAL_SECS   = !RETRAIN_INTERVAL_VAL!s
+    echo    ACCURACY_GATE           = !ACCURACY_GATE_VAL!
+    echo    LLM_PROVIDER            = !LLM_PROVIDER_VAL!
+    echo    RATE_LIMIT_MAX          = !RATE_LIMIT_MAX_VAL! req/min
+    echo    API_KEY                 = !API_KEY_VAL:~0,6!...  ^(redacted^)
+    echo ----------------------------------------------------------
+    echo.
+) > %INIT_LOG%
+
+echo [Logs] Log directory  : %LOGDIR%
+echo [Logs] Init log       : %INIT_LOG%
+echo [Logs] All logs       : %LOGFILE%
+echo [Logs] Errors only    : %ERRORS_LOG%
+echo [Logs] Important      : %IMPORTANT_LOG%
+
+REM Full combined log (all services, no filter)
 start /b cmd /c "docker compose logs -f > %LOGFILE% 2>&1"
+
+REM Errors-only log — filter for [ERROR], [CRITICAL], [WARNING], Traceback, Exception
+start /b cmd /c "docker compose logs -f 2>&1 | powershell -NoProfile -Command \"$input | Select-String -Pattern '\[ERROR', '\[CRITICAL', '\[WARNING', 'Traceback', 'Exception:', 'FATAL', 'CRASH' | Where-Object { $_ -notmatch 'uvicorn.error' }\" > %ERRORS_LOG%"
+
+REM Important log — combined without noisy health-check pings
+start /b cmd /c "docker compose logs -f 2>&1 | powershell -NoProfile -Command \"$input | Where-Object { $_ -notmatch 'GET /health' -and $_ -notmatch 'OPTIONS /health' }\" > %IMPORTANT_LOG%"
+
+REM Per-service log files — one file per service
+for /f %%s in ('docker compose config --services 2^>nul') do (
+    start /b cmd /c "docker compose logs -f %%s > %LOGDIR%\%%s.log 2>&1"
+)
+
 
 REM Wait for containers
 echo.
@@ -138,12 +214,44 @@ if !FAIL! equ 0 (
 )
 echo ==============================================================
 echo.
-echo    [Web]  Frontend:  http://localhost:5173
-echo    [API]  API:       http://localhost:8001
-echo    [In]   Ingestion: http://localhost:8000
-echo    [Log]  Logs:      %LOGFILE%
+echo    [Web]  Frontend:      http://localhost:5173
+echo    [API]  API:           http://localhost:8001
+echo    [In]   Ingestion:     http://localhost:8000
 echo.
+echo    [Logs] Directory:     %LOGDIR%
+echo    [Log]  Init report:   %INIT_LOG%           ^(config + health checks^)
+echo    [Log]  Errors only:   %ERRORS_LOG%         ^(ERROR/WARN/CRITICAL/Traceback^)
+echo    [Log]  Important:     %IMPORTANT_LOG%      ^(no health pings^)
+echo    [Log]  Full dump:     %LOGFILE%
+echo    [Log]  Per-service:   %LOGDIR%\^<service^>.log
+echo.
+echo    Tip: open %ERRORS_LOG%
+echo    Tip: open %IMPORTANT_LOG%
 echo ==============================================================
+echo.
+
+REM Append health check results to init.log
+(
+    echo [Health Checks]
+    echo    PASS : %PASS%
+    echo    FAIL : %FAIL%
+    if %FAIL% equ 0 (
+        echo    Result : ALL CHECKS PASSED
+    ) else (
+        echo    Result : %FAIL% check^(s^) FAILED - see all.log for details
+    )
+    echo.
+    echo [URLs]
+    echo    Frontend  : http://localhost:5173
+    echo    API       : http://localhost:8001
+    echo    Ingestion : http://localhost:8000
+    echo.
+    echo [Log Files]
+    echo    %LOGDIR%\all.log
+    echo    %LOGDIR%\init.log
+) >> %INIT_LOG%
+
+echo    [Log] Init report saved: %INIT_LOG%
 echo.
 
 pause

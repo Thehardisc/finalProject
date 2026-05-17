@@ -103,7 +103,7 @@ EMOJINET_DB = {
 }
 
 redis_client = RedisClient()
-INPUT_STREAM = "message_stream"
+INPUT_STREAM = "preprocessed_stream"  # Read from preprocessed stream (consistent with other models)
 GROUP_NAME = "emojinet_group"
 CONSUMER_NAME = "emojinet_worker_1"
 OUTPUT_STREAM = "partial_analysis_stream"
@@ -187,49 +187,57 @@ async def main():
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
-                        logger.debug(f"Emojinet received message {message_id}")
-                        # Parse inputs
-                        text = data.get("text", "")
-                        id_val = data.get("message_id")
-                        
-                        # Analyze
-                        start_time = time.time()
-                        result = await analyze_emojis(text)
-                        elapsed = (time.time() - start_time) * 1000
-                        logger.debug(f"Emojinet inference took {elapsed:.2f}ms")
-                        
-                        if result:
-                            # Publish Result
-                            output_event = {
-                                "message_id": id_val,
-                                "model_name": "emojinet",
-                                "scores": json.dumps(result["emotions"]),
-                                "original_data": json.dumps(data),
-                                "latency_ms": elapsed
-                            }
-                            await redis_client.publish_event(OUTPUT_STREAM, output_event)
+                        try:
+                            logger.debug(f"Emojinet received message {message_id}")
+                            # Use original text field (preserved through preprocessing)
+                            text = data.get("text", "") or data.get("original_text", "")
+                            id_val = data.get("message_id")
                             
-                            # Structured Stats Reporting
-                            stats = {
-                                "Message ID": id_val,
-                                "Emoji Count": result["metadata"]["emoji_count"],
-                                "Emojis Found": ", ".join(result["metadata"]["emojis"]),
-                                "Dominant Map": max(result["emotions"].items(), key=lambda x: x[1])[0],
-                                "Latency": f"{elapsed:.2f}ms"
-                            }
-                            logger.log_stats("EMOJINET INFERENCE", stats)
-                        else:
-                             # Publish empty
-                             output_event = {
-                                "message_id": id_val,
-                                "model_name": "emojinet",
-                                "scores": json.dumps({}),
-                                "original_data": json.dumps(data),
-                                "latency_ms": elapsed
-                            }
-                             await redis_client.publish_event(OUTPUT_STREAM, output_event)
-                        
-                        await r.xack(INPUT_STREAM, GROUP_NAME, message_id)
+                            # Analyze
+                            start_time = time.time()
+                            result = await analyze_emojis(text)
+                            elapsed = (time.time() - start_time) * 1000
+                            logger.debug(f"Emojinet inference took {elapsed:.2f}ms")
+                            
+                            if result:
+                                # Publish Result
+                                output_event = {
+                                    "message_id": id_val,
+                                    "model_name": "emojinet",
+                                    "scores": json.dumps(result["emotions"]),
+                                    "original_data": json.dumps(data),
+                                    "latency_ms": elapsed
+                                }
+                                await redis_client.publish_event(OUTPUT_STREAM, output_event)
+                                
+                                # Structured Stats Reporting
+                                stats = {
+                                    "Message ID": id_val,
+                                    "Emoji Count": result["metadata"]["emoji_count"],
+                                    "Emojis Found": ", ".join(result["metadata"]["emojis"]),
+                                    "Dominant Map": max(result["emotions"].items(), key=lambda x: x[1])[0],
+                                    "Latency": f"{elapsed:.2f}ms"
+                                }
+                                logger.log_stats("EMOJINET INFERENCE", stats)
+                            else:
+                                # Publish empty scores so central_responder doesn't stall
+                                output_event = {
+                                    "message_id": id_val,
+                                    "model_name": "emojinet",
+                                    "scores": json.dumps({}),
+                                    "original_data": json.dumps(data),
+                                    "latency_ms": elapsed
+                                }
+                                await redis_client.publish_event(OUTPUT_STREAM, output_event)
+
+                            await r.xack(INPUT_STREAM, GROUP_NAME, message_id)
+
+                        except Exception as msg_err:
+                            logger.error(f"[EMOJINET] Failed on {message_id}: {msg_err}. ACKing to prevent requeue.")
+                            try:
+                                await r.xack(INPUT_STREAM, GROUP_NAME, message_id)
+                            except Exception:
+                                pass
             
         except Exception as e:
             logger.log_exception("EMOJINET WORKER FATAL ERROR", e)

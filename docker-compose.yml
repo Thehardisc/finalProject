@@ -230,6 +230,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-emotion_db}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
     volumes:
       - ./central_responder_service/models:/app/models:ro
 

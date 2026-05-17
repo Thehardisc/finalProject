@@ -16,7 +16,16 @@ logger = get_logger("bert_service")
 class BasicBertAnalyzer:
     def __init__(self):
         import torch
-        device = 0 if torch.cuda.is_available() else -1
+        # Determine device: CUDA (Nvidia), MPS (Mac), or CPU
+        device = -1
+        if torch.cuda.is_available():
+            device = 0
+            logger.info("BERT using CUDA GPU")
+        elif torch.backends.mps.is_available():
+            device = "mps"
+            logger.info("BERT using Apple Metal (MPS) GPU")
+        else:
+            logger.info("BERT using CPU")
         # Using a small, fast model for basic emotions (Ekman)
         # "j-hartmann/emotion-english-distilroberta-base" covers:
         # anger, disgust, fear, joy, neutral, sadness, surprise
@@ -26,13 +35,14 @@ class BasicBertAnalyzer:
                                    device=device)
     
     def analyze(self, text: str) -> dict:
+        # Truncate to 512 chars to prevent transformer sequence length errors
+        if len(text) > 512:
+            text = text[:512]
         results = self.classifier(text)
         # results is [[{'label': 'anger', 'score': 0.9}, ...]]
-        
         scores = {}
         for r in results[0]:
             scores[r['label']] = r['score']
-            
         return scores
 
 redis_client = RedisClient()
