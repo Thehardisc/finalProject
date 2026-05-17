@@ -44,14 +44,14 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ── JWT Tokens ────────────────────────────────────────────────────────────────
 
-def create_jwt(user_id: str, username: str, role: str) -> str:
+def create_jwt(user_id: str, display_name: str, role: str) -> str:
     """
     Create a signed HS256 JWT containing user identity and role.
     Token expires after JWT_EXPIRY_HOURS hours.
     """
     payload = {
         "sub": user_id,
-        "username": username,
+        "display_name": display_name,
         "role": role,
         "iat": int(time.time()),
         "exp": int(time.time()) + (JWT_EXPIRY_HOURS * 3600),
@@ -82,28 +82,30 @@ def decode_jwt(token: str) -> dict:
 
 # ── FastAPI Dependencies ───────────────────────────────────────────────────────
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> dict:
-    """
-    FastAPI dependency — extracts and validates the Bearer JWT from the
-    Authorization header. Returns the decoded token payload as a dict
-    with keys: sub (user_id), username, role.
+from fastapi import Request
 
-    Usage:
-        @app.get("/me")
-        async def me(user = Depends(get_current_user)):
-            ...
+async def get_current_user(request: Request) -> dict:
     """
-    if not authorization or not authorization.startswith("Bearer "):
+    FastAPI dependency — extracts and validates the JWT from the
+    '_req_sid' HttpOnly cookie, or falls back to Authorization header.
+    Returns the decoded token payload as a dict.
+    """
+    token = request.cookies.get("_req_sid")
+    if not token:
+        # Fallback for internal scripts or API usage
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ", 1)[1]
+
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing or malformed Authorization header. Expected: Bearer <token>",
-            headers={"WWW-Authenticate": "Bearer"},
+            detail="Missing authentication token. Please log in.",
         )
-    token = authorization.split(" ", 1)[1]
     return decode_jwt(token)
 
 
-async def require_admin(authorization: Optional[str] = Header(None)) -> dict:
+async def require_admin(request: Request) -> dict:
     """
     FastAPI dependency — same as get_current_user but additionally enforces
     that the authenticated user has role == 'admin'.
@@ -114,7 +116,7 @@ async def require_admin(authorization: Optional[str] = Header(None)) -> dict:
         async def admin_users(user = Depends(require_admin)):
             ...
     """
-    user = await get_current_user(authorization)
+    user = await get_current_user(request)
     if user.get("role") != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

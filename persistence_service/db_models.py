@@ -36,7 +36,11 @@ class ConversationState(Base):
 class User(Base):
     __tablename__ = 'users'
     user_id = Column(String, primary_key=True, default=gen_uuid)
-    username = Column(String, unique=True, index=True, nullable=False)
+    username = Column(String, unique=True, index=True, nullable=True) # Legacy
+    email = Column(String, unique=True, index=True, nullable=True)
+    first_name = Column(String, nullable=True)
+    last_name = Column(String, nullable=True)
+    display_name = Column(String, nullable=True)
     password_hash = Column(String, nullable=True)  # bcrypt hash (includes auto-generated salt). Nullable for migration safety.
     role = Column(String, default="user")           # "user" | "admin"
     is_active = Column(Boolean, default=True)       # Admins can deactivate accounts

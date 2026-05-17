@@ -1,0 +1,523 @@
+﻿
+==============================================================
+     [Brain]  Emotion Analysis System - Launcher
+==============================================================
+
+[Search] Detecting host environment...
+   [OK] NVIDIA GPU Detected Launching with GPU acceleration...
+
+#1 [internal] load local bake definitions
+#1 reading from stdin 6.86kB done
+#1 DONE 0.0s
+
+#2 [api_service internal] load build definition from Dockerfile
+#2 DONE 0.0s
+
+#2 [api_service internal] load build definition from Dockerfile
+#2 transferring dockerfile: 685B done
+#2 DONE 0.0s
+
+#3 [goemotions_service internal] load build definition from Dockerfile
+#3 transferring dockerfile: 703B done
+#3 DONE 0.0s
+
+#4 [emojinet_service internal] load build definition from Dockerfile
+#4 transferring dockerfile: 592B done
+#4 DONE 0.0s
+
+#5 [frontend_service internal] load build definition from Dockerfile
+#5 transferring dockerfile: 631B done
+#5 WARN: FromAsCasing: 'as' and 'FROM' keywords' casing do not match (line 2)
+#5 DONE 0.0s
+
+#6 [vader_service internal] load build definition from Dockerfile
+#6 transferring dockerfile: 769B done
+#6 DONE 0.0s
+
+#7 [preprocessing_service internal] load build definition from Dockerfile
+#7 transferring dockerfile: 591B done
+#7 DONE 0.1s
+
+#8 [bert_service internal] load build definition from Dockerfile
+#8 transferring dockerfile: 757B done
+#8 DONE 0.1s
+
+#9 [ingestion_service internal] load build definition from Dockerfile
+#9 transferring dockerfile: 678B done
+#9 DONE 0.1s
+
+#10 [bert_service internal] load metadata for docker.io/library/python:3.9-slim
+#10 ...
+
+#11 [persistence_service internal] load build definition from Dockerfile
+#11 transferring dockerfile: 541B done
+#11 DONE 0.1s
+
+#12 [llm_reasoning_service internal] load build definition from Dockerfile
+#12 transferring dockerfile: 810B done
+#12 DONE 0.1s
+
+#13 [aggregation_service internal] load build definition from Dockerfile
+#13 transferring dockerfile: 553B done
+#13 DONE 0.1s
+
+#14 [central_responder_service internal] load build definition from Dockerfile
+#14 transferring dockerfile: 802B done
+#14 DONE 0.1s
+
+#10 [aggregation_service internal] load metadata for docker.io/library/python:3.9-slim
+#10 DONE 0.6s
+
+#15 [persistence_service internal] load build context
+#15 transferring context: 22.85kB done
+#15 DONE 0.0s
+
+#16 [frontend_service internal] load metadata for docker.io/library/node:20-slim
+#16 DONE 0.6s
+
+#17 [frontend_service internal] load metadata for docker.io/library/nginx:alpine
+#17 DONE 0.6s
+
+#18 [central_responder_service internal] load build context
+#18 DONE 0.0s
+
+#19 [ingestion_service internal] load .dockerignore
+#19 transferring context: 2B done
+#19 DONE 0.1s
+
+#20 [frontend_service internal] load .dockerignore
+#20 transferring context: 77B done
+#20 DONE 0.0s
+
+#21 [bert_service internal] load build context
+#21 transferring context: 5.92kB done
+#21 DONE 0.0s
+
+#22 [frontend_service internal] load build context
+#22 DONE 0.0s
+
+#23 [api_service 1/7] FROM docker.io/library/python:3.9-slim@sha256:2d97f6910b16bd338d3060f261f53f144965f755599aab1acda1e13cf1731b1b
+#23 resolve docker.io/library/python:3.9-slim@sha256:2d97f6910b16bd338d3060f261f53f144965f755599aab1acda1e13cf1731b1b 0.0s done
+#23 DONE 0.1s
+
+#24 [emojinet_service internal] load build context
+#24 transferring context: 15.28kB done
+#24 DONE 0.1s
+
+#25 [goemotions_service internal] load build context
+#25 transferring context: 6.15kB done
+#25 DONE 0.1s
+
+#26 [llm_reasoning_service internal] load build context
+#26 transferring context: 7.23kB done
+#26 DONE 0.1s
+
+#27 [vader_service internal] load build context
+#27 transferring context: 5.29kB done
+#27 DONE 0.1s
+
+#28 [preprocessing_service internal] load build context
+#28 transferring context: 5.15kB done
+#28 DONE 0.1s
+
+#29 [frontend_service stage-1 1/3] FROM docker.io/library/nginx:alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de
+#29 resolve docker.io/library/nginx:alpine@sha256:5616878291a2eed594aee8db4dade5878cf7edcb475e59193904b198d9b830de 0.1s done
+#29 DONE 0.1s
+
+#30 [frontend_service build 1/6] FROM docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0
+#30 resolve docker.io/library/node:20-slim@sha256:2cf067cfed83d5ea958367df9f966191a942351a2df77d6f0193e162b5febfc0 0.0s done
+#30 DONE 0.1s
+
+#31 [ingestion_service internal] load build context
+#31 transferring context: 3.88kB done
+#31 DONE 0.1s
+
+#32 [persistence_service 5/6] COPY shared /app/shared
+#32 CACHED
+
+#33 [persistence_service 4/6] RUN pip install --no-cache-dir -r requirements.txt
+#33 CACHED
+
+#34 [persistence_service 3/6] COPY persistence_service/requirements.txt .
+#34 CACHED
+
+#35 [persistence_service 6/6] COPY persistence_service /app/persistence_service
+#35 CACHED
+
+#36 [aggregation_service internal] load build context
+#36 transferring context: 17.96kB done
+#36 DONE 0.1s
+
+#37 [preprocessing_service 5/6] COPY shared /app/shared
+#37 CACHED
+
+#38 [preprocessing_service 4/6] RUN pip install --no-cache-dir -r requirements.txt
+#38 CACHED
+
+#39 [preprocessing_service 3/6] COPY preprocessing_service/requirements.txt .
+#39 CACHED
+
+#40 [preprocessing_service 6/6] COPY preprocessing_service /app/preprocessing_service
+#40 CACHED
+
+#41 [api_service internal] load build context
+#41 transferring context: 28.42kB done
+#41 DONE 0.1s
+
+#42 [ingestion_service 4/6] RUN pip install --no-cache-dir -r requirements.txt &&     apt-get update && apt-get install -y curl &&     rm -rf /var/lib/apt/lists/*
+#42 CACHED
+
+#43 [ingestion_service 3/6] COPY ingestion_service/requirements.txt .
+#43 CACHED
+
+#44 [ingestion_service 5/6] COPY shared /app/shared
+#44 CACHED
+
+#45 [ingestion_service 6/6] COPY ingestion_service /app/ingestion_service
+#45 CACHED
+
+#46 [vader_service builder 4/4] RUN pip install --user --no-cache-dir -r requirements.txt
+#46 CACHED
+
+#47 [vader_service stage-1 4/5] COPY shared/ /app/shared/
+#47 CACHED
+
+#48 [vader_service builder 3/4] COPY vader_service/requirements.txt .
+#48 CACHED
+
+#49 [vader_service stage-1 3/5] COPY --from=builder /root/.local /root/.local
+#49 CACHED
+
+#50 [bert_service 3/7] COPY bert_service/requirements.txt .
+#50 CACHED
+
+#51 [bert_service 6/7] RUN python shared/download_models.py
+#51 CACHED
+
+#52 [bert_service 4/7] RUN pip install --no-cache-dir -r requirements.txt
+#52 CACHED
+
+#53 [bert_service 5/7] COPY shared/ /app/shared/
+#53 CACHED
+
+#54 [emojinet_service 4/6] RUN pip install --no-cache-dir -r requirements.txt
+#54 CACHED
+
+#55 [emojinet_service 3/6] COPY emojinet_service/requirements.txt .
+#55 CACHED
+
+#56 [emojinet_service 5/6] COPY shared /app/shared
+#56 CACHED
+
+#57 [emojinet_service 6/6] COPY emojinet_service /app
+#57 CACHED
+
+#58 [api_service 3/6] COPY api_service/requirements.txt .
+#58 CACHED
+
+#59 [api_service 4/6] RUN apt-get update && apt-get install -y gcc python3-dev curl libpq-dev &&     pip install --no-cache-dir -r requirements.txt &&     rm -rf /var/lib/apt/lists/*
+#59 CACHED
+
+#60 [api_service 5/6] COPY shared /app/shared
+#60 CACHED
+
+#61 [api_service 6/6] COPY api_service /app/api_service
+#61 CACHED
+
+#62 [goemotions_service 3/7] COPY goemotions_service/requirements.txt .
+#62 CACHED
+
+#63 [vader_service 2/7] WORKDIR /app
+#63 CACHED
+
+#64 [goemotions_service 6/7] RUN python shared/download_models.py
+#64 CACHED
+
+#65 [goemotions_service 4/7] RUN pip install --no-cache-dir -r requirements.txt
+#65 CACHED
+
+#66 [goemotions_service 5/7] COPY shared/ /app/shared/
+#66 CACHED
+
+#67 [emojinet_service] exporting to image
+#67 exporting layers done
+#67 ...
+
+#68 [llm_reasoning_service stage-1 4/5] COPY shared/ /app/shared/
+#68 CACHED
+
+#69 [llm_reasoning_service stage-1 3/5] COPY --from=builder /root/.local /root/.local
+#69 CACHED
+
+#70 [llm_reasoning_service builder 3/4] COPY llm_reasoning_service/requirements.txt .
+#70 CACHED
+
+#71 [llm_reasoning_service builder 4/4] RUN pip install --user --no-cache-dir -r requirements.txt
+#71 CACHED
+
+#72 [aggregation_service 5/6] COPY shared /app/shared
+#72 CACHED
+
+#73 [aggregation_service 3/6] COPY aggregation_service/requirements.txt .
+#73 CACHED
+
+#74 [aggregation_service 4/6] RUN pip install --no-cache-dir -r requirements.txt
+#74 CACHED
+
+#75 [llm_reasoning_service stage-1 5/5] COPY llm_reasoning_service/ /app/llm_reasoning_service/
+#75 CACHED
+
+#76 [aggregation_service 6/6] COPY aggregation_service /app/aggregation_service
+#76 CACHED
+
+#77 [bert_service 7/7] COPY bert_service/ /app/bert_service/
+#77 CACHED
+
+#78 [vader_service stage-1 5/5] COPY vader_service/ /app/vader_service/
+#78 CACHED
+
+#22 [frontend_service internal] load build context
+#22 transferring context: 616B done
+#22 DONE 0.0s
+
+#18 [central_responder_service internal] load build context
+#18 transferring context: 28.68kB done
+#18 DONE 0.0s
+
+#79 [goemotions_service 7/7] COPY goemotions_service/ /app/goemotions_service/
+#79 CACHED
+
+#80 [central_responder_service 3/7] COPY central_responder_service/requirements.txt .
+#80 CACHED
+
+#63 [central_responder_service 2/7] WORKDIR /app
+#63 CACHED
+
+#81 [central_responder_service 4/7] RUN pip install --no-cache-dir -r requirements.txt
+#81 CACHED
+
+#82 [central_responder_service 5/7] COPY shared/ /app/shared/
+#82 CACHED
+
+#83 [frontend_service build 6/6] RUN yarn build
+#83 CACHED
+
+#84 [frontend_service build 2/6] WORKDIR /app
+#84 CACHED
+
+#85 [frontend_service build 3/6] COPY package*.json ./
+#85 CACHED
+
+#86 [frontend_service stage-1 2/3] COPY --from=build /app/dist /usr/share/nginx/html
+#86 CACHED
+
+#87 [frontend_service build 4/6] RUN yarn install --network-timeout 100000
+#87 CACHED
+
+#88 [frontend_service build 5/6] COPY . .
+#88 CACHED
+
+#89 [frontend_service stage-1 3/3] RUN echo 'server {     listen 80;     location / {     root /usr/share/nginx/html;     index index.html index.htm;     try_files $uri $uri/ /index.html;     }     }' > /etc/nginx/conf.d/default.conf
+#89 CACHED
+
+#67 [emojinet_service] exporting to image
+#67 exporting manifest sha256:316f2149cbb145565c24790071016e62486ef57c8d973edb622e34674d56f779 0.0s done
+#67 exporting config sha256:a26d3b02b842e0ff5e4de137a6ee209f8f59bdf1935b7e766b6cc55527aaf2dc 0.0s done
+#67 exporting attestation manifest sha256:295dce6b37cdb0ef58e067a887144d9dbff2f20a7fbabbfa4a4f8236bef9fbf8
+#67 ...
+
+#90 [central_responder_service 6/7] COPY central_responder_service/ /app/central_responder_service/
+#90 DONE 0.3s
+
+#67 [emojinet_service] exporting to image
+#67 exporting attestation manifest sha256:295dce6b37cdb0ef58e067a887144d9dbff2f20a7fbabbfa4a4f8236bef9fbf8 0.3s done
+#67 exporting manifest list sha256:cf03104a8aba38ef2e3769cdd6f965221f496c8aed1d5fc53a05cd9358fc4717
+#67 exporting manifest list sha256:cf03104a8aba38ef2e3769cdd6f965221f496c8aed1d5fc53a05cd9358fc4717 0.2s done
+#67 naming to docker.io/library/finalproject-emojinet_service:latest
+#67 ...
+
+#91 [persistence_service] exporting to image
+#91 exporting layers done
+#91 exporting manifest sha256:ac31d142dd0b30666ead394522f5948e38665fb01dcaaaa09b5295e8151a2276 0.0s done
+#91 exporting config sha256:279c987fffb8cb7a76f6ae293215ebad74bda5393af010dffc9c3bfefde761c1 0.0s done
+#91 exporting attestation manifest sha256:ed01ed8e14de1c8d66f66637eb63ebc24b507b9468395005d359af449f9fdb9a 0.3s done
+#91 exporting manifest list sha256:79f171be1c6c9293ca6e4aeaa8e3c0cd6a805fe06e0f77d7dbd91298be80d9b2 0.2s done
+#91 naming to docker.io/library/finalproject-persistence_service:latest 0.0s done
+#91 unpacking to docker.io/library/finalproject-persistence_service:latest 0.0s done
+#91 DONE 0.8s
+
+#92 [ingestion_service] exporting to image
+#92 exporting layers done
+#92 exporting manifest sha256:a6f127babc497522391c5afde8a86a265bd6ac6a11516fd2b6e6a1f3d8412489 done
+#92 exporting config sha256:1a7a15f4001c3585ae6f8c6d8d35ffffbfb6042efb4883ba9782ff25a807ca55 0.0s done
+#92 exporting attestation manifest sha256:3154c001c64007026f4fcc6d31278fb17350230f027c5f8a1690fc395972246a 0.3s done
+#92 exporting manifest list sha256:2ba7fa15949df804f3427d7da643e0c11a6db5796a6c7900a1040664ec6f2d6d 0.2s done
+#92 naming to docker.io/library/finalproject-ingestion_service:latest 0.1s done
+#92 unpacking to docker.io/library/finalproject-ingestion_service:latest 0.1s done
+#92 DONE 0.8s
+
+#93 [vader_service] exporting to image
+#93 exporting layers done
+#93 exporting manifest sha256:c84bf7873ba285d07ecd7190bac12bbf0c1ed87957f80b3a9c7ea890bbd9a286 0.0s done
+#93 exporting config sha256:8a5f2b2fa1630766267ea5e0abeb345810ddd38560515012f07f324cb624b5cc 0.0s done
+#93 exporting attestation manifest sha256:7f31ff535ff678e89dbbc457b5995fd4fb700a988d2ee54643e3a077cf6a893d 0.3s done
+#93 exporting manifest list sha256:4345899b77b52c381c3d024d78282d2a3d053c922843f67bd4ad0a0212f04d58 0.2s done
+#93 naming to docker.io/library/finalproject-vader_service:latest done
+#93 unpacking to docker.io/library/finalproject-vader_service:latest 0.1s done
+#93 DONE 0.8s
+
+#67 [emojinet_service] exporting to image
+#67 naming to docker.io/library/finalproject-emojinet_service:latest 0.1s done
+#67 unpacking to docker.io/library/finalproject-emojinet_service:latest 0.0s done
+#67 DONE 0.8s
+
+#94 [preprocessing_service] exporting to image
+#94 exporting layers done
+#94 exporting manifest sha256:b04263161aec24ba5fe245ec0144f40060c935e9588ca2c3fbd2ed98b0085726 0.0s done
+#94 exporting config sha256:0a4b66e3f574cd686b4cd19855ca677c68a0838644c4a0d8ab74de3749b0e3bb 0.0s done
+#94 exporting attestation manifest sha256:f9412231f9c10f879f3c8352939f9d7f57a9967d60dcd3325f4c23315a84c74c 0.3s done
+#94 exporting manifest list sha256:b3a02db2fe375e4967a2e795cdbdb1659e5ca886f7d161723654f350024f6fb5 0.2s done
+#94 naming to docker.io/library/finalproject-preprocessing_service:latest 0.1s done
+#94 unpacking to docker.io/library/finalproject-preprocessing_service:latest 0.0s done
+#94 DONE 0.8s
+
+#95 [bert_service] exporting to image
+#95 exporting layers done
+#95 exporting manifest sha256:9f719e98ad1ee17dbdaca4d45967ab46931264d8a4cac52cde549145309f4b63 0.0s done
+#95 exporting config sha256:725523fde2565557ff4b9f4efdbb1ff68abf41075f5a4693ba17d7aca5645adc 0.1s done
+#95 exporting attestation manifest sha256:c0d8a1f9bee2cdc705b11ee7e091cfe10d1631edcaaf9ece754f64527620f437 0.3s done
+#95 exporting manifest list sha256:2fe2dd7e56651f95b0cf9f48ee763cc71ae465b3304857ab6889919be2839283 0.1s done
+#95 naming to docker.io/library/finalproject-bert_service:latest done
+#95 unpacking to docker.io/library/finalproject-bert_service:latest 0.0s done
+#95 DONE 0.8s
+
+#96 [goemotions_service] exporting to image
+#96 exporting layers done
+#96 exporting manifest sha256:868245611f9c4d3d6e84aa2b400fef0f6377d1d76998caf5a657051f61130784 0.0s done
+#96 exporting config sha256:461c12dcb29d5ddbde3e14f6c0a2404cc0f787c859c96a625c98ec2254ce210e 0.0s done
+#96 exporting attestation manifest sha256:ce3b30342e10eca4c7cd9ab076ee71c18be15170a390f4dcc2960cd8b5251b89 0.3s done
+#96 exporting manifest list sha256:87fcc93fa307b825d0cc00f677eebeb1aa8f85cf6054a6531e13e2a561923186 0.2s done
+#96 naming to docker.io/library/finalproject-goemotions_service:latest 0.1s done
+#96 unpacking to docker.io/library/finalproject-goemotions_service:latest 0.0s done
+#96 DONE 0.8s
+
+#97 [api_service] exporting to image
+#97 exporting layers done
+#97 exporting manifest sha256:08cfd6ea2bff0f2056077c70fc0b2f8931169ca586c005d643b51a56029aea61 0.0s done
+#97 exporting config sha256:7b29c152731994543eb69a9eb685b6bb1144d95fe7443c58e246e92e9f1da051 0.0s done
+#97 exporting attestation manifest sha256:0ab447324d593ed022581fab5847080dea23bd99c33af07efa6d674154d98f32 0.3s done
+#97 exporting manifest list sha256:7dbfbf58a8c39c614c8e8e9a51459223fafd77f0cbf3e0586c0c5f12d84f09b3 0.2s done
+#97 naming to docker.io/library/finalproject-api_service:latest 0.1s done
+#97 unpacking to docker.io/library/finalproject-api_service:latest 0.0s done
+#97 DONE 0.8s
+
+#98 [llm_reasoning_service] exporting to image
+#98 exporting layers done
+#98 exporting manifest sha256:5f494e016754a0a1ae97c3737ac908c780c630cb839dffcfee143f3b2f1e1e1b 0.0s done
+#98 exporting config sha256:56386551bde6b0f7eaff042b331db314a04eab903d1f2fb1f432af4f56446c6d 0.1s done
+#98 exporting attestation manifest sha256:4cbf387024e39982a9e6bf9b3fe134a65382bf0e851ea89d533eb4c92cdfa75f 0.3s done
+#98 exporting manifest list sha256:8e7047079f0dec0405654736848854bbf7ebbb92ff5e3a230cf162eea59a4793 0.1s done
+#98 naming to docker.io/library/finalproject-llm_reasoning_service:latest 0.0s done
+#98 unpacking to docker.io/library/finalproject-llm_reasoning_service:latest 0.0s done
+#98 DONE 0.8s
+
+#99 [aggregation_service] exporting to image
+#99 exporting layers done
+#99 exporting manifest sha256:1c03033df9d36103540e4a1daa54ce37ae9b03aec8db5e4b92e235f5aaa4e62a 0.0s done
+#99 exporting config sha256:aeadcef18b32d0d4b5def44d2bc80b1e61de72c46e3da469c82898486ef0fa97 0.1s done
+#99 exporting attestation manifest sha256:0b4be4dfe2448bf35ef8d0150776eeea47f16c2aa3525a009ba674281046d53b 0.3s done
+#99 exporting manifest list sha256:2d408fa93eb532163b64b29c42b6567d6c9a9fb74bf65c322a41a0d7658a1db1 0.1s done
+#99 naming to docker.io/library/finalproject-aggregation_service:latest 0.0s done
+#99 unpacking to docker.io/library/finalproject-aggregation_service:latest 0.0s done
+#99 DONE 0.8s
+
+#100 [frontend_service] exporting to image
+#100 exporting layers done
+#100 exporting manifest sha256:cce791b69c9eb725801054445d35754538f6e2e76a68498733cc9e44fafd91ce 0.1s done
+#100 exporting config sha256:98fc39223f27ecaac7e65bb6887b07bde2a0422cf36f949007199ceff6f142d9 0.1s done
+#100 exporting attestation manifest sha256:5722724bf8a28333e9981baeb5e770de5fc30a9add66a3b6b3abb56e63968a59 0.3s done
+#100 exporting manifest list sha256:50e3ad202aed03bda59c60904605a693875ceda65b559e726f180a8c792d8292 0.1s done
+#100 naming to docker.io/library/finalproject-frontend_service:latest 0.0s done
+#100 unpacking to docker.io/library/finalproject-frontend_service:latest 0.1s done
+#100 DONE 0.9s
+
+#101 [central_responder_service 7/7] RUN mkdir -p /app/models
+#101 DONE 0.6s
+
+#102 [central_responder_service] exporting to image
+#102 exporting layers 0.3s done
+#102 exporting manifest sha256:f2e6608fb7c5837371e851bbba9486c64835d4e8cbf680a71530ff5a6d2ffafe 0.0s done
+#102 exporting config sha256:fe2868be36f9d58e7167af5a510e8ec4d97a4be0cbda0f41a5c8b52a111bb094 0.0s done
+#102 exporting attestation manifest sha256:c198dc2cfc6eb6d9204a34448de17843d467bd5ab311ec2b4db4d3e00b8bc46e 0.0s done
+#102 exporting manifest list sha256:38aca16a8b9249c9077b5e5a1e424dec3c368d0565bbdbd159d92142df998337
+#102 exporting manifest list sha256:38aca16a8b9249c9077b5e5a1e424dec3c368d0565bbdbd159d92142df998337 0.0s done
+#102 naming to docker.io/library/finalproject-central_responder_service:latest done
+#102 unpacking to docker.io/library/finalproject-central_responder_service:latest 0.1s done
+#102 DONE 0.5s
+
+#103 [api_service] resolving provenance for metadata file
+#103 ...
+
+#104 [persistence_service] resolving provenance for metadata file
+#104 DONE 0.6s
+
+#105 [ingestion_service] resolving provenance for metadata file
+#105 DONE 0.6s
+
+#106 [bert_service] resolving provenance for metadata file
+#106 DONE 0.4s
+
+#107 [llm_reasoning_service] resolving provenance for metadata file
+#107 DONE 0.4s
+
+#108 [aggregation_service] resolving provenance for metadata file
+#108 DONE 0.3s
+
+#109 [preprocessing_service] resolving provenance for metadata file
+#109 DONE 0.1s
+
+#110 [vader_service] resolving provenance for metadata file
+#110 DONE 0.2s
+
+#111 [central_responder_service] resolving provenance for metadata file
+#111 DONE 0.0s
+
+#112 [frontend_service] resolving provenance for metadata file
+#112 DONE 0.3s
+
+#113 [emojinet_service] resolving provenance for metadata file
+#113 DONE 0.2s
+
+#103 [api_service] resolving provenance for metadata file
+#103 DONE 0.5s
+
+#114 [goemotions_service] resolving provenance for metadata file
+#114 DONE 0.1s
+
+[Logs] Log file: logs\run_2026-05-02_14-55-19.log
+
+[Wait] Waiting for all containers to start...
+   [OK] All 14 containers are running
+
+[Health] Running service health checks...
+   [OK] Redis - PONG
+   [OK] PostgreSQL - accepting connections
+   [OK] Ingestion Service (API :8000) - responding
+   [OK] API Service (WebSocket :8001) - responding
+   [OK] Frontend (UI :5173) - responding
+   [OK] Meta-Learner - loaded and active
+
+[Test] Running end-to-end pipeline test...
+   [OK] Pipeline test - message accepted (HTTP 200)
+
+==============================================================
+   [Warn]   7 passed, 1 failed
+==============================================================
+
+   [Web]  Frontend:  http://localhost:5173
+   [API]  API:       http://localhost:8001
+   [In]   Ingestion: http://localhost:8000
+   [Log]  Logs:      logs\run_2026-05-02_14-55-19.log
+
+==============================================================
+

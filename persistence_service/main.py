@@ -49,6 +49,16 @@ def init_db():
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'user';"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login FLOAT;"))
+            
+            # New user profile columns
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR;"))
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR;"))
+            
+            # Drop NOT NULL constraint on legacy username column
+            conn.execute(text("ALTER TABLE users ALTER COLUMN username DROP NOT NULL;"))
+            
             logger.info("Self-healing schema check complete (including auth columns).")
 
         print("[persistence_service] init_db() SUCCESS", flush=True)

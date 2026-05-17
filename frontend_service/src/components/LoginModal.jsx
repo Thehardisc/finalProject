@@ -6,23 +6,30 @@ const API_BASE = 'http://localhost:8001';
 /**
  * LoginModal
  * Props:
- *   onSuccess(userData) — called with { token, user_id, username, role } on success
+ *   onSuccess(userData) — called with { user_id, display_name, email, role } on success
  */
 export default function LoginModal({ onSuccess }) {
     const [tab, setTab] = useState('login'); // 'login' | 'register'
-    const [username, setUsername] = useState('');
+    const [email, setEmail] = useState('');
+    const [firstName, setFirstName] = useState('');
+    const [lastName, setLastName] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const resetForm = () => { setUsername(''); setPassword(''); setConfirmPassword(''); setError(''); };
+    const resetForm = () => { 
+        setEmail(''); setFirstName(''); setLastName('');
+        setPassword(''); setConfirmPassword(''); setError(''); 
+    };
 
     const validate = () => {
-        if (!username.trim()) { setError('Username is required.'); return false; }
-        if (username.length < 3) { setError('Username must be at least 3 characters.'); return false; }
-        if (!/^[a-zA-Z0-9_.-]+$/.test(username)) {
-            setError('Username may only contain letters, numbers, _, -, and .'); return false;
+        if (!email.trim() || !/^[^@]+@[^@]+\.[^@]+$/.test(email)) { 
+            setError('A valid email address is required.'); return false; 
+        }
+        if (tab === 'register') {
+            if (!firstName.trim()) { setError('First name is required.'); return false; }
+            if (!lastName.trim()) { setError('Last name is required.'); return false; }
         }
         if (!password) { setError('Password is required.'); return false; }
         if (password.length < 8) { setError('Password must be at least 8 characters.'); return false; }
@@ -39,7 +46,11 @@ export default function LoginModal({ onSuccess }) {
         setLoading(true);
         try {
             const endpoint = tab === 'register' ? '/auth/register' : '/auth/login';
-            const res = await axios.post(`${API_BASE}${endpoint}`, { username: username.trim(), password });
+            const payload = tab === 'register' 
+                ? { email: email.trim(), first_name: firstName.trim(), last_name: lastName.trim(), password }
+                : { email: email.trim(), password };
+                
+            const res = await axios.post(`${API_BASE}${endpoint}`, payload);
             onSuccess(res.data);
         } catch (err) {
             const detail = err.response?.data?.detail;
@@ -73,6 +84,7 @@ export default function LoginModal({ onSuccess }) {
                 <div style={styles.tabRow}>
                     <button
                         id="auth-tab-login"
+                        aria-selected={tab === 'login'}
                         style={{ ...styles.tabBtn, ...(tab === 'login' ? styles.tabActive : {}) }}
                         onClick={() => { setTab('login'); resetForm(); }}
                     >
@@ -80,6 +92,7 @@ export default function LoginModal({ onSuccess }) {
                     </button>
                     <button
                         id="auth-tab-register"
+                        aria-selected={tab === 'register'}
                         style={{ ...styles.tabBtn, ...(tab === 'register' ? styles.tabActive : {}) }}
                         onClick={() => { setTab('register'); resetForm(); }}
                     >
@@ -88,22 +101,59 @@ export default function LoginModal({ onSuccess }) {
                 </div>
 
                 <form onSubmit={handleSubmit} style={styles.form} noValidate>
-                    <label style={styles.label}>Username</label>
+                    <label htmlFor="auth-email" style={styles.label}>Email Address</label>
                     <input
-                        id="auth-username"
-                        type="text"
-                        autoComplete="username"
+                        id="auth-email"
+                        name="email"
+                        type="email"
+                        autoComplete="email"
                         autoFocus
-                        value={username}
-                        onChange={e => setUsername(e.target.value)}
-                        placeholder="your_username"
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                        placeholder="you@example.com"
                         style={styles.input}
                         disabled={loading}
+                        aria-required="true"
                     />
 
-                    <label style={styles.label}>Password</label>
+                    {tab === 'register' && (
+                        <>
+                            <label htmlFor="auth-first-name" style={styles.label}>First Name</label>
+                            <input
+                                id="auth-first-name"
+                                name="given-name"
+                                type="text"
+                                autoComplete="given-name"
+                                value={firstName}
+                                onChange={e => setFirstName(e.target.value)}
+                                placeholder="Jane"
+                                style={styles.input}
+                                disabled={loading}
+                                aria-required="true"
+                            />
+
+                            <label htmlFor="auth-last-name" style={styles.label}>Last Name</label>
+                            <input
+                                id="auth-last-name"
+                                name="family-name"
+                                type="text"
+                                autoComplete="family-name"
+                                value={lastName}
+                                onChange={e => setLastName(e.target.value)}
+                                placeholder="Doe"
+                                style={styles.input}
+                                disabled={loading}
+                                aria-required="true"
+                            />
+
+
+                        </>
+                    )}
+
+                    <label htmlFor="auth-password" style={styles.label}>Password</label>
                     <input
                         id="auth-password"
+                        name="password"
                         type="password"
                         autoComplete={tab === 'register' ? 'new-password' : 'current-password'}
                         value={password}
@@ -111,13 +161,15 @@ export default function LoginModal({ onSuccess }) {
                         placeholder="Min. 8 characters"
                         style={styles.input}
                         disabled={loading}
+                        aria-required="true"
                     />
 
                     {tab === 'register' && (
                         <>
-                            <label style={styles.label}>Confirm Password</label>
+                            <label htmlFor="auth-confirm-password" style={styles.label}>Confirm Password</label>
                             <input
                                 id="auth-confirm-password"
+                                name="confirm-password"
                                 type="password"
                                 autoComplete="new-password"
                                 value={confirmPassword}
@@ -125,17 +177,18 @@ export default function LoginModal({ onSuccess }) {
                                 placeholder="Repeat password"
                                 style={styles.input}
                                 disabled={loading}
+                                aria-required="true"
                             />
                         </>
                     )}
 
                     {error && (
-                        <div style={styles.errorBox}>
+                        <div style={styles.errorBox} role="alert">
                             <span>⚠ </span>{error}
                         </div>
                     )}
 
-                    <button id="auth-submit" type="submit" style={styles.submitBtn} disabled={loading}>
+                    <button id="auth-submit" type="submit" style={styles.submitBtn} disabled={loading} aria-busy={loading}>
                         {loading
                             ? <span style={styles.spinner} />
                             : (tab === 'register' ? 'Create Account' : 'Sign In')}
@@ -144,8 +197,8 @@ export default function LoginModal({ onSuccess }) {
 
                 <p style={styles.switchHint}>
                     {tab === 'login'
-                        ? <>No account? <span style={styles.switchLink} onClick={() => { setTab('register'); resetForm(); }}>Register here</span></>
-                        : <>Have an account? <span style={styles.switchLink} onClick={() => { setTab('login'); resetForm(); }}>Sign in</span></>
+                        ? <>No account? <span role="button" tabIndex="0" style={styles.switchLink} onClick={() => { setTab('register'); resetForm(); }}>Register here</span></>
+                        : <>Have an account? <span role="button" tabIndex="0" style={styles.switchLink} onClick={() => { setTab('login'); resetForm(); }}>Sign in</span></>
                     }
                 </p>
             </div>
