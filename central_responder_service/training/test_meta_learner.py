@@ -15,18 +15,12 @@ import tempfile
 import numpy as np
 import pytest
 
-# Add central_responder_service to path so we can import meta_learner directly
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Add project root to path so shared/ and service packages are importable
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
 
-from meta_learner import (
-    load_meta_learner,
-    build_feature_vector,
-    predict_with_meta_learner,
-    EMOTION_LABELS,
-    _VADER_KEYS,
-    _BERT_LABELS,
-    FEATURE_DIM,
-)
+from central_responder_service.ml.loader    import load_meta_learner
+from central_responder_service.ml.predictor import build_feature_vector, predict_with_meta_learner
+from shared.constants import EMOTION_LABELS, VADER_KEYS as _VADER_KEYS, BERT_LABELS as _BERT_LABELS, FEATURE_DIM
 
 
 # ── load_meta_learner tests ───────────────────────────────────────────────────
@@ -145,16 +139,17 @@ class TestPredictWithMetaLearner:
 
     def test_returns_valid_label(self, tiny_model):
         fv = np.random.rand(1, FEATURE_DIM).astype(np.float32)
-        label, confidence, prob_dict = predict_with_meta_learner(tiny_model, fv)
+        label, confidence, prob_dict, sarcasm, conflict = predict_with_meta_learner(tiny_model, fv)
         assert label in ['joy', 'sadness']
         assert 0.0 <= confidence <= 1.0
         assert isinstance(prob_dict, dict)
         assert len(prob_dict) == 2
+        assert 0.0 <= sarcasm <= 1.0
 
     def test_returns_neutral_on_bad_input(self, tiny_model):
         """If something goes wrong (bad shape etc.), should return 'neutral', 0.0, {}."""
         bad_fv = np.array([[1, 2, 3]])  # wrong shape
-        label, confidence, prob_dict = predict_with_meta_learner(tiny_model, bad_fv)
+        label, confidence, prob_dict, sarcasm, conflict = predict_with_meta_learner(tiny_model, bad_fv)
         assert label == "neutral"
         assert confidence == 0.0
         assert prob_dict == {}
