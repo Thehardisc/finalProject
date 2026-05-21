@@ -1,5 +1,5 @@
 {
-  "trained_at": "2026-05-21T15:20:50.985115Z",
+  "trained_at": "2026-05-21T15:27:41.390900Z",
   "training_samples": 1699,
   "filtered_samples": 801,
   "validation_accuracy": 0.584,
