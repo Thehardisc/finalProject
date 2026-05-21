@@ -1,1155 +1,541 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler } from 'chart.js';
-import { Doughnut, Line } from 'react-chartjs-2';
-import axios from 'axios';
+import { authAPI, systemAPI, WS_BASE } from './api/client';
 import LoginModal from './components/LoginModal';
 import AdminDashboard from './components/AdminDashboard';
+import GroupModal from './components/GroupModal';
+import { EMOTION_COLORS } from './constants/emotions';
+import { useSystemReadiness } from './hooks/useSystemReadiness';
+import { useConversations }   from './hooks/useConversations';
+import { useMessages }        from './hooks/useMessages';
+import { useWebSocket }       from './hooks/useWebSocket';
+import LiveView               from './views/LiveView';
+import HistoryView            from './views/HistoryView';
+import AnalyticsView          from './views/AnalyticsView';
 
-// Register Chart.js components
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler);
-
-const API_BASE = 'http://localhost:8001';
-const WS_BASE = 'ws://localhost:8001';
-
-axios.defaults.withCredentials = true;
-// constants
-const EMOTION_COLORS = {
-    'joy': '#00ff88', 'happy': '#00ff88', 'love': '#ff66b2', 'admiration': '#00ffcc',
-    'anger': '#ff0055', 'annoyance': '#ff6600', 'disgust': '#ff00aa',
-    'sadness': '#0066ff', 'remorse': '#5500ff',
-    'fear': '#7000ff', 'nervousness': '#9900ff',
-    'surprise': '#ff9900', 'curiosity': '#ffcc00',
-    'neutral': '#00f2ff'
-};
-
-const EMOTIONAL_WORDS = {
-    'love': 'joy', 'happy': 'joy', 'great': 'joy', 'joy': 'joy', 'fun': 'joy',
-    'hate': 'anger', 'angry': 'anger', 'mad': 'anger', 'stupid': 'anger', 'hell': 'anger',
-    'kill': 'anger',
-    'sad': 'sadness', 'cry': 'sadness', 'grief': 'sadness', 'sorry': 'sadness', 'regret': 'sadness',
-    'fear': 'fear', 'scared': 'fear', 'afraid': 'fear', 'worry': 'fear',
-    'wow': 'surprise', 'shock': 'surprise', 'amazing': 'surprise'
-};
-
-// sub components
-
-// Word Highlighter Component
-const EmotionalTextOverlay = ({ text }) => {
-    if (!text) return null;
-    const words = text.split(/\s+/);
-    return (
-        <div className="text-overlay" style={{ fontSize: '1.2rem', lineHeight: '1.6', marginBottom: '20px' }}>
-            {words.map((word, i) => {
-                const clean = word.toLowerCase().replace(/[^a-z]/g, '');
-                const emo = EMOTIONAL_WORDS[clean];
-                if (emo) {
-                    const style = {
-                        color: EMOTION_COLORS[emo] || 'white',
-                        textShadow: `0 0 10px ${EMOTION_COLORS[emo]}`,
-                        fontWeight: 'bold',
-                        marginRight: '5px',
-                        cursor: 'help'
-                    };
-                    return <span key={i} style={style} title={`${emo} impact detected`}>{word} </span>;
-                }
-                return <span key={i} style={{ marginRight: '5px', color: '#e2e8f0' }}>{word} </span>;
-            })}
-        </div>
-    );
-};
-
-// Plutchik wheel
-const PlutchikWheel = ({ dominantEmotion }) => {
-    const defaultColor = 'rgba(255,255,255,0.05)';
-    const activeColor = 'var(--accent-primary)';
-
-    // map emotion to core
-    const mapping = {
-        "admiration": "trust", "amusement": "joy", "approval": "trust", "caring": "trust",
-        "desire": "anticipation", "excitement": "joy", "gratitude": "joy", "joy": "joy",
-        "love": "joy", "optimism": "anticipation", "pride": "joy", "realization": "surprise",
-        "relief": "joy", "surprise": "surprise", "curiosity": "surprise", "confusion": "surprise",
-        "fear": "fear", "nervousness": "fear", "remorse": "sadness", "sadness": "sadness",
-        "disappointment": "sadness", "grief": "sadness", "anger": "anger", "annoyance": "anger",
-        "disapproval": "disgust", "disgust": "disgust", "embarrassment": "fear",
-        "neutral": "neutral"
-    };
-
-    const core = mapping[dominantEmotion?.toLowerCase()] || "neutral";
-
-    const petals = [
-        { name: 'joy', rotate: 0 },
-        { name: 'trust', rotate: 45 },
-        { name: 'fear', rotate: 90 },
-        { name: 'surprise', rotate: 135 },
-        { name: 'sadness', rotate: 180 },
-        { name: 'disgust', rotate: 225 },
-        { name: 'anger', rotate: 270 },
-        { name: 'anticipation', rotate: 315 },
-    ];
-
-    return (
-        <div className="plutchik-container">
-            <svg id="plutchik-svg" viewBox="0 0 200 200">
-                <g transform="translate(100,100)">
-                    {petals.map((petal, i) => (
-                        <path
-                            key={i}
-                            d="M0,0 Q20,-40 0,-80 Q-20,-40 0,0"
-                            fill={petal.name === core ? activeColor : defaultColor}
-                            stroke="var(--glass-border)"
-                            transform={`rotate(${petal.rotate})`}
-                        />
-                    ))}
-                </g>
-                <circle cx="100" cy="100" r="10" fill="white" filter="blur(2px)" />
-            </svg>
-        </div>
-    );
-};
-
-const BuildupChart = ({ steps }) => {
-    const labels = steps.map(s => s.text.length > 20 ? "..." + s.text.slice(-18) : s.text);
-    const dataPoints = steps.map(s => {
-        // Find top score
-        const top = s.scores && s.scores.length > 0 ? Math.max(...s.scores.map(x => x.score)) : 0;
-        return top;
-    });
-
-    // map point colors
-    const pointColors = steps.map(s => {
-        const emo = s.dominant?.toLowerCase();
-        return EMOTION_COLORS[emo] || '#00f2ff';
-    });
-
-    const data = {
-        labels,
-        datasets: [{
-            label: 'Emotional Intensity',
-            data: dataPoints,
-            borderColor: '#00f2ff',
-            backgroundColor: 'rgba(0, 242, 255, 0.1)',
-            fill: true,
-            tension: 0.4,
-            pointBackgroundColor: pointColors,
-            pointRadius: 6
-        }]
-    };
-
-    const options = {
-        responsive: true,
-        maintainAspectRatio: false,
-        scales: {
-            y: { min: 0, max: 1, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#94a3b8' } },
-            x: { grid: { display: false }, ticks: { display: false } } // Hide X ticks for cleaner look in small view
-        },
-        plugins: {
-            legend: { display: false },
-        }
-    };
-
-    return <Line data={data} options={options} />;
-};
 
 
 function App() {
-    const [view, setView] = useState('live');
-    const [status, setStatus] = useState('Offline');
-    const [messages, setMessages] = useState([]);
-    const [inputValue, setInputValue] = useState('');
-    const [currentUser, setCurrentUser] = useState(null);
-    const [sessionChecked, setSessionChecked] = useState(false);
-    const [conversations, setConversations] = useState([]);
-    const [globalUsers, setGlobalUsers] = useState([]);
-    const [activeConversationId, setActiveConversationId] = useState(null);
-    const [activeTab, setActiveTab] = useState('chats');
-    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-    const [currentAnalysis, setCurrentAnalysis] = useState(null);
-    const [vibeAnalysis, setVibeAnalysis] = useState(null);
-    const [analyticsData, setAnalyticsData] = useState(null);
-    const [systemReady, setSystemReady] = useState(false);
-    const [componentStatus, setComponentStatus] = useState({
-        database: false,
-        redis: false,
-        meta_learner: false,
-    });
-    const [gateVisible, setGateVisible] = useState(false);
-    const [trainingInProgress, setTrainingInProgress] = useState(false);
+    const [view,                setView]                = useState('live');
+    const [status,              setStatus]              = useState('Offline');
+    const [currentUser,         setCurrentUser]         = useState(null);
+    const [sessionChecked,      setSessionChecked]      = useState(false);
+    const [activeConversationId,setActiveConversationId]= useState(null);
+    const [activeTab,           setActiveTab]           = useState('chats');
+    const [showEmojiPicker,     setShowEmojiPicker]     = useState(false);
+    const [analyticsData,       setAnalyticsData]       = useState(null);
+    const [showGroupModal,      setShowGroupModal]      = useState(false);
+    const [memberPanelOpen,     setMemberPanelOpen]     = useState(false);
+    const [memberActionError,   setMemberActionError]   = useState('');
 
-    // refs
-    const socketRef = useRef(null);
     const chatContainerRef = useRef(null);
-    const messagesEndRef = useRef(null);
 
-    // helpers
-    const getSenderName = (senderId) => {
-        if (!senderId) return 'System';
-        if (currentUser && senderId === currentUser.user_id) return currentUser.display_name;
-        const conv = conversations.find(c => c.other_user_id === senderId);
-        if (conv) return conv.other_display_name;
-        const gu = globalUsers.find(u => u.user_id === senderId);
-        if (gu) return gu.display_name;
-        return senderId.substring(0, 8);
+    // ── Custom hooks ────────────────────────────────────────────────────────
+    const { systemReady, gateVisible, trainingInProgress, componentStatus,
+            setTrainingInProgress } = useSystemReadiness(currentUser);
+
+    const {
+        conversations, globalUsers,
+        handleCreateChat, handleCreateGroup,
+        handleAddMember, handleRemoveMember
+    } = useConversations(currentUser);
+
+    const {
+        messages, setMessages, currentAnalysis, setCurrentAnalysis,
+        vibeAnalysis, setVibeAnalysis, inputValue, setInputValue,
+        socketRef, messagesEndRef, fetchVibe, getSenderName,
+        sendMessage, handleFeedback, handleHistoryClick, handleDeleteMessage
+    } = useMessages(currentUser, activeConversationId, systemReady, conversations, globalUsers);
+
+    // ── Active conversation metadata ────────────────────────────────────────
+    const activeConv = conversations.find(c => c.conversation_id === activeConversationId) || null;
+    const isGroup    = activeConv?.type === 'group';
+    const isCreator  = isGroup && activeConv?.creator_user_id === currentUser?.user_id;
+
+    // ── Theme helper ─────────────────────────────────────────────────────────
+    const applyTheme = (emotion) => {
+        const color = EMOTION_COLORS[emotion?.toLowerCase()] || '#00f2ff';
+        document.documentElement.style.setProperty('--accent-primary', color);
     };
 
-    const handleAuthSuccess = (data) => {
-        // Called after successful register or login
-        setCurrentUser({ user_id: data.user_id, display_name: data.display_name, email: data.email, role: data.role });
-    };
+    useWebSocket({
+        currentUser, activeConversationId, systemReady,
+        setStatus, setMessages, setCurrentAnalysis, setVibeAnalysis,
+        applyTheme, fetchVibe, socketRef
+    });
 
-    const handleLogout = async () => {
-        try { await axios.post(`${API_BASE}/auth/logout`); } catch(e) {}
-        setCurrentUser(null);
-        setMessages([]);
-        setConversations([]);
-        setActiveConversationId(null);
-        setCurrentAnalysis(null);
-        if (socketRef.current) { socketRef.current.close(); socketRef.current = null; }
-    };
-
-    // Restore session on load
+    // ── Session restore ──────────────────────────────────────────────────────
     useEffect(() => {
         const verifySession = async () => {
             if (!currentUser) {
                 try {
-                    const res = await axios.get(`${API_BASE}/auth/me`);
+                    const res = await authAPI.me();
                     setCurrentUser({
-                        user_id: res.data.user_id,
+                        user_id:      res.data.user_id,
                         display_name: res.data.display_name,
-                        email: res.data.email,
-                        role: res.data.role
+                        email:        res.data.email,
+                        role:         res.data.role
                     });
-                } catch (e) {
-                    // No active session
-                } finally {
-                    setSessionChecked(true);
-                }
+                } catch (e) { /* no active session */ }
+                finally { setSessionChecked(true); }
             }
         };
         verifySession();
     }, [currentUser]);
 
-    const applyTheme = (emotion) => {
-        const e = emotion?.toLowerCase();
-        const color = EMOTION_COLORS[e] || '#00f2ff';
-        document.documentElement.style.setProperty('--accent-primary', color);
-    };
-
-    // parse message
-    const parseAnalysis = (msg) => {
-        if (!msg.emotions) return null;
-        try {
-            const ems = typeof msg.emotions === 'string' ? JSON.parse(msg.emotions) : msg.emotions;
-
-            // transform data
-            const bert_list = [];
-            for (const [k, v] of Object.entries(ems)) {
-                if (!['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion', 'sentiment_positive', 'sentiment_negative'].includes(k)) {
-                    bert_list.push({ label: k, score: v });
-                }
-            }
-
-            return {
-                type: 'analysis',
-                data: {
-                    id: msg.id,
-                    raw_text: msg.content || msg.text,
-                    final_dominant_emotion: ems.dominant_emotion || "Neutral",
-                    final_valence: ems.vader_compound || 0,
-                    bert_emotions: bert_list,
-                    llm_insights: "Detailed analysis loaded.",
-                    llm_sarcasm_score: 0,
-                    hierarchical_scores: [],
-                    emojis_found: [],
-                    slang_detected: {}
-                }
-            };
-        } catch (e) {
-            console.error("Parse Error", e);
-            return null;
-        }
-    };
-
-    const fetchVibe = async () => {
-        if (!activeConversationId) return;
-        try {
-            const stateRes = await axios.get(`${API_BASE}/conversation/${activeConversationId}/state`);
-            if (stateRes.data) {
-                setVibeAnalysis({
-                    valence: parseFloat(stateRes.data.average_valence || 0),
-                    sync_score: 0.8,
-                    resonance: 0.7,
-                    volatility: 0.2,
-                    top_emotions: [stateRes.data.dominant_emotion || "Neutral"]
-                });
-            }
-        } catch (e) { console.warn("Could not fetch latest vibe state"); }
-    };
-
-    const fetchAnalytics = async () => {
-        try {
-            const res = await axios.get(`${API_BASE}/analytics/calibration`);
-            setAnalyticsData(res.data);
-        } catch (e) { console.error("Failed to fetch analytics", e); }
-    };
-
-    const checkSystemStatus = async () => {
-        try {
-            const res = await axios.get(`${API_BASE}/health/status`, {
-                validateStatus: (s) => s === 200 || s === 503, // Accept 503 as valid data
-            });
-            const data = res.data;
-            if (data.components) {
-                setComponentStatus(data.components);
-            }
-            if (data.ready) {
-                // fade out and hide gate
-                setGateVisible(false);
-                setTimeout(() => setSystemReady(true), 800);
-                // Check if trainer is still on its first cycle (model is old/pre-existing)
-                setTrainingInProgress(data.training_in_progress === true);
-                return true;
-            } else {
-                // Not ready yet — check if training is at least underway
-                setTrainingInProgress(true);
-            }
-        } catch (e) {
-            console.warn("System status check failed, retrying...");
-        }
-        return false;
-    };
-
-    // --- System Readiness Gate ---
-    // This effect fires as soon as a user logs in.
-    // It polls /health/status until all systems are ready, then hides the gate.
-    useEffect(() => {
-        if (!currentUser) return; // Only run when logged in
-
-        // Show the gate while we check
-        setGateVisible(true);
-        setSystemReady(false);
-
-        let pollInterval;
-
-        const checkAndSchedule = async () => {
-            const isReady = await checkSystemStatus();
-            if (isReady) {
-                clearInterval(pollInterval);
-            } else {
-                // pollInterval already running, just keep going
-            }
-        };
-
-        checkAndSchedule(); // immediate first check
-        pollInterval = setInterval(checkAndSchedule, 3000);
-
-        return () => clearInterval(pollInterval);
-    }, [currentUser]); // Only re-run on login/logout
-
-    // Analytics fetch on tab switch
+    // ── Analytics fetch ──────────────────────────────────────────────────────
     useEffect(() => {
         if (view === 'analytics') {
-            fetchAnalytics();
+            systemAPI.calibration()
+                .then(r => setAnalyticsData(r.data))
+                .catch(e => console.error('Failed to fetch analytics', e));
         }
     }, [view]);
 
-    useEffect(() => {
-        const fetchInitialState = async () => {
-            if (!activeConversationId) return;
-            try {
-                const res = await axios.get(`${API_BASE}/conversation/${activeConversationId}/messages?limit=50`);
-                if (res.data && res.data.length > 0) {
-                    const historyMsgs = res.data.slice().reverse().map(m => {
-                        const parsed = parseAnalysis(m);
-                        const isSelf = currentUser && (m.sender_id === currentUser.user_id);
-                        return {
-                            id: m.id,
-                            sender: isSelf ? 'user' : 'ai',
-                            text: m.content,
-                            senderName: isSelf ? currentUser.display_name : getSenderName(m.sender_id),
-                            analysis: parsed
-                        };
-                    });
-                    setMessages(historyMsgs);
-                    const lastMsg = res.data[0];
-                    const initialAnalysis = parseAnalysis(lastMsg);
-                    if (initialAnalysis) {
-                        setCurrentAnalysis(initialAnalysis);
-                        applyTheme(initialAnalysis.data.final_dominant_emotion);
-                    }
-                    await fetchVibe();
-                }
-            } catch (err) { console.error("Initial fetch failed:", err); }
-        };
+    // ── Auth handlers ────────────────────────────────────────────────────────
+    const handleAuthSuccess = (data) =>
+        setCurrentUser({ user_id: data.user_id, display_name: data.display_name,
+                         email: data.email, role: data.role });
 
-        // check if ready
-        let pollInterval;
-        const connectWebSocket = () => {
-            if (!currentUser) return null;
-            const ws = new WebSocket(`${WS_BASE}/ws/${currentUser.user_id}`);
-
-            ws.onopen = () => {
-                console.log("Connected to WS");
-                setStatus('Live');
-            };
-
-            ws.onmessage = (event) => {
-                try {
-                    const payload = JSON.parse(event.data);
-                    if (payload.type === 'analysis') {
-                        setCurrentAnalysis(prev => ({
-                            ...payload,
-                            ai_insight: null,
-                            loadingReasoning: true
-                        }));
-                        applyTheme(payload.data.final_dominant_emotion);
-
-                        if (payload.vibe) {
-                            setVibeAnalysis(payload.vibe);
-                        } else {
-                            fetchVibe();
-                        }
-                        
-                        setMessages(prev => {
-                            const isSelf = payload.data.sender_id === currentUser?.user_id;
-                            if (prev.some(m => m.id === payload.data.id)) {
-                                return prev.map(m => m.id === payload.data.id ? { ...m, analysis: payload } : m);
-                            }
-                            
-                            const existingIdx = prev.findIndex(m => m.text === payload.data.raw_text && !m.analysis && isSelf && m.sender === 'user');
-                            
-                            const newMsgData = {
-                                id: payload.data.id,
-                                sender: isSelf ? 'user' : 'ai',
-                                text: payload.data.raw_text,
-                                senderName: isSelf ? currentUser?.display_name : getSenderName(payload.data.sender_id),
-                                analysis: payload
-                            };
-
-                            if (existingIdx >= 0) {
-                                const newMsgs = [...prev];
-                                newMsgs[existingIdx] = { ...newMsgs[existingIdx], ...newMsgData };
-                                return newMsgs;
-                            } else {
-                                return [...prev, newMsgData];
-                            }
-                        });
-                    } else if (payload.type === 'reasoning') {
-                        setCurrentAnalysis(prev => {
-                            if (prev && prev.data.id === payload.message_id) {
-                                return { ...prev, ai_insight: payload.ai_insight, loadingReasoning: false };
-                            }
-                            return prev;
-                        });
-                    }
-                } catch (e) {
-                    console.error("WS Parse error", e);
-                }
-            };
-
-            ws.onclose = () => setStatus('Offline');
-
-            socketRef.current = ws;
-            return ws;
-        };
-
-        const init = async () => {
-            if (!currentUser || !systemReady) return; // Wait for system to be ready first
-            connectWebSocket();
-            await fetchInitialState();
-        };
-        init();
-
-        return () => {
-            if (socketRef.current) socketRef.current.close();
-        };
-    }, [activeConversationId, currentUser, systemReady]); // Re-run when convo changes, login, or system becomes ready
-
-// Auth & Chat Fetching
-useEffect(() => {
-    if (!currentUser) return;
-    const fetchChats = async () => {
-        try {
-            const [chatsRes, usersRes] = await Promise.all([
-                axios.get(`${API_BASE}/conversations/${currentUser.user_id}`),
-                axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`)
-            ]);
-            setConversations(chatsRes.data || []);
-            setGlobalUsers(usersRes.data || []);
-        } catch (e) { console.error("Failed to load initial panel data"); }
-    };
-    fetchChats();
-    const intl = setInterval(fetchChats, 5000);
-    return () => clearInterval(intl);
-}, [currentUser]);
-
-const handleLogin = async (e) => {
-    // Kept for legacy – now replaced by LoginModal
-    e.preventDefault();
-};
-
-const handleCreateChat = async (targetId) => {
-    try {
-        const res = await axios.post(`${API_BASE}/conversations`, {
-            user_id: currentUser.user_id,
-            target_user_id: targetId
-        });
-        setActiveConversationId(res.data.conversation_id);
-        setMessages([]); // clear old messages
+    const handleLogout = async () => {
+        try { await authAPI.logout(); } catch(e) {}
+        setCurrentUser(null);
+        setMessages([]);
+        setActiveConversationId(null);
         setCurrentAnalysis(null);
-        setActiveTab('chats');
-    } catch (e) { console.error("Failed to make chat", e); }
-};
-
-const sendMessage = () => {
-    if (!inputValue.trim()) return;
-
-    // optimistic update
-    const newMsg = {
-        id: Date.now(),
-        sender: 'user',
-        text: inputValue,
-        senderName: currentUser.display_name,
-        analysis: null
+        if (socketRef.current) { socketRef.current.close(); socketRef.current = null; }
     };
-    setMessages(prev => [...prev, newMsg]);
 
-    // send message over socket
-    if (socketRef.current && activeConversationId) {
-        socketRef.current.send(JSON.stringify({
-            text: inputValue,
-            recipient_id: 'system',
-            sender_id: currentUser.user_id,
-            conversation_id: activeConversationId
-        }));
-    }
-
-    setInputValue('');
-    setView('live');
-};
-
-// scroll on new message
-useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-}, [messages, view]);
-
-
-const handleFeedback = async (msgId, newLabel) => {
-    try {
-        await axios.post(`${API_BASE}/message/${msgId}/feedback`, { label: newLabel });
-        // update state
-        setMessages(prev => prev.map(m => m.id === msgId ? { ...m, verified: true, feedbackLabel: newLabel } : m));
-        if (currentAnalysis && currentAnalysis.data.id === msgId) {
-            setCurrentAnalysis(prev => ({ ...prev, verified: true, feedbackLabel: newLabel }));
+    const onCreateChat = async (targetId) => {
+        const convId = await handleCreateChat(targetId);
+        if (convId) {
+            setActiveConversationId(convId);
+            setMessages([]);
+            setCurrentAnalysis(null);
+            setActiveTab('chats');
         }
-        console.log(`Feedback sent for ${msgId}: ${newLabel}`);
-    } catch (e) {
-        console.error("Failed to send feedback", e);
-    }
-};
+    };
 
-const handleHistoryClick = (msg) => {
-    if (msg.analysis) {
-        setCurrentAnalysis(msg.analysis);
-        applyTheme(msg.analysis.data.final_dominant_emotion);
-        setView('live'); // show analysis
-    } else {
-        console.log("No analysis data for this message yet", msg);
-    }
-};
+    const onCreateGroup = async (name, memberIds) => {
+        const convId = await handleCreateGroup(name, memberIds);
+        if (convId) {
+            setShowGroupModal(false);
+            setActiveConversationId(convId);
+            setMessages([]);
+            setCurrentAnalysis(null);
+            setActiveTab('chats');
+        }
+    };
 
+    const onAddMember = async (userId) => {
+        setMemberActionError('');
+        try {
+            await handleAddMember(activeConversationId, userId);
+        } catch (e) {
+            setMemberActionError(e.apiMessage || e.message || 'Failed to add member.');
+        }
+    };
 
-return (
-    <div className="app-shell">
-        {/* Login gate — replaced by secure LoginModal */}
-        {!currentUser && sessionChecked && <LoginModal onSuccess={handleAuthSuccess} />}
+    const onRemoveMember = async (userId) => {
+        setMemberActionError('');
+        try {
+            await handleRemoveMember(activeConversationId, userId);
+        } catch (e) {
+            setMemberActionError(e.apiMessage || e.message || 'Failed to remove member.');
+        }
+    };
 
-        {/* loading gate */}
-        {(currentUser && !systemReady) && (
-            <div className={`loading-gate ${gateVisible ? '' : 'gate-exit'}`}>
-                <div className="gate-backdrop"></div>
-                <div className="gate-content">
-                    <div className="brain-loader">
-                        <div className="pulse-ring"></div>
-                        <div className="pulse-ring delay"></div>
-                        <div className="brain-icon">🧠</div>
-                    </div>
-                    <h2 className="gate-title">InnerLink is Initializing</h2>
-                    <p className="gate-subtitle">Warming up neural pipelines and calibrating the meta-learner...</p>
+    const handleSendMessage = () => { sendMessage(); setView('live'); };
 
-                    <div className="gate-checklist">
-                        <div className={`gate-check-item ${componentStatus.redis ? 'ready' : 'pending'}`}>
-                            <span className="check-icon">{componentStatus.redis ? '✓' : '◌'}</span>
-                            <span className="check-label">Redis Stream Engine</span>
-                        </div>
-                        <div className={`gate-check-item ${componentStatus.database ? 'ready' : 'pending'}`}>
-                            <span className="check-icon">{componentStatus.database ? '✓' : '◌'}</span>
-                            <span className="check-label">PostgreSQL Database</span>
-                        </div>
-                        <div className={`gate-check-item ${componentStatus.meta_learner ? 'ready' : 'pending'}`}>
-                            <span className="check-icon">{componentStatus.meta_learner ? '✓' : '◌'}</span>
-                            <span className="check-label">Meta-Learner Intelligence</span>
-                        </div>
-                    </div>
+    // Members not yet in the active group (for the add-member picker)
+    const currentMemberIds = activeConv?.members?.map(m => m.user_id) || [];
+    const addableUsers = globalUsers.filter(u => !currentMemberIds.includes(u.user_id));
 
-                    <div className="gate-footer">
-                        <div className="gate-spinner"></div>
-                        <span>Checking every 3 seconds...</span>
-                    </div>
-                </div>
-            </div>
-        )}
+    // ── Render ───────────────────────────────────────────────────────────────
+    return (
+        <div className="app-shell">
+            {/* Auth gate */}
+            {!currentUser && sessionChecked && <LoginModal onSuccess={handleAuthSuccess} />}
 
-        {/* Training in progress banner */}
-        {systemReady && trainingInProgress && (
-            <div style={{
-                position: 'fixed', top: 0, left: 0, right: 0, zIndex: 500,
-                background: 'linear-gradient(90deg, #b45309, #d97706)',
-                color: '#fff', padding: '8px 20px',
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                fontSize: '0.85rem', fontWeight: 500, boxShadow: '0 2px 8px rgba(0,0,0,0.4)'
-            }}>
-                <span>
-                    🧠 <strong>AI is still learning</strong> — The meta-learner is training on new data.
-                    Emotion analysis is live but accuracy will improve once training completes.
-                </span>
-                <button onClick={() => setTrainingInProgress(false)} style={{
-                    background: 'rgba(255,255,255,0.2)', border: 'none', color: '#fff',
-                    borderRadius: '4px', padding: '2px 10px', cursor: 'pointer', fontSize: '0.85rem'
-                }}>✕ Dismiss</button>
-            </div>
-        )}
-
-        {/* background */}
-        <div className="bg-gradient"></div>
-        <div className="glow-orb" id="orb-1"></div>
-        <div className="glow-orb" id="orb-2"></div>
-
-        {/* sidebar */}
-        <aside className="sidebar glass">
-            <header className="app-header">
-                <div className="logo">
-                    <div className="logo-icon"></div>
-                    <h1>InnerLink</h1>
-                </div>
-                <div className="user-selector" style={{ display: 'none' }}>
-                    {/* Hidden, replaced by modern tabs below */}
-                </div>
-                <div className="status-indicator">
-                    <span className="pulse"></span> {status}
-                </div>
-            </header>
-
-            {/* Custom User Info & Tabs */}
-            {currentUser && (
-                <div style={{ padding: '0 20px', marginBottom: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 style={{ color: 'var(--accent-primary)', marginBottom: '10px' }}>
-                            {currentUser.role === 'admin' && <span title="Admin" style={{ marginRight: '6px' }}>👑</span>}
-                            {currentUser.display_name}
-                        </h3>
-                        <button
-                            id="logout-btn"
-                            onClick={handleLogout}
-                            title="Log out"
-                            style={{ background: 'rgba(255,80,80,0.15)', border: '1px solid rgba(255,80,80,0.2)', color: '#ff7070', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer', fontSize: '0.8rem' }}
-                        >
-                            Log out
-                        </button>
-                    </div>
-                    <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
-                        <button onClick={() => setActiveTab('chats')} style={{ flex: 1, padding: '5px', background: activeTab === 'chats' ? 'rgba(255,255,255,0.2)' : 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '5px' }}>Chats</button>
-                        <button onClick={() => setActiveTab('users')} style={{ flex: 1, padding: '5px', background: activeTab === 'users' ? 'rgba(255,255,255,0.2)' : 'transparent', border: '1px solid rgba(255,255,255,0.1)', color: 'white', borderRadius: '5px' }}>Users</button>
-                    </div>
-
-                    {activeTab === 'users' && (
-                        <div className="users-list" style={{ maxHeight: '120px', overflowY: 'auto', marginBottom: '10px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px' }}>
-                            {globalUsers.map(u => (
-                                <div key={u.user_id} onClick={() => handleCreateChat(u.user_id)} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-                                    {u.display_name} <span style={{ float: 'right' }}>+</span>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                    {activeTab === 'chats' && (
-                        <div className="chats-list" style={{ maxHeight: '120px', overflowY: 'auto', marginBottom: '10px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px' }}>
-                            {conversations.map(c => (
-                                <div key={c.conversation_id} onClick={() => setActiveConversationId(c.conversation_id)} style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)', background: activeConversationId === c.conversation_id ? 'rgba(0,180,255,0.3)' : 'transparent' }}>
-                                    <div style={{ fontWeight: 'bold' }}>Chat with {c.other_display_name}</div>
-                                    <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '4px' }}>
-                                        Vibe: <span style={{ color: EMOTION_COLORS[c.dominant_emotion?.toLowerCase()] || '#00f2ff' }}>{c.dominant_emotion || 'Neutral'}</span> (Valence: {(c.average_valence || 0).toFixed(2)})
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                </div>
-            )}
-
-            <div className="nav-links">
-                <button className={`nav-btn ${view === 'live' ? 'active' : ''}`} onClick={() => setView('live')}>
-                    <span className="btn-icon">⚡</span> Live Analysis
-                </button>
-                <button className={`nav-btn ${view === 'history' ? 'active' : ''}`} onClick={() => setView('history')}>
-                    <span className="btn-icon">📜</span> History & Trends
-                </button>
-                <button className={`nav-btn ${view === 'analytics' ? 'active' : ''}`} onClick={() => setView('analytics')}>
-                    <span className="btn-icon">📊</span> System Insights
-                </button>
-                {currentUser?.role === 'admin' && (
-                    <button id="nav-admin-btn" className={`nav-btn ${view === 'admin' ? 'active' : ''}`} onClick={() => setView('admin')}>
-                        <span className="btn-icon">👑</span> Admin
-                    </button>
-                )}
-            </div>
-
-            <div className="chat-container" ref={chatContainerRef}>
-                {messages.length === 0 && (
-                    <div className="empty-state">
-                        <div className="empty-icon">✨</div>
-                        <p>Enter a message to reveal its emotional subtext</p>
-                    </div>
-                )}
-                {messages.map(msg => (
-                    <div
-                        key={msg.id}
-                        className={`chat-msg ${msg.sender}`}
-                        data-sender={msg.senderName}
-                        onClick={() => handleHistoryClick(msg)}
-                        style={{ cursor: msg.analysis ? 'pointer' : 'default', opacity: msg.analysis ? 1 : 0.8 }}
-                        title={msg.analysis ? "Click to view emotional analysis" : "Analysis pending..."}
-                    >
-                        <div>{msg.text}</div>
-                        {msg.analysis && (
-                            <div style={{ fontSize: '0.75rem', marginTop: '6px', opacity: 0.9 }}>
-                                <span style={{ color: EMOTION_COLORS[msg.analysis.data.final_dominant_emotion?.toLowerCase()] || '#00f2ff', fontWeight: 'bold' }}>
-                                    {msg.analysis.data.final_dominant_emotion}
-                                </span>
-                                {msg.analysis.data.bert_emotions && msg.analysis.data.bert_emotions.length > 0 && (
-                                    <span style={{ marginLeft: '6px', color: '#94a3b8' }}>
-                                        ({msg.analysis.data.bert_emotions.slice(0, 2).map(e => e.label).join(', ')})
-                                    </span>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                ))}
-                <div ref={messagesEndRef}></div>
-            </div>
-
-            <div className="input-wrapper glass" style={{ position: 'relative' }}>
-                {showEmojiPicker && (
-                    <div className="emoji-popup glass" style={{
-                        position: 'absolute',
-                        bottom: '100%',
-                        left: '0',
-                        marginBottom: '10px',
-                        padding: '12px',
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(6, 1fr)',
-                        gap: '8px',
-                        zIndex: 1000,
-                        background: 'rgba(17, 25, 40, 0.95)',
-                        boxShadow: '0 8px 32px 0 rgba(0, 0, 0, 0.37)'
-                    }}>
-                        {['😂', '😭', '😍', '🔥', '💀', '🙃', '🤔', '🙄', '💩', '❤️', '✨'].map(emoji => (
-                            <button
-                                key={emoji}
-                                onClick={() => {
-                                    setInputValue(prev => prev + emoji);
-                                    setShowEmojiPicker(false);
-                                }}
-                                style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    fontSize: '1.5rem',
-                                    cursor: 'pointer',
-                                    transition: 'transform 0.1s'
-                                }}
-                                onMouseOver={e => e.target.style.transform = 'scale(1.2)'}
-                                onMouseOut={e => e.target.style.transform = 'scale(1)'}
-                            >
-                                {emoji}
-                            </button>
-                        ))}
-                    </div>
-                )}
-
-                <button
-                    onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-                    style={{
-                        background: 'none',
-                        border: 'none',
-                        fontSize: '1.5rem',
-                        cursor: 'pointer',
-                        opacity: 0.8,
-                        padding: '0 8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        transition: 'transform 0.2s'
-                    }}
-                    onMouseOver={e => e.target.style.transform = 'scale(1.1)'}
-                    onMouseOut={e => e.target.style.transform = 'scale(1)'}
-                    title="Quick Emojis"
-                >
-                    😊
-                </button>
-                <textarea
-                    rows="1"
-                    placeholder="Type something expressive..."
-                    value={inputValue}
-                    onChange={(e) => setInputValue(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+            {/* Group creation modal */}
+            {showGroupModal && (
+                <GroupModal
+                    globalUsers={globalUsers}
+                    currentUserId={currentUser?.user_id}
+                    onConfirm={onCreateGroup}
+                    onClose={() => setShowGroupModal(false)}
                 />
-                <button className="send-btn" onClick={sendMessage}>
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                        <line x1="22" y1="2" x2="11" y2="13"></line>
-                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                    </svg>
-                </button>
-            </div>
-        </aside>
+            )}
 
-        {/* main dashboard */}
-        <main className="dashboard">
-            <div className="dashboard-header">
-                <h2>Discovery Module</h2>
-                <div className="analysis-meta">
-                    {currentAnalysis ? `ID: ${currentAnalysis.data.id.split('-')[0]}` : 'Ready'}
-                </div>
-            </div>
-
-            {/* idle state */}
-            {!currentAnalysis && view === 'live' && (
-                <div className="idle-view">
-                    <div className="visualizer-mock">
-                        <div className="bar"></div>
-                        <div className="bar"></div>
-                        <div className="bar"></div>
-                        <div className="bar"></div>
-                        <div className="bar"></div>
+            {/* Loading gate */}
+            {currentUser && !systemReady && (
+                <div className={`loading-gate ${gateVisible ? '' : 'gate-exit'}`}>
+                    <div className="gate-backdrop" />
+                    <div className="gate-content">
+                        <div className="brain-loader">
+                            <div className="pulse-ring" />
+                            <div className="pulse-ring delay" />
+                            <div className="brain-icon">🧠</div>
+                        </div>
+                        <h2 className="gate-title">InnerLink is Initializing</h2>
+                        <p className="gate-subtitle">Warming up neural pipelines and calibrating the meta-learner...</p>
+                        <div className="gate-checklist">
+                            {[
+                                { key: 'redis',       label: 'Redis Stream Engine'      },
+                                { key: 'database',    label: 'PostgreSQL Database'       },
+                                { key: 'meta_learner',label: 'Meta-Learner Intelligence' }
+                            ].map(({ key, label }) => (
+                                <div key={key} className={`gate-check-item ${componentStatus[key] ? 'ready' : 'pending'}`}>
+                                    <span className="check-icon">{componentStatus[key] ? '✓' : '◌'}</span>
+                                    <span className="check-label">{label}</span>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="gate-footer">
+                            <div className="gate-spinner" />
+                            <span>Checking every 3 seconds...</span>
+                        </div>
                     </div>
-                    <p>Awaiting Signal Transmission</p>
                 </div>
             )}
 
-            {/* active analysis */}
-            {currentAnalysis && view === 'live' && (
-                <div className="analysis-view">
-                    {/* vibe section */}
-                    <section className="vibe-dashboard glass">
-                        <div className="vibe-header">
-                            <div className="vibe-title">
-                                <span className="vibe-icon">🌐</span>
-                                <h4>Conversation Vibe</h4>
-                            </div>
-                            <div className="vibe-status" style={{ color: 'var(--accent-success)' }}>
-                                Active
-                            </div>
-                        </div>
-                        {vibeAnalysis ? (
-                            <div className="vibe-body">
-                                <div className="vibe-metric">
-                                    <label>Collective Valence</label>
-                                    <div className="vibe-gauge">
-                                        <div className="vibe-fill" style={{ width: `${((vibeAnalysis.valence + 1) / 2) * 100}%` }}></div>
-                                    </div>
-                                </div>
-                                <div className="vibe-metric">
-                                    <label>Sync Score</label>
-                                    <div className="vibe-gauge">
-                                        <div className="vibe-fill" style={{ width: `${vibeAnalysis.sync_score * 100}%` }}></div>
-                                    </div>
-                                </div>
-                                <div className="vibe-metric">
-                                    <label>Resonance</label>
-                                    <div className="vibe-gauge">
-                                        <div className="vibe-fill" style={{ width: `${vibeAnalysis.resonance * 100}%`, background: 'var(--accent-success)' }}></div>
-                                    </div>
-                                </div>
-                                <div className="vibe-metric">
-                                    <label>Volatility</label>
-                                    <div className="vibe-gauge">
-                                        <div className="vibe-fill" style={{ width: `${vibeAnalysis.volatility * 100}%`, background: 'var(--accent-error)' }}></div>
-                                    </div>
-                                </div>
-                                <div className="vibe-top-emotions">
-                                    {vibeAnalysis.top_emotions.map((e, i) => (
-                                        <span key={i} className="vibe-tag">#{e}</span>
-                                    ))}
-                                </div>
-                            </div>
-                        ) : (
-                            <div style={{ padding: '20px', color: '#64748b' }}>Loading Vibe State...</div>
-                        )}
-                    </section>
+            {/* Training banner */}
+            {systemReady && trainingInProgress && (
+                <div style={{
+                    position: 'fixed', top: 0, left: 0, right: 0, zIndex: 500,
+                    background: 'linear-gradient(90deg, #b45309, #d97706)',
+                    color: '#fff', padding: '8px 20px',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    fontSize: '0.85rem', fontWeight: 500
+                }}>
+                    <span>🧠 <strong>AI is still learning</strong> — The meta-learner is training on new data.</span>
+                    <button onClick={() => setTrainingInProgress(false)}
+                            style={{ background: 'rgba(255,255,255,0.2)', border: 'none',
+                                     color: '#fff', borderRadius: '4px', padding: '2px 10px',
+                                     cursor: 'pointer' }}>✕ Dismiss</button>
+                </div>
+            )}
 
-                    {/* dominant emotion */}
-                    <section className="hero-emotion glass">
-                        <div className="hero-emotion">
-                            <span className="label">Dominant Resonance</span>
-                            <h3 id="dominant-emotion-text" style={{ textShadow: `0 0 20px var(--accent-primary)` }}>
-                                {currentAnalysis.data.final_dominant_emotion}
+            <div className="bg-gradient" />
+            <div className="glow-orb" id="orb-1" />
+            <div className="glow-orb" id="orb-2" />
+
+            {/* Sidebar */}
+            <aside className="sidebar glass">
+                <header className="app-header">
+                    <div className="logo">
+                        <div className="logo-icon" />
+                        <h1>InnerLink</h1>
+                    </div>
+                    <div className="status-indicator">
+                        <span className="pulse" /> {status}
+                    </div>
+                </header>
+
+                {currentUser && (
+                    <div style={{ padding: '0 20px', marginBottom: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <h3 style={{ color: 'var(--accent-primary)', marginBottom: '10px' }}>
+                                {currentUser.role === 'admin' && <span title="Admin" style={{ marginRight: '6px' }}>👑</span>}
+                                {currentUser.display_name}
                             </h3>
-
-                            {currentAnalysis.data.context_shift && (
-                                <div className="context-shift-badge glass pulse-neon">
-                                    <span className="shift-icon">🔄</span>
-                                    <div className="shift-content">
-                                        <strong>Context Shift</strong>
-                                        <span>From {currentAnalysis.data.context_shift.from} to {currentAnalysis.data.context_shift.to}</span>
-                                    </div>
-                                </div>
-                            )}
+                            <button id="logout-btn" onClick={handleLogout}
+                                    style={{ background: 'rgba(255,80,80,0.15)', border: '1px solid rgba(255,80,80,0.2)',
+                                             color: '#ff7070', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer' }}>
+                                Log out
+                            </button>
                         </div>
 
-                        <div className="feedback-section">
-                            <span className="label">Is this correct?</span>
-                            <div className="feedback-actions">
-                                <select
-                                    className="glass feedback-select"
-                                    onChange={(e) => handleFeedback(currentAnalysis.data.id, e.target.value)}
-                                    value={currentAnalysis.feedbackLabel || ""}
-                                >
-                                    <option value="" disabled>Correct this emotion...</option>
-                                    {Object.keys(EMOTION_COLORS).map(emo => (
-                                        <option key={emo} value={emo}>{emo}</option>
-                                    ))}
-                                </select>
-                                {(currentAnalysis.verified || currentAnalysis.feedbackLabel) && (
-                                    <span className="verified-badge">✓ Verified</span>
-                                )}
-                            </div>
+                        <div style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                            {['chats', 'users'].map(tab => (
+                                <button key={tab} onClick={() => setActiveTab(tab)}
+                                        style={{ flex: 1, padding: '5px', border: '1px solid rgba(255,255,255,0.1)',
+                                                 color: 'white', borderRadius: '5px', textTransform: 'capitalize',
+                                                 background: activeTab === tab ? 'rgba(255,255,255,0.2)' : 'transparent',
+                                                 cursor: 'pointer' }}>
+                                    {tab}
+                                </button>
+                            ))}
                         </div>
 
-                        {/* word highlights */}
-                        <EmotionalTextOverlay text={currentAnalysis.data.raw_text} />
-
-                        <div className="valence-container">
-                            <div className="valence-labels">
-                                <span>Negative</span>
-                                <span>Positive</span>
-                            </div>
-                            <div className="valence-track">
-                                <div className="valence-cursor" style={{ left: `${((currentAnalysis.data.final_valence + 1) / 2) * 100}%` }}></div>
-                            </div>
-                        </div>
-                    </section>
-
-                    <div className="detailed-grid">
-                        {/* bert breakdown */}
-                        <section className="analysis-card glass">
-                            <div className="card-header">
-                                <h4>Neural Breakdown (BERT)</h4>
-                                <span className="info-tag">Confidence</span>
-                            </div>
-                            <div className="stats-list">
-                                {currentAnalysis.data.bert_emotions.sort((a, b) => b.score - a.score).slice(0, 4).map((item, i) => (
-                                    <div key={i} className="stat-item">
-                                        <div className="stat-header">
-                                            <span>{item.label}</span>
-                                            <span>{Math.round(item.score * 100)}%</span>
-                                        </div>
-                                        <div className="stat-bar-bg">
-                                            <div className="stat-bar-fill" style={{ width: `${item.score * 100}%`, background: EMOTION_COLORS[item.label] || 'var(--accent-primary)' }}></div>
-                                        </div>
+                        {/* Users tab — start a direct chat */}
+                        {activeTab === 'users' && (
+                            <div className="users-list" style={{ maxHeight: '150px', overflowY: 'auto',
+                                                                  marginBottom: '10px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px' }}>
+                                {globalUsers.map(u => (
+                                    <div key={u.user_id} onClick={() => onCreateChat(u.user_id)}
+                                         style={{ padding: '8px', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                                  display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <span>{u.display_name}</span>
+                                        <span style={{ color: 'var(--accent-primary)', fontSize: '1.1rem' }}>+</span>
                                     </div>
                                 ))}
                             </div>
-                        </section>
-
-                        {/* conflict / sarcasm meter */}
-                        {currentAnalysis.data.sarcasm_score > 0.1 && (
-                            <div className={`dissonance-meter glass ${currentAnalysis.data.sarcasm_score > 0.5 ? 'high-alert' : ''}`}>
-                                <div className="meter-label">
-                                    <span>Contextual Dissonance</span>
-                                    <span className="score">{Math.round(currentAnalysis.data.sarcasm_score * 100)}%</span>
-                                </div>
-                                <div className="meter-track">
-                                    <div
-                                        className="meter-fill"
-                                        style={{ width: `${currentAnalysis.data.sarcasm_score * 100}%` }}
-                                    ></div>
-                                </div>
-                                {currentAnalysis.data.conflict && (
-                                    <p className="conflict-tag bounce-in">{currentAnalysis.data.conflict}</p>
-                                )}
-                            </div>
                         )}
 
-                        {/* text insight */}
-                        <div className={`ai-insight-card glass ${currentAnalysis.loadingReasoning ? 'thinking' : ''}`}>
-                            <div className="card-header">
-                                <span className="icon">🧠</span>
-                                <h4>AI Cognitive Insight</h4>
-                            </div>
-                            <div className="card-body">
-                                {currentAnalysis.ai_insight ? (
-                                    <p className="insight-text fade-in">{currentAnalysis.ai_insight}</p>
-                                ) : (
-                                    <div className="thinking-loader">
-                                        <div className="dot"></div>
-                                        <div className="dot"></div>
-                                        <div className="dot"></div>
-                                        <span>Deep analysis in progress...</span>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
+                        {/* Chats tab — conversation list */}
+                        {activeTab === 'chats' && (
+                            <>
+                                {/* New Group button */}
+                                <button
+                                    onClick={() => setShowGroupModal(true)}
+                                    style={{ width: '100%', marginBottom: '8px', padding: '6px',
+                                             background: 'rgba(0,180,255,0.12)', border: '1px solid rgba(0,180,255,0.25)',
+                                             color: 'var(--accent-primary)', borderRadius: '5px', cursor: 'pointer',
+                                             fontSize: '0.85rem', fontWeight: 500 }}>
+                                    + New Group Chat
+                                </button>
 
-                        <div className="logic-explainer section">
-                            <h4 className="section-title">Logic Map — Model Influence</h4>
-                            {currentAnalysis.data.logic_map && Object.keys(currentAnalysis.data.logic_map).length > 0 ? (
-                                <div className="impact-grid">
-                                    {Object.entries(currentAnalysis.data.logic_map).map(([system, impact]) => (
-                                        <div key={system} className="impact-item">
-                                            <div className="impact-header">
-                                                <span>{system}</span>
-                                                <span>{Math.round(impact * 100)}%</span>
+                                <div className="chats-list" style={{ maxHeight: '150px', overflowY: 'auto',
+                                                                      marginBottom: '10px', border: '1px solid rgba(255,255,255,0.05)', borderRadius: '5px' }}>
+                                    {conversations.length === 0 && (
+                                        <div style={{ padding: '12px', color: '#64748b', fontSize: '0.85rem', textAlign: 'center' }}>
+                                            No conversations yet
+                                        </div>
+                                    )}
+                                    {conversations.map(c => (
+                                        <div key={c.conversation_id}
+                                             onClick={() => { setActiveConversationId(c.conversation_id); setMemberPanelOpen(false); }}
+                                             style={{ padding: '8px', cursor: 'pointer',
+                                                      borderBottom: '1px solid rgba(255,255,255,0.05)',
+                                                      background: activeConversationId === c.conversation_id ? 'rgba(0,180,255,0.3)' : 'transparent' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                {c.type === 'group' && (
+                                                    <span style={{ fontSize: '0.7rem', background: 'rgba(0,180,255,0.2)',
+                                                                   color: 'var(--accent-primary)', borderRadius: '3px',
+                                                                   padding: '1px 5px', fontWeight: 600 }}>GROUP</span>
+                                                )}
+                                                <span style={{ fontWeight: 'bold' }}>
+                                                    {c.type === 'group' ? c.name : c.other_display_name}
+                                                </span>
+                                                {c.type === 'group' && (
+                                                    <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                                                        {c.member_count} members
+                                                    </span>
+                                                )}
                                             </div>
-                                            <div className="impact-bar-bg">
-                                                <div className={`impact-bar-fill impact-${system.toLowerCase()}`}
-                                                    style={{ width: `${impact * 100}%` }}>
-                                                </div>
+                                            <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginTop: '4px' }}>
+                                                Vibe: <span style={{ color: EMOTION_COLORS[c.dominant_emotion?.toLowerCase()] || '#00f2ff' }}>
+                                                    {c.dominant_emotion || 'Neutral'}
+                                                </span>
                                             </div>
                                         </div>
                                     ))}
                                 </div>
-                            ) : (
-                                <p className="no-data-msg">Logic trace unavailable for this message.</p>
-                            )}
-                        </div>
-
-                        {/* Buildup Chart */}
-                        <section className="analysis-card glass full-width">
-                            <div className="card-header">
-                                <h4>Emotional Resonance Progression</h4>
-                                <span className="info-tag">Semantic Build-up</span>
-                            </div>
-                            <div className="chart-container-live">
-                                {/* Mocking historical context for demo. Ideally this comes from history. */}
-                                <BuildupChart steps={messages.filter(m => m.analysis).slice(-5).map(m => ({
-                                    text: m.text,
-                                    dominant: m.analysis.data.final_dominant_emotion,
-                                    scores: [{ score: 0.8 }] // simplified
-                                }))} />
-                            </div>
-                        </section>
-
-                        {/* Plutchik */}
-                        <section className="analysis-card glass plutchik-card">
-                            <div className="card-header">
-                                <h4>Emotional Geometry (Plutchik)</h4>
-                            </div>
-                            <PlutchikWheel dominantEmotion={currentAnalysis.data.final_dominant_emotion} />
-                        </section>
-
+                            </>
+                        )}
                     </div>
-                </div>
-            )}
+                )}
 
-            {/* HISTORY VIEW */}
-            {view === 'history' && (
-                <div className="history-view">
-                    <h3>Conversation Archive</h3>
-                    <div className="history-list">
-                        {messages.map(msg => (
-                            <div key={msg.id} className="history-item" onClick={() => handleHistoryClick(msg)} style={{ cursor: 'pointer' }}>
-                                <div className="history-item-header">
-                                    <span>{msg.senderName}</span>
-                                    <span>{new Date(msg.id).toLocaleTimeString()}</span>
-                                </div>
-                                <div className="history-item-text">
-                                    {msg.text}
-                                </div>
-                                <div className="history-footer">
-                                    {msg.analysis && (
-                                        <div className="history-item-emotion" style={{ background: EMOTION_COLORS[msg.analysis.data.final_dominant_emotion.toLowerCase()] || '#888' }}>
-                                            {msg.analysis.data.final_dominant_emotion}
-                                        </div>
-                                    )}
-                                    <select
-                                        className="history-feedback-select"
-                                        onClick={(e) => e.stopPropagation()}
-                                        onChange={(e) => handleFeedback(msg.id, e.target.value)}
-                                        value={msg.feedbackLabel || ""}
-                                    >
-                                        <option value="" disabled>✎</option>
-                                        {Object.keys(EMOTION_COLORS).map(emo => (
-                                            <option key={emo} value={emo}>{emo}</option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* ANALYTICS VIEW */}
-            {view === 'analytics' && (
-                <div className="analytics-view">
-                    <section className="glass hero-analytics">
-                        <div className="analytics-summary">
-                            <h3>Model Calibration</h3>
-                            <p>Performance metrics derived from {analyticsData?.total_verified_samples || 0} verified samples.</p>
-                            {analyticsData?.overall_accuracy && (
-                                <div className="main-accuracy">
-                                    <div className="accuracy-value">{Math.round(analyticsData.overall_accuracy * 100)}%</div>
-                                    <div className="label">Composite Accuracy</div>
-                                </div>
-                            )}
-                        </div>
-                    </section>
-
-                    {analyticsData?.status === 'no_data' ? (
-                        <div className="idle-view glass">
-                            <p>Insufficient verification data. Use the feedback tools in History to calibrate the system.</p>
-                        </div>
-                    ) : (
-                        <div className="detailed-grid">
-                            {Object.entries(analyticsData?.emotion_breakdown || {}).sort((a, b) => b[1].samples - a[1].samples).map(([emo, stats]) => (
-                                <section key={emo} className="analysis-card glass">
-                                    <div className="card-header">
-                                        <h4>{emo}</h4>
-                                        <span className="info-tag">{stats.samples} samples</span>
-                                    </div>
-                                    <div className="stats-list">
-                                        <div className="stat-item">
-                                            <div className="stat-header">
-                                                <span>Precision</span>
-                                                <span>{Math.round(stats.precision * 100)}%</span>
-                                            </div>
-                                            <div className="stat-bar-bg">
-                                                <div className="stat-bar-fill" style={{ width: `${stats.precision * 100}%`, background: 'var(--accent-primary)' }}></div>
-                                            </div>
-                                        </div>
-                                        <div className="stat-item">
-                                            <div className="stat-header">
-                                                <span>Recall</span>
-                                                <span>{Math.round(stats.recall * 100)}%</span>
-                                            </div>
-                                            <div className="stat-bar-bg">
-                                                <div className="stat-bar-fill" style={{ width: `${stats.recall * 100}%`, background: 'var(--accent-secondary)' }}></div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </section>
-                            ))}
-                        </div>
+                <div className="nav-links">
+                    {[
+                        { id: 'live',      icon: '⚡', label: 'Live Analysis'  },
+                        { id: 'history',   icon: '📜', label: 'History & Trends' },
+                        { id: 'analytics', icon: '📊', label: 'System Insights' }
+                    ].map(({ id, icon, label }) => (
+                        <button key={id} className={`nav-btn ${view === id ? 'active' : ''}`}
+                                onClick={() => setView(id)}>
+                            <span className="btn-icon">{icon}</span> {label}
+                        </button>
+                    ))}
+                    {currentUser?.role === 'admin' && (
+                        <button id="nav-admin-btn" className={`nav-btn ${view === 'admin' ? 'active' : ''}`}
+                                onClick={() => setView('admin')}>
+                            <span className="btn-icon">👑</span> Admin
+                        </button>
                     )}
                 </div>
-            )}
-            {/* ADMIN VIEW */}
-            {view === 'admin' && currentUser?.role === 'admin' && (
-                <div className="analytics-view" style={{ padding: '24px' }}>
-                    <AdminDashboard token={token} currentUser={currentUser} />
-                </div>
-            )}
 
-        </main>
-    </div>
-);
+                {/* No conversation selected — placeholder */}
+                {!activeConversationId && (
+                    <div className="empty-state" style={{ flex: 1, display: 'flex', flexDirection: 'column',
+                                                          alignItems: 'center', justifyContent: 'center',
+                                                          padding: '20px', textAlign: 'center' }}>
+                        <div className="empty-icon">💬</div>
+                        <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '8px' }}>
+                            Select a conversation or start a new one
+                        </p>
+                    </div>
+                )}
+
+                {/* Message list — only when a conversation is active */}
+                {activeConversationId && (
+                    <div className="chat-container" ref={chatContainerRef}>
+                        {messages.length === 0 && (
+                            <div className="empty-state">
+                                <div className="empty-icon">✨</div>
+                                <p>Send a message to start the analysis</p>
+                            </div>
+                        )}
+                        {messages.map(msg => (
+                            <div key={msg.id} className={`chat-msg ${msg.sender}`}
+                                 data-sender={msg.senderName}
+                                 style={{ position: 'relative' }}>
+                                {/* Sender name in group chats */}
+                                {isGroup && msg.sender !== 'user' && (
+                                    <div style={{ fontSize: '0.7rem', color: 'var(--accent-primary)',
+                                                  fontWeight: 600, marginBottom: '3px', opacity: 0.85 }}>
+                                        {msg.senderName}
+                                    </div>
+                                )}
+                                <div onClick={() => handleHistoryClick(msg)}
+                                     style={{ cursor: msg.analysis ? 'pointer' : 'default', opacity: msg.analysis ? 1 : 0.8 }}
+                                     title={msg.analysis ? 'Click to view emotional analysis' : 'Analysis pending...'}>
+                                    {msg.text}
+                                </div>
+                                {msg.analysis && (
+                                    <div style={{ fontSize: '0.75rem', marginTop: '6px', opacity: 0.9 }}>
+                                        <span style={{ color: EMOTION_COLORS[msg.analysis.data.final_dominant_emotion?.toLowerCase()] || '#00f2ff', fontWeight: 'bold' }}>
+                                            {msg.analysis.data.final_dominant_emotion}
+                                        </span>
+                                    </div>
+                                )}
+                                {/* Delete button — own messages only */}
+                                {msg.sender === 'user' && (
+                                    <button
+                                        onClick={() => handleDeleteMessage(msg.id)}
+                                        title="Delete message"
+                                        className="msg-delete-btn">
+                                        ✕
+                                    </button>
+                                )}
+                            </div>
+                        ))}
+                        <div ref={messagesEndRef} />
+                    </div>
+                )}
+
+                {/* Input — only when a conversation is active */}
+                {activeConversationId && (
+                    <div className="input-wrapper glass" style={{ position: 'relative' }}>
+                        {showEmojiPicker && (
+                            <div className="emoji-popup glass" style={{
+                                position: 'absolute', bottom: '100%', left: 0, marginBottom: '10px',
+                                padding: '12px', display: 'grid', gridTemplateColumns: 'repeat(6,1fr)',
+                                gap: '8px', zIndex: 1000, background: 'rgba(17,25,40,0.95)'
+                            }}>
+                                {['😂','😭','😍','🔥','💀','🙃','🤔','🙄','💩','❤️','✨'].map(emoji => (
+                                    <button key={emoji}
+                                            onClick={() => { setInputValue(p => p + emoji); setShowEmojiPicker(false); }}
+                                            style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer' }}>
+                                        {emoji}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+                        <button onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                                style={{ background: 'none', border: 'none', fontSize: '1.5rem',
+                                         cursor: 'pointer', opacity: 0.8, padding: '0 8px' }}>
+                            😊
+                        </button>
+                        <textarea rows="1" placeholder="Type something expressive..."
+                                  value={inputValue}
+                                  onChange={e => setInputValue(e.target.value)}
+                                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); } }} />
+                        <button className="send-btn" onClick={handleSendMessage}>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="22" y1="2" x2="11" y2="13" />
+                                <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                            </svg>
+                        </button>
+                    </div>
+                )}
+            </aside>
+
+            {/* Main dashboard */}
+            <main className="dashboard">
+                <div className="dashboard-header">
+                    <div>
+                        <h2>
+                            {activeConv
+                                ? isGroup
+                                    ? activeConv.name
+                                    : `Chat with ${activeConv.other_display_name}`
+                                : 'Discovery Module'}
+                        </h2>
+                        {isGroup && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px' }}>
+                                <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                                    {activeConv.member_count} members
+                                </span>
+                                <button
+                                    onClick={() => setMemberPanelOpen(p => !p)}
+                                    style={{ fontSize: '0.78rem', background: 'rgba(255,255,255,0.08)',
+                                             border: '1px solid rgba(255,255,255,0.1)', color: '#94a3b8',
+                                             borderRadius: '4px', padding: '2px 8px', cursor: 'pointer' }}>
+                                    {memberPanelOpen ? 'Hide Members' : 'Manage Members'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                    <div className="analysis-meta">
+                        {currentAnalysis ? `ID: ${currentAnalysis.data.id?.split('-')[0]}` : 'Ready'}
+                    </div>
+                </div>
+
+                {/* Group members panel */}
+                {isGroup && memberPanelOpen && (
+                    <div className="glass" style={{ margin: '0 24px 16px', padding: '16px', borderRadius: '8px' }}>
+                        <h4 style={{ marginBottom: '10px', color: 'var(--accent-primary)' }}>Members</h4>
+                        {memberActionError && (
+                            <p style={{ color: '#ff7070', fontSize: '0.85rem', marginBottom: '8px' }}>{memberActionError}</p>
+                        )}
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '14px' }}>
+                            {activeConv.members?.map(m => (
+                                <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: '6px',
+                                                              background: 'rgba(255,255,255,0.07)', borderRadius: '20px',
+                                                              padding: '4px 12px', fontSize: '0.85rem' }}>
+                                    <span>{m.display_name}</span>
+                                    {m.user_id === activeConv.creator_user_id && (
+                                        <span title="Creator" style={{ fontSize: '0.7rem', color: 'var(--accent-primary)' }}>★</span>
+                                    )}
+                                    {isCreator && m.user_id !== currentUser.user_id && (
+                                        <button
+                                            onClick={() => onRemoveMember(m.user_id)}
+                                            style={{ background: 'none', border: 'none', color: '#ff7070',
+                                                     cursor: 'pointer', fontSize: '0.8rem', padding: '0 2px' }}
+                                            title="Remove member">✕</button>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                        {isCreator && addableUsers.length > 0 && (
+                            <div>
+                                <h5 style={{ marginBottom: '8px', color: '#94a3b8', fontSize: '0.85rem' }}>Add member</h5>
+                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                    {addableUsers.map(u => (
+                                        <button key={u.user_id}
+                                                onClick={() => onAddMember(u.user_id)}
+                                                style={{ background: 'rgba(0,180,255,0.1)', border: '1px solid rgba(0,180,255,0.2)',
+                                                         color: 'var(--accent-primary)', borderRadius: '20px',
+                                                         padding: '3px 12px', cursor: 'pointer', fontSize: '0.8rem' }}>
+                                            + {u.display_name}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {view === 'live' && (
+                    <LiveView currentAnalysis={currentAnalysis} vibeAnalysis={vibeAnalysis}
+                              messages={messages} handleFeedback={handleFeedback} />
+                )}
+                {view === 'history' && (
+                    <HistoryView messages={messages} handleFeedback={handleFeedback}
+                                 handleHistoryClick={msg => { handleHistoryClick(msg); setView('live'); }} />
+                )}
+                {view === 'analytics' && <AnalyticsView analyticsData={analyticsData} />}
+                {view === 'admin' && currentUser?.role === 'admin' && (
+                    <div className="analytics-view" style={{ padding: '24px' }}>
+                        <AdminDashboard currentUser={currentUser} />
+                    </div>
+                )}
+            </main>
+        </div>
+    );
 }
 
 export default App;
