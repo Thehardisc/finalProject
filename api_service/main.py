@@ -53,6 +53,8 @@ app.add_middleware(
 redis_client = RedisClient()
 rate_limiter  = None
 
+MAX_MESSAGE_LENGTH = int(os.environ.get("MAX_MESSAGE_LENGTH", 2000))
+
 # ── Register routes ────────────────────────────────────────────────────────────
 app.include_router(auth.router)
 app.include_router(admin.router)
@@ -95,6 +97,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 msg_obj = json.loads(data)
                 text    = msg_obj.get("text")
                 if text:
+                    if len(text) > MAX_MESSAGE_LENGTH:
+                        await websocket.send_json({
+                            "type":    "error",
+                            "message": f"Message too long (max {MAX_MESSAGE_LENGTH} characters)."
+                        })
+                        continue
                     sender          = msg_obj.get("sender_id", user_id)
                     conversation_id = msg_obj.get("conversation_id") or user_id
                     event = {

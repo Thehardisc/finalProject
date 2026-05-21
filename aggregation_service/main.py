@@ -7,6 +7,7 @@ and publishes the enriched event to the conversation_update_stream.
 import asyncio
 import json
 import os
+import signal
 import sys
 import time
 
@@ -18,16 +19,26 @@ from aggregation_service.state.conversation_state import update_conversation_sta
 
 logger = get_logger("aggregation_service")
 
-redis_client = RedisClient()
-STREAM_KEY   = "emotion_stream"
-GROUP_NAME   = "aggregation_group"
+redis_client  = RedisClient()
+STREAM_KEY    = "emotion_stream"
+GROUP_NAME    = "aggregation_group"
 CONSUMER_NAME = "worker_1"
 OUTPUT_STREAM = "conversation_update_stream"
+
+_shutdown = False  # R1
 
 
 async def main():
     await redis_client.connect()
     r = redis_client.redis
+
+    # R1: graceful shutdown on SIGTERM
+    loop = asyncio.get_event_loop()
+    def _handle_sigterm():
+        global _shutdown
+        print("[aggregation_service] SIGTERM — finishing current event then exiting.", flush=True)
+        _shutdown = True
+    loop.add_signal_handler(signal.SIGTERM, _handle_sigterm)
 
     try:
         await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
@@ -91,6 +102,10 @@ async def main():
                 "AGGREGATION WORKER — Redis connection error, retrying in 2s", e
             )
             await asyncio.sleep(2)
+
+        if _shutdown:  # R1
+            logger.info("Aggregation service: graceful shutdown complete.")
+            break
 
 
 if __name__ == "__main__":

@@ -162,7 +162,28 @@ def run_one_cycle(reload_callback):
         tmp = MODEL_PATH.with_suffix(".tmp.pkl")
         with open(tmp, 'wb') as f:
             pickle.dump(pipeline, f)
+
+        # R4: back up the current model before overwriting so we can rollback
+        if MODEL_PATH.exists():
+            prev_path = MODEL_PATH.with_suffix(".prev.pkl")
+            try:
+                import shutil
+                shutil.copy2(MODEL_PATH, prev_path)
+                logger.info(f"Previous model backed up to '{prev_path.name}'.")
+            except Exception as e:
+                logger.warning(f"Could not back up previous model: {e}")
+
         tmp.rename(MODEL_PATH)
+
+        # Write SHA-256 sidecar so loader.py can verify integrity next load
+        import hashlib
+        h = hashlib.sha256()
+        with open(MODEL_PATH, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                h.update(chunk)
+        with open(str(MODEL_PATH) + ".sha256", "w") as sf:
+            sf.write(h.hexdigest())
+        logger.info("SHA-256 sidecar updated.")
 
         with open(META_PATH, 'w') as f:
             json.dump({
@@ -220,6 +241,8 @@ def start_trainer_thread(reload_callback):
             try:
                 if r:
                     r.set("system:training_in_progress", "1")
+                    # R5: heartbeat so health checks can detect a crashed trainer
+                    r.set("trainer:last_heartbeat", time.time(), ex=RETRAIN_INTERVAL * 3)
                 run_one_cycle(reload_callback)
             except Exception as e:
                 logger.error(f"Unhandled error: {e}")

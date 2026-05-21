@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import axios from 'axios';
-import { API_BASE } from '../constants/emotions';
+import { systemAPI } from '../api/client';
 
 /**
  * useSystemReadiness
@@ -17,9 +16,7 @@ export function useSystemReadiness(currentUser) {
 
     const checkSystemStatus = async () => {
         try {
-            const res  = await axios.get(`${API_BASE}/health/status`, {
-                validateStatus: s => s === 200 || s === 503
-            });
+            const res  = await systemAPI.status();
             const data = res.data;
             if (data.components) setComponentStatus(data.components);
             if (data.ready) {

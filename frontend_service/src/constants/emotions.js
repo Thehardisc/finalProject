@@ -1,8 +1,6 @@
 // frontend_service/src/constants/emotions.js
 // Shared emotion constants used across views, hooks, and visualizations.
-
-export const API_BASE = 'http://localhost:8001';
-export const WS_BASE  = 'ws://localhost:8001';
+// API_BASE and WS_BASE are now in src/api/client.js (env-aware).
 
 export const EMOTION_COLORS = {
     'joy':        '#00ff88',

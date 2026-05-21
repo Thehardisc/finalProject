@@ -17,7 +17,11 @@ const HistoryView = ({ messages, handleFeedback, handleHistoryClick }) => (
                 >
                     <div className="history-item-header">
                         <span>{msg.senderName}</span>
-                        <span>{new Date(msg.id).toLocaleTimeString()}</span>
+                        <span>
+                            {msg.timestamp
+                                ? new Date(msg.timestamp * 1000).toLocaleTimeString()
+                                : new Date(msg.id).toLocaleTimeString()}
+                        </span>
                     </div>
                     <div className="history-item-text">{msg.text}</div>
                     <div className="history-footer">

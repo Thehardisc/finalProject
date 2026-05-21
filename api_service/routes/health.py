@@ -44,10 +44,18 @@ async def get_system_status(redis_client=None):
         pass
 
     training_in_progress = False
+    trainer_healthy       = True  # R5: assume healthy if key is missing (trainer not yet started)
     try:
         if redis_client and redis_client.redis:
-            flag = await redis_client.redis.get("system:training_in_progress")
+            flag      = await redis_client.redis.get("system:training_in_progress")
+            heartbeat = await redis_client.redis.get("trainer:last_heartbeat")
             training_in_progress = flag == "1"
+            if heartbeat:
+                import time as _t
+                age = _t.time() - float(heartbeat)
+                # Stale if >3× the default retrain interval (fallback 1800s)
+                max_age = float(os.environ.get("RETRAIN_INTERVAL_SECONDS", 1800)) * 3
+                trainer_healthy = age < max_age
     except Exception:
         pass
 
@@ -58,6 +66,7 @@ async def get_system_status(redis_client=None):
         "timestamp":            time.time(),
         "status":               "online" if all_ready else "warming_up",
         "training_in_progress": training_in_progress,
+        "trainer_healthy":      trainer_healthy,   # R5
         "components": {
             "database":    db_ok,
             "redis":       redis_ok,
