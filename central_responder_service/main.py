@@ -4,6 +4,9 @@ import os
 import json
 import time
 
+# Add parent directory to path to import shared (must come before shared imports)
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
 # import meta learner
 from meta_learner import (
     load_meta_learner,
@@ -15,8 +18,8 @@ from meta_learner import (
 # import background trainer
 from trainer import start_trainer_thread
 
-# Add parent directory to path to import shared
-sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+import emoji as emoji_lib
+from shared.constants import EMOJI_EMOTION_DB
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
@@ -74,6 +77,27 @@ EMOTION_LABELS = [
     'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization', 
     'relief', 'remorse', 'sadness', 'surprise', 'neutral'
 ]
+
+def _emojinet_inline(text: str) -> dict:
+    """Compute emoji emotion scores inline — no network hop needed."""
+    try:
+        found  = emoji_lib.distinct_emoji_list(text)
+        scores = {}
+        count  = 0
+        for ch in found:
+            entry = EMOJI_EMOTION_DB.get(ch) or EMOJI_EMOTION_DB.get(ch.replace('️', ''))
+            if entry:
+                for emo, sc in entry.get("emotions", {}).items():
+                    scores[emo] = scores.get(emo, 0.0) + sc
+                count += 1
+        if count:
+            result = {k: v / count for k, v in scores.items()}
+            result.setdefault("neutral", 0.0)
+            return result
+    except Exception as e:
+        logger.warning(f"Inline emojinet error: {e}")
+    return {}
+
 
 async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     logger.debug(f"Aggregating results for {message_id}...")
@@ -238,14 +262,13 @@ async def main():
 
                         await r.hset(pending_key, model_name, json.dumps(full_packet))
 
-                        # Expected models: all 5 must arrive before aggregation
-                        expected_models = ["go_emotions", "basic_bert", "vader", "emojinet", "context_engine"]
+                        # emojinet computed inline below; context read from Redis in aggregate_and_publish
+                        expected_models = ["go_emotions", "basic_bert", "vader"]
 
                         current_results = await r.hgetall(pending_key)
                         received_models = [k for k in current_results.keys() if k != "arrival_timestamp"]
 
                         if all(m in received_models for m in expected_models):
-                            # all results complete
                             logger.debug(f"All models received for {msg_id}. Aggregating.")
 
                             all_packets = []
@@ -259,6 +282,18 @@ async def main():
                                     all_packets.append(json.loads(packet_str))
                                 except Exception:
                                     logger.error(f"Failed to parse packet for model {m}")
+
+                            # Compute emojinet inline and inject as synthetic packet
+                            first_original = next(
+                                (p.get("original_data", {}) for p in all_packets if p.get("original_data")), {}
+                            )
+                            raw_text = first_original.get("text", "") or first_original.get("original_text", "")
+                            emoji_scores = _emojinet_inline(raw_text)
+                            all_packets.append({
+                                "model_name":    "emojinet",
+                                "scores":        emoji_scores,
+                                "original_data": first_original,
+                            })
 
                             try:
                                 await aggregate_and_publish(msg_id, all_packets, r, agg_lat=agg_lat)

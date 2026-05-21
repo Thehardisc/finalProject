@@ -13,8 +13,8 @@ EMOTION_LABELS = [
 VADER_KEYS  = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
 BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
 
-# Feature Dimension: VADER(4) + BERT(7) + GoEmotions(28) + EmojiNet(28) + ContextEngine(48) = 115
-FEATURE_DIM = 115
+# Feature Dimension: VADER(4) + BERT(7) + GoEmotions(28) + EmojiNet(28) + Context(29) + Derived(7) = 103
+FEATURE_DIM = 103
 
 # emojinet knowledge base
 # Single source of truth for emoji → emotion mappings.
