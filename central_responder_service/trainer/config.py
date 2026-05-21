@@ -14,7 +14,7 @@ DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}"
 
 # ── Trainer knobs ─────────────────────────────────────────────────────────────
 RETRAIN_INTERVAL = int(os.environ.get("RETRAIN_INTERVAL_SECONDS", 1800))
-ACCURACY_GATE    = float(os.environ.get("ACCURACY_GATE", 0.40))
+ACCURACY_GATE    = float(os.environ.get("ACCURACY_GATE", 0.60))
 MAX_SAMPLES      = int(os.environ.get("MAX_SAMPLES", 2500))
 
 # ── Model paths ───────────────────────────────────────────────────────────────

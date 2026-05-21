@@ -35,10 +35,7 @@ const LiveView = ({ currentAnalysis, vibeAnalysis, messages, handleFeedback }) =
                     <div className="vibe-body">
                         {[
                             { label: 'Collective Valence', val: (vibeAnalysis.valence + 1) / 2 },
-                            { label: 'Sync Score',         val: vibeAnalysis.sync_score },
-                            { label: 'Resonance',          val: vibeAnalysis.resonance, color: 'var(--accent-success)' },
-                            { label: 'Volatility',         val: vibeAnalysis.volatility, color: 'var(--accent-error)' }
-                        ].map(({ label, val, color }) => (
+                        ].filter(({ val }) => val != null).map(({ label, val, color }) => (
                             <div key={label} className="vibe-metric">
                                 <label>{label}</label>
                                 <div className="vibe-gauge">
@@ -202,7 +199,7 @@ const LiveView = ({ currentAnalysis, vibeAnalysis, messages, handleFeedback }) =
                         <BuildupChart steps={messages.filter(m => m.analysis).slice(-5).map(m => ({
                             text:     m.text,
                             dominant: m.analysis.data.final_dominant_emotion,
-                            scores:   [{ score: 0.8 }]
+                            scores:   [{ score: (m.analysis.data.final_valence + 1) / 2 }]
                         }))} />
                     </div>
                 </section>

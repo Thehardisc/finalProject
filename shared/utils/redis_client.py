@@ -41,3 +41,4 @@ class RedisClient:
     async def close(self):
         if self.redis:
             await self.redis.aclose()
+            self.redis = None

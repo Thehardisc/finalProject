@@ -11,4 +11,4 @@ async def process_emotion_event(session, data: dict) -> None:
         reasoning_json=   data.get("reasoning"),
         pipeline_log_json=data.get("pipeline_log")
     )
-    session.add(analysis)
+    session.merge(analysis)

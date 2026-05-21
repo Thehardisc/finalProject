@@ -104,21 +104,6 @@ services:
     volumes:
       - hf_cache:/root/.cache/huggingface
 
-  emojinet_service:
-    build:
-      context: .
-      dockerfile: emojinet_service/Dockerfile
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - emotion_net
-    environment:
-      REDIS_HOST: redis
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
-      REDIS_PORT: 6379
 
   bert_service:
     build:

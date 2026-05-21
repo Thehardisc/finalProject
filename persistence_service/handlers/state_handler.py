@@ -46,8 +46,12 @@ def calculate_sentiment_velocity(session, conversation_id: str, limit: int = 5) 
 
 async def process_state_event(session, data: dict) -> None:
     conversation_id = data.get("conversation_id")
-    state_json      = data.get("conversation_state", "{}")
-    state_obj       = json.loads(state_json)
+    state_json = data.get("conversation_state", "{}")
+    try:
+        state_obj = json.loads(state_json)
+    except (json.JSONDecodeError, TypeError):
+        logger.warning(f"Malformed conversation_state JSON for {conversation_id}, using empty state.")
+        state_obj = {}
 
     escalation_score = calculate_sentiment_velocity(session, conversation_id)
 
