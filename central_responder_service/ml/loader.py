@@ -4,6 +4,7 @@ ml/loader.py — Load and validate the trained meta-learner model from disk.
 import os
 import json
 import pickle
+import hashlib
 import numpy as np
 from typing import Optional
 
@@ -19,11 +20,17 @@ DEFAULT_META_PATH  = DEFAULT_MODEL_PATH.replace(".pkl", "_meta.json")
 def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
     """
     Attempt to load the trained sklearn Pipeline from disk.
+    Verifies SHA-256 integrity before unpickling.
     Returns the model or None — never raises.
     """
     try:
         if not os.path.exists(model_path):
             logger.warning(f"No model file at '{model_path}'. Fallback mode will be used.")
+            return None
+
+        # ── Integrity check (S4) ──────────────────────────────────────────────
+        if not _verify_checksum(model_path):
+            logger.warning("Model file failed SHA-256 integrity check. Fallback mode.")
             return None
 
         with open(model_path, 'rb') as f:
@@ -52,7 +59,51 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
         return None
 
 
+def _verify_checksum(model_path: str) -> bool:
+    """
+    Check that a .sha256 sidecar file exists and matches the model file.
+    If no sidecar exists, the check passes (first-ever load or pre-existing model).
+    Returns True if OK, False if tampered.
+    """
+    checksum_path = model_path + ".sha256"
+    if not os.path.exists(checksum_path):
+        # No sidecar yet — first load, write one now so future loads are checked.
+        try:
+            digest = _sha256(model_path)
+            with open(checksum_path, "w") as f:
+                f.write(digest)
+            logger.info(f"SHA-256 sidecar written for '{model_path}'.")
+        except Exception as e:
+            logger.warning(f"Could not write checksum sidecar: {e}")
+        return True  # trust the first load
+
+    try:
+        expected = open(checksum_path).read().strip()
+        actual   = _sha256(model_path)
+        if actual != expected:
+            logger.error(
+                f"INTEGRITY VIOLATION: model hash mismatch!\n"
+                f"  Expected: {expected}\n"
+                f"  Actual:   {actual}"
+            )
+            return False
+        return True
+    except Exception as e:
+        logger.warning(f"Checksum verification failed: {e}. Allowing load.")
+        return True
+
+
+def _sha256(path: str) -> str:
+    """Compute the SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _log_metadata():
+
     """Log training metadata if the meta JSON file exists."""
     try:
         if os.path.exists(DEFAULT_META_PATH):

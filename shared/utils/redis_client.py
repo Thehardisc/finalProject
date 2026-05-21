@@ -3,29 +3,31 @@ import redis.asyncio as redis
 from redis.asyncio.connection import ConnectionPool
 import json
 
+STREAM_MAXLEN = int(os.getenv("REDIS_STREAM_MAXLEN", 10_000))
+
+
 class RedisClient:
     def __init__(self):
-        self.host = os.getenv("REDIS_HOST", "localhost")
-        self.port = int(os.getenv("REDIS_PORT", 6379))
-        self.redis = None
+        self.host     = os.getenv("REDIS_HOST",     "localhost")
+        self.port     = int(os.getenv("REDIS_PORT", 6379))
+        self.password = os.getenv("REDIS_PASSWORD", None)  # D1: optional auth
+        self.redis    = None
 
     async def connect(self):
         pool = ConnectionPool(
             host=self.host,
             port=self.port,
+            password=self.password,      # D1: passed through; None = no auth
             decode_responses=True,
             max_connections=20,
         )
         self.redis = redis.Redis(connection_pool=pool)
-        # Explicit ping to fail fast if Redis is not reachable at startup
         await self.redis.ping()
 
     async def publish_event(self, stream_key: str, event_data: dict):
         if not self.redis:
             await self.connect()
 
-        # Prepare data for Redis: flat dict where values are strings/numbers.
-        # Nested dicts/lists must be serialized to JSON strings.
         prepared_data = {}
         for k, v in event_data.items():
             if isinstance(v, (dict, list)):
@@ -33,7 +35,8 @@ class RedisClient:
             else:
                 prepared_data[k] = v
 
-        await self.redis.xadd(stream_key, prepared_data)
+        # D6: cap stream length so memory never grows unbounded
+        await self.redis.xadd(stream_key, prepared_data, maxlen=STREAM_MAXLEN, approximate=True)
 
     async def close(self):
         if self.redis:

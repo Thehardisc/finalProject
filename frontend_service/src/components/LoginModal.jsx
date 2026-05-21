@@ -1,7 +1,5 @@
 import React, { useState } from 'react';
-import axios from 'axios';
-
-const API_BASE = 'http://localhost:8001';
+import { authAPI } from '../api/client';
 
 /**
  * LoginModal
@@ -50,7 +48,9 @@ export default function LoginModal({ onSuccess }) {
                 ? { email: email.trim(), first_name: firstName.trim(), last_name: lastName.trim(), password }
                 : { email: email.trim(), password };
                 
-            const res = await axios.post(`${API_BASE}${endpoint}`, payload);
+            const res = tab === 'register'
+                ? await authAPI.register(payload)
+                : await authAPI.login(payload);
             onSuccess(res.data);
         } catch (err) {
             const detail = err.response?.data?.detail;

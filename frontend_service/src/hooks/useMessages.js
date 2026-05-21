@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import axios from 'axios';
-import { API_BASE } from '../constants/emotions';
+import { usersAPI, feedbackAPI } from '../api/client';
 
 /**
  * useMessages
@@ -62,7 +61,7 @@ export function useMessages(currentUser, activeConversationId,
     const fetchVibe = async () => {
         if (!activeConversationId) return;
         try {
-            const stateRes = await axios.get(`${API_BASE}/conversation/${activeConversationId}/state`);
+            const stateRes = await usersAPI.conversationState(activeConversationId);
             if (stateRes.data) {
                 setVibeAnalysis({
                     valence:     parseFloat(stateRes.data.average_valence || 0),
@@ -100,7 +99,7 @@ export function useMessages(currentUser, activeConversationId,
     // ── Feedback ──────────────────────────────────────────────────────────────
     const handleFeedback = async (msgId, newLabel) => {
         try {
-            await axios.post(`${API_BASE}/message/${msgId}/feedback`, { label: newLabel });
+            await feedbackAPI.post(msgId, newLabel);
             setMessages(prev => prev.map(m =>
                 m.id === msgId ? { ...m, verified: true, feedbackLabel: newLabel } : m
             ));
@@ -121,9 +120,7 @@ export function useMessages(currentUser, activeConversationId,
         const fetchInitialState = async () => {
             if (!activeConversationId) return;
             try {
-                const res = await axios.get(
-                    `${API_BASE}/conversation/${activeConversationId}/messages?limit=50`
-                );
+                const res = await usersAPI.messages(activeConversationId, 50);
                 if (res.data?.length > 0) {
                     const historyMsgs = res.data.slice().reverse().map(m => {
                         const parsed = parseAnalysis(m);

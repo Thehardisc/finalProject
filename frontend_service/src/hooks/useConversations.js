@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import axios from 'axios';
-import { API_BASE } from '../constants/emotions';
+import { usersAPI } from '../api/client';
 
 /**
  * useConversations
@@ -16,8 +15,8 @@ export function useConversations(currentUser) {
         const fetchChats = async () => {
             try {
                 const [chatsRes, usersRes] = await Promise.all([
-                    axios.get(`${API_BASE}/conversations/${currentUser.user_id}`),
-                    axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`)
+                    usersAPI.myConversations(currentUser.user_id),
+                    usersAPI.list(currentUser.user_id)
                 ]);
                 setConversations(chatsRes.data || []);
                 setGlobalUsers(usersRes.data   || []);
@@ -32,7 +31,7 @@ export function useConversations(currentUser) {
 
     const handleCreateChat = async (targetId) => {
         try {
-            const res = await axios.post(`${API_BASE}/conversations`, {
+            const res = await usersAPI.createConversation({
                 user_id:        currentUser.user_id,
                 target_user_id: targetId
             });

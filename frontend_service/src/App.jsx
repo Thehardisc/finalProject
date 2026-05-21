@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler } from 'chart.js';
-import axios from 'axios';
+import { authAPI, systemAPI, WS_BASE } from './api/client';
 import LoginModal from './components/LoginModal';
 import AdminDashboard from './components/AdminDashboard';
-import { EMOTION_COLORS, API_BASE } from './constants/emotions';
+import { EMOTION_COLORS } from './constants/emotions';
 import { useSystemReadiness } from './hooks/useSystemReadiness';
 import { useConversations }   from './hooks/useConversations';
 import { useMessages }        from './hooks/useMessages';
@@ -14,7 +14,6 @@ import AnalyticsView          from './views/AnalyticsView';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Title, Filler);
 
-axios.defaults.withCredentials = true;
 
 function App() {
     const [view,                setView]                = useState('live');
@@ -58,7 +57,7 @@ function App() {
         const verifySession = async () => {
             if (!currentUser) {
                 try {
-                    const res = await axios.get(`${API_BASE}/auth/me`);
+                    const res = await authAPI.me();
                     setCurrentUser({
                         user_id:      res.data.user_id,
                         display_name: res.data.display_name,
@@ -75,7 +74,7 @@ function App() {
     // ── Analytics fetch ─────────────────────────────────────────────────────
     useEffect(() => {
         if (view === 'analytics') {
-            axios.get(`${API_BASE}/analytics/calibration`)
+            systemAPI.calibration()
                 .then(r => setAnalyticsData(r.data))
                 .catch(e => console.error('Failed to fetch analytics', e));
         }
@@ -87,7 +86,7 @@ function App() {
                          email: data.email, role: data.role });
 
     const handleLogout = async () => {
-        try { await axios.post(`${API_BASE}/auth/logout`); } catch(e) {}
+        try { await authAPI.logout(); } catch(e) {}
         setCurrentUser(null);
         setMessages([]);
         setActiveConversationId(null);
