@@ -251,6 +251,25 @@ services:
     networks:
       - emotion_net
 
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    ports:
+      - "6333:6333"
+    networks:
+      - emotion_net
+
+  context_engine_service:
+    build:
+      context: ./context_engine_service
+    environment:
+      - REDIS_HOST=redis
+      - QDRANT_HOST=qdrant
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - emotion_net
+
 networks:
   emotion_net:
     driver: bridge
