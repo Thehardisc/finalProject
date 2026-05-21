@@ -12,13 +12,12 @@ function timeAgo(id) {
   const ts = typeof id === 'number' ? id : parseInt(id, 10);
   if (isNaN(ts) || ts < 1e12) return '';
   const diff = Date.now() - ts;
-  if (diff < 60000)   return 'now';
-  if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
-  if (diff < 86400000)return `${Math.floor(diff / 3600000)}h`;
+  if (diff < 60000)    return 'now';
+  if (diff < 3600000)  return `${Math.floor(diff / 60000)}m`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
   return `${Math.floor(diff / 86400000)}d`;
 }
 
-// Semi-transparent gradient from top-3 emotion weights — no opacity issue
 function bubbleGradient(emotionDict) {
   const entries = Object.entries(emotionDict)
     .filter(([, v]) => v > 0.03)
@@ -51,11 +50,11 @@ function buildDemoMessages(myName, otherName) {
           final_dominant_emotion: 'annoyance', final_valence: 0.42,
           meta_confidence: 0.81,
           bert_emotions: [
-            { label: 'annoyance',    score: 0.48 },
-            { label: 'disgust',      score: 0.22 },
-            { label: 'disapproval',  score: 0.15 },
-            { label: 'neutral',      score: 0.10 },
-            { label: 'joy',          score: 0.05 },
+            { label: 'annoyance',   score: 0.48 },
+            { label: 'disgust',     score: 0.22 },
+            { label: 'disapproval', score: 0.15 },
+            { label: 'neutral',     score: 0.10 },
+            { label: 'joy',         score: 0.05 },
           ],
           logic_map: { VADER: 0.12, BERT: 0.28, GoEmotions: 0.15, EmojiNet: 0.38, Context: 0.07 },
           sender_id: 'demo-other',
@@ -73,11 +72,11 @@ function buildDemoMessages(myName, otherName) {
           final_dominant_emotion: 'joy', final_valence: 0.94,
           meta_confidence: 0.93,
           bert_emotions: [
-            { label: 'joy',         score: 0.62 },
-            { label: 'excitement',  score: 0.24 },
-            { label: 'love',        score: 0.08 },
-            { label: 'admiration',  score: 0.04 },
-            { label: 'neutral',     score: 0.02 },
+            { label: 'joy',        score: 0.62 },
+            { label: 'excitement', score: 0.24 },
+            { label: 'love',       score: 0.08 },
+            { label: 'admiration', score: 0.04 },
+            { label: 'neutral',    score: 0.02 },
           ],
           logic_map: { VADER: 0.38, BERT: 0.22, GoEmotions: 0.24, EmojiNet: 0.12, Context: 0.04 },
           sender_id: 'demo-me',
@@ -94,11 +93,11 @@ function buildDemoMessages(myName, otherName) {
           final_dominant_emotion: 'sadness', final_valence: -0.68,
           meta_confidence: 0.79,
           bert_emotions: [
-            { label: 'sadness',         score: 0.45 },
-            { label: 'fear',            score: 0.22 },
-            { label: 'disappointment',  score: 0.18 },
-            { label: 'nervousness',     score: 0.10 },
-            { label: 'confusion',       score: 0.05 },
+            { label: 'sadness',        score: 0.45 },
+            { label: 'fear',           score: 0.22 },
+            { label: 'disappointment', score: 0.18 },
+            { label: 'nervousness',    score: 0.10 },
+            { label: 'confusion',      score: 0.05 },
           ],
           logic_map: { VADER: 0.30, BERT: 0.32, GoEmotions: 0.26, EmojiNet: 0.02, Context: 0.10 },
           context_shift: { type: 'Context Shift', from: 'joy', to: 'sadness', significance: 'High' },
@@ -183,7 +182,7 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
 
 // ── MsgBubble ─────────────────────────────────────────────────────────────────
 
-function MsgBubble({ msg, isOwn, onClick, isRegenerating }) {
+function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
   const [hovered, setHovered] = useState(false);
 
   const bert = msg.analysis?.data?.bert_emotions;
@@ -194,7 +193,6 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating }) {
   const dom    = msg.analysis?.data?.final_dominant_emotion;
   const domRgb = dom ? emotionRgb(dom) : null;
 
-  // Gradient background for own messages, plain for received
   const ownBg    = hasAnalysis ? (bubbleGradient(emotionDict) || 'rgba(0,119,255,0.10)') : 'rgba(0,119,255,0.10)';
   const borderClr = isOwn
     ? (domRgb ? `rgba(${domRgb},.35)` : 'rgba(0,119,255,.25)')
@@ -210,6 +208,7 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating }) {
         alignItems: isOwn ? 'flex-end' : 'flex-start',
         marginBottom: 3,
         cursor: msg.analysis ? 'pointer' : 'default',
+        position: 'relative',
       }}
     >
       <div style={{
@@ -218,7 +217,6 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating }) {
         borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
         background: isOwn ? ownBg : '#f0f0f0',
         border: `1.5px solid ${borderClr}`,
-        // TEXT ALWAYS READABLE — no mix-blend-mode
         fontSize: '0.94rem', lineHeight: 1.5,
         color: '#1c1c2e',
         wordBreak: 'break-word',
@@ -235,7 +233,6 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating }) {
         outlineOffset: 1,
         transition: 'outline-color .15s',
       }}>
-        {/* Specular highlight on own bubbles */}
         {isOwn && (
           <div style={{
             position: 'absolute', top: 0, left: 0, right: 0, height: '38%',
@@ -256,7 +253,6 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating }) {
         ) : msg.text}
       </div>
 
-      {/* Emotion tag + click hint */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
         {dom && dom.toLowerCase() !== 'neutral' && (
           <div style={{
@@ -273,6 +269,120 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating }) {
         {!msg.analysis && msg.sender === 'user' && (
           <div style={{ fontSize: '0.64rem', color: '#9ca3af' }}>Analyzing…</div>
         )}
+        {isOwn && hovered && onDelete && (
+          <button
+            onClick={e => { e.stopPropagation(); onDelete(msg.id); }}
+            style={{
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontSize: '0.65rem', color: '#ef4444', padding: '0 2px',
+              lineHeight: 1, opacity: 0.7,
+            }}
+            title="Delete message"
+          >✕</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Group Modal ───────────────────────────────────────────────────────────────
+
+function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
+  const [groupName, setGroupName]     = useState('');
+  const [selected, setSelected]       = useState([]);
+  const [search, setSearch]           = useState('');
+  const [error, setError]             = useState('');
+  const [submitting, setSubmitting]   = useState(false);
+
+  const eligible = globalUsers.filter(u =>
+    u.user_id !== currentUser?.user_id &&
+    u.display_name?.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const toggle = (uid) =>
+    setSelected(prev => prev.includes(uid) ? prev.filter(x => x !== uid) : [...prev, uid]);
+
+  const handleSubmit = async () => {
+    if (!groupName.trim()) { setError('Group name is required.'); return; }
+    if (selected.length === 0) { setError('Add at least one member.'); return; }
+    setSubmitting(true);
+    try {
+      await onConfirm(groupName.trim(), selected);
+      onClose();
+    } catch (e) {
+      setError(e?.response?.data?.detail || e.message || 'Failed to create group.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.50)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
+      onClick={onClose}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{ background: '#fff', borderRadius: 20, width: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,.20)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
+      >
+        <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#1c1c2e', lineHeight: 1 }}>✕</button>
+          <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>New Group</span>
+          <div style={{ width: 24 }} />
+        </div>
+
+        <div style={{ padding: '14px 20px 0' }}>
+          <input
+            autoFocus
+            placeholder="Group name…"
+            value={groupName}
+            onChange={e => setGroupName(e.target.value)}
+            style={{ width: '100%', boxSizing: 'border-box', background: '#f3f4f6', border: 'none', borderRadius: 12, padding: '10px 14px', fontSize: '0.93rem', color: '#1c1c2e', outline: 'none' }}
+          />
+        </div>
+
+        <div style={{ padding: '10px 20px 4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+            <svg width="15" height="15" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input
+              placeholder="Search people…"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: '#1c1c2e', flex: 1 }}
+            />
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 8px' }}>
+          {eligible.map(u => (
+            <button key={u.user_id} onClick={() => toggle(u.user_id)}
+              style={{ width: '100%', background: selected.includes(u.user_id) ? '#f0f6ff' : 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left', transition: 'background .12s' }}
+              onMouseOver={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = '#f8f9fa'; }}
+              onMouseOut={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = 'none'; }}
+            >
+              <Avatar name={u.display_name} size={36} rgb="0,119,255" />
+              <span style={{ flex: 1, fontWeight: 500, fontSize: '0.93rem', color: '#1c1c2e' }}>{u.display_name}</span>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${selected.includes(u.user_id) ? '#0077ff' : '#d1d5db'}`, background: selected.includes(u.user_id) ? '#0077ff' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: '#fff', transition: 'all .15s' }}>
+                {selected.includes(u.user_id) ? '✓' : ''}
+              </div>
+            </button>
+          ))}
+          {eligible.length === 0 && (
+            <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.88rem' }}>No users found.</div>
+          )}
+        </div>
+
+        {error && <div style={{ padding: '0 20px 8px', fontSize: '0.82rem', color: '#ef4444' }}>{error}</div>}
+
+        <div style={{ padding: '12px 20px 20px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>
+            Cancel
+          </button>
+          <button onClick={handleSubmit} disabled={submitting}
+            style={{ flex: 1, background: '#0077ff', color: '#fff', border: 'none', borderRadius: 12, padding: '11px', cursor: submitting ? 'wait' : 'pointer', fontWeight: 700, fontSize: '0.88rem', opacity: submitting ? 0.7 : 1 }}>
+            {submitting ? 'Creating…' : `Create (${selected.length} members)`}
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -288,6 +398,10 @@ export default function IGDashboard({
   activeConversationId,
   onSelectConversation,
   onCreateChat,
+  onCreateGroup,
+  onAddMember,
+  onRemoveMember,
+  onDeleteMessage,
   onGoToAnalytics,
   onLogout,
   status,
@@ -301,38 +415,67 @@ export default function IGDashboard({
   onInjectDemo,
   regeneratingIds = new Set(),
 }) {
-  const [search, setSearch]               = useState('');
-  const [showCompose, setShowCompose]     = useState(false);
-  const [composeSearch, setComposeSearch] = useState('');
+  const [search, setSearch]                   = useState('');
+  const [showCompose, setShowCompose]         = useState(false);
+  const [showGroupModal, setShowGroupModal]   = useState(false);
+  const [composeSearch, setComposeSearch]     = useState('');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [selectedMsg, setSelectedMsg]     = useState(null);
+  const [selectedMsg, setSelectedMsg]         = useState(null);
+  const [memberPanelOpen, setMemberPanelOpen] = useState(false);
+  const [memberError, setMemberError]         = useState('');
   const messagesEndRef = useRef(null);
   const inputRef       = useRef(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [messages]);
 
   useEffect(() => {
     if (activeConversationId) inputRef.current?.focus();
   }, [activeConversationId]);
 
-  // Close drawer when conversation changes
-  useEffect(() => { setSelectedMsg(null); }, [activeConversationId]);
+  useEffect(() => { setSelectedMsg(null); setMemberPanelOpen(false); setMemberError(''); }, [activeConversationId]);
 
-  const filteredConvs  = conversations.filter(c =>
-    c.other_display_name?.toLowerCase().includes(search.toLowerCase())
-  );
+  // Conversation filtering — works for both direct (other_display_name) and group (name)
+  const filteredConvs = conversations.filter(c => {
+    const label = c.type === 'group' ? c.name : c.other_display_name;
+    return label?.toLowerCase().includes(search.toLowerCase());
+  });
+
   const filteredUsers = globalUsers.filter(u =>
     u.display_name?.toLowerCase().includes(composeSearch.toLowerCase())
   );
 
   const activeConv  = conversations.find(c => c.conversation_id === activeConversationId);
+  const isGroup     = activeConv?.type === 'group';
+  const isCreator   = isGroup && activeConv?.creator_user_id === currentUser?.user_id;
   const activeRgb   = emotionRgb(activeConv?.dominant_emotion);
   const dominant    = currentAnalysis?.data?.final_dominant_emotion;
   const dominantRgb = dominant ? emotionRgb(dominant) : null;
 
+  // For groups: label + avatar use group name; for direct: use other_display_name
+  const convLabel = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
+  const activeLabel = activeConv ? convLabel(activeConv) : '';
+
   const rightPanelOpen = !!activeConversationId;
+
+  const handleAddMember = async (userId) => {
+    setMemberError('');
+    try {
+      await onAddMember(activeConversationId, userId);
+    } catch (e) {
+      setMemberError(e?.response?.data?.detail || e.message || 'Failed to add member.');
+    }
+  };
+
+  const handleRemoveMember = async (userId) => {
+    setMemberError('');
+    try {
+      await onRemoveMember(activeConversationId, userId);
+    } catch (e) {
+      setMemberError(e?.response?.data?.detail || e.message || 'Failed to remove member.');
+    }
+  };
 
   return (
     <div style={{
@@ -345,23 +488,12 @@ export default function IGDashboard({
       {/* ── Compose Modal ─────────────────────────────────────────────── */}
       {showCompose && (
         <div
-          style={{
-            position: 'fixed', inset: 0, zIndex: 200,
-            background: 'rgba(0,0,0,.50)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            backdropFilter: 'blur(8px)',
-          }}
+          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.50)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
           onClick={() => { setShowCompose(false); setComposeSearch(''); }}
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{
-              background: '#fff', borderRadius: 20, width: 400, maxHeight: '70vh',
-              display: 'flex', flexDirection: 'column',
-              boxShadow: '0 20px 60px rgba(0,0,0,.20)',
-              overflow: 'hidden',
-              animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both',
-            }}
+            style={{ background: '#fff', borderRadius: 20, width: 400, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,.20)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
           >
             <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <button onClick={() => { setShowCompose(false); setComposeSearch(''); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#1c1c2e', lineHeight: 1 }}>✕</button>
@@ -407,12 +539,18 @@ export default function IGDashboard({
         </div>
       )}
 
+      {/* ── Group Creation Modal ───────────────────────────────────────── */}
+      {showGroupModal && (
+        <GroupModal
+          globalUsers={globalUsers}
+          currentUser={currentUser}
+          onConfirm={onCreateGroup}
+          onClose={() => setShowGroupModal(false)}
+        />
+      )}
+
       {/* ── Left Sidebar ──────────────────────────────────────────────── */}
-      <div style={{
-        width: 360, borderRight: '1px solid #efefef',
-        display: 'flex', flexDirection: 'column',
-        background: '#ffffff', flexShrink: 0,
-      }}>
+      <div style={{ width: 360, borderRight: '1px solid #efefef', display: 'flex', flexDirection: 'column', background: '#ffffff', flexShrink: 0 }}>
         {/* Header */}
         <div style={{ padding: '20px 20px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div
@@ -434,14 +572,16 @@ export default function IGDashboard({
                     <span style={{ display: 'inline-block', marginTop: 4, background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#fff', fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: 6, letterSpacing: '.06em' }}>ADMIN</span>
                   )}
                 </div>
-                <button onClick={() => { setShowProfileMenu(false); onGoToAnalytics(); }} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
+                <button onClick={() => { setShowProfileMenu(false); onGoToAnalytics(); }}
+                  style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
                   onMouseOver={e => e.currentTarget.style.background = '#f8f9fa'}
                   onMouseOut={e => e.currentTarget.style.background = 'none'}
                 >
                   <span>✨</span> Analytics
                 </button>
                 <div style={{ borderTop: '1px solid #f0f0f0' }}>
-                  <button onClick={onLogout} style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: 10 }}
+                  <button onClick={onLogout}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: 10 }}
                     onMouseOver={e => e.currentTarget.style.background = '#fff5f5'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
                   >
@@ -497,8 +637,9 @@ export default function IGDashboard({
           )}
 
           {filteredConvs.map(conv => {
-            const rgb    = emotionRgb(conv.dominant_emotion);
+            const rgb      = emotionRgb(conv.dominant_emotion);
             const isActive = conv.conversation_id === activeConversationId;
+            const label    = convLabel(conv);
             const lastMsg  = messages.length > 0 && isActive
               ? messages[messages.length - 1]?.text
               : conv.dominant_emotion || 'Start chatting';
@@ -516,10 +657,17 @@ export default function IGDashboard({
                 onMouseOver={e => { if (!isActive) e.currentTarget.style.background = '#f8f9fa'; }}
                 onMouseOut={e => { if (!isActive) e.currentTarget.style.background = 'none'; }}
               >
-                <Avatar name={conv.other_display_name} size={52} rgb={rgb} online={onlineUsers.has(conv.other_user_id)} />
+                <Avatar name={label} size={52} rgb={rgb} online={conv.type !== 'group' && onlineUsers.has(conv.other_user_id)} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.93rem', color: '#1c1c2e' }}>{conv.other_display_name}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.93rem', color: '#1c1c2e' }}>{label}</span>
+                      {conv.type === 'group' && (
+                        <span style={{ fontSize: '0.65rem', background: '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6, letterSpacing: '.04em' }}>
+                          GROUP · {conv.member_count || 0}
+                        </span>
+                      )}
+                    </div>
                     <span style={{ fontSize: '0.72rem', color: '#9ca3af', flexShrink: 0 }}>{timeAgo(conv.last_message_time || conv.conversation_id)}</span>
                   </div>
                   <div style={{ fontSize: '0.82rem', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
@@ -546,12 +694,21 @@ export default function IGDashboard({
             boxShadow: '0 4px 16px rgba(0,119,255,.25)', transition: 'opacity .15s, transform .12s',
           }}
             onMouseOver={e => { e.currentTarget.style.opacity = '.9'; e.currentTarget.style.transform = 'scale(1.01)'; }}
-            onMouseOut={e => { e.currentTarget.style.opacity = '1';  e.currentTarget.style.transform = 'scale(1)'; }}
+            onMouseOut={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = 'scale(1)'; }}
           >
             <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Message
           </button>
-          <button onClick={onGoToAnalytics} style={{ background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
+          <button onClick={() => setShowGroupModal(true)}
+            style={{ background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
+            title="New Group Chat"
+            onMouseOver={e => e.currentTarget.style.background = '#e5e7eb'}
+            onMouseOut={e => e.currentTarget.style.background = '#f3f4f6'}
+          >
+            👥
+          </button>
+          <button onClick={onGoToAnalytics}
+            style={{ background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
             title="View Insights"
             onMouseOver={e => e.currentTarget.style.background = '#e5e7eb'}
             onMouseOut={e => e.currentTarget.style.background = '#f3f4f6'}
@@ -577,43 +734,48 @@ export default function IGDashboard({
         ) : (
           <>
             {/* Chat header */}
-            <div style={{
-              padding: '14px 20px', borderBottom: '1px solid #efefef',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              background: '#ffffff', position: 'sticky', top: 0, zIndex: 10,
-            }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid #efefef', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#ffffff', position: 'sticky', top: 0, zIndex: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <Avatar name={activeConv?.other_display_name} size={42} rgb={activeRgb} online={onlineUsers.has(activeConv?.other_user_id)} />
+                <Avatar name={activeLabel} size={42} rgb={activeRgb} online={!isGroup && onlineUsers.has(activeConv?.other_user_id)} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1c1c2e' }}>{activeConv?.other_display_name}</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {activeLabel}
+                    {isGroup && (
+                      <span style={{ fontSize: '0.65rem', background: '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6 }}>
+                        GROUP · {activeConv?.member_count || 0}
+                      </span>
+                    )}
+                  </div>
                   {dominant ? (
                     <div style={{ fontSize: '0.73rem', fontWeight: 600, color: dominantRgb ? `rgb(${dominantRgb})` : '#22c55e', display: 'flex', alignItems: 'center', gap: 4 }}>
                       <span style={{ width: 7, height: 7, borderRadius: '50%', background: dominantRgb ? `rgb(${dominantRgb})` : '#22c55e', display: 'inline-block' }} />
                       {dominant}
                     </div>
-                  ) : onlineUsers.has(activeConv?.other_user_id) ? (
+                  ) : !isGroup && onlineUsers.has(activeConv?.other_user_id) ? (
                     <div style={{ fontSize: '0.73rem', color: '#22c55e' }}>Active now</div>
                   ) : (
-                    <div style={{ fontSize: '0.73rem', color: '#9ca3af' }}>Offline</div>
+                    <div style={{ fontSize: '0.73rem', color: '#9ca3af' }}>{isGroup ? 'Group chat' : 'Offline'}</div>
                   )}
                 </div>
               </div>
 
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                {/* Inject Demo Data — discreet */}
+                {isGroup && (
+                  <button onClick={() => setMemberPanelOpen(p => !p)}
+                    title="Manage members"
+                    style={{ background: memberPanelOpen ? '#f0f6ff' : 'none', border: `1px solid ${memberPanelOpen ? '#0077ff' : 'rgba(0,0,0,.10)'}`, borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.75rem', color: memberPanelOpen ? '#0077ff' : '#6b7280', fontWeight: 500, transition: 'all .15s' }}>
+                    👥 Members
+                  </button>
+                )}
+
                 {onInjectDemo && (
                   <button
                     onClick={() => {
-                      const demos = buildDemoMessages(currentUser.display_name, activeConv?.other_display_name || 'Other');
+                      const demos = buildDemoMessages(currentUser.display_name, activeLabel || 'Other');
                       onInjectDemo(demos);
                     }}
                     title="Inject demo conversation with pre-built ML analysis"
-                    style={{
-                      background: 'rgba(0,0,0,.04)', border: '1px solid rgba(0,0,0,.08)',
-                      borderRadius: 8, padding: '5px 10px', cursor: 'pointer',
-                      fontSize: '0.70rem', color: '#9ca3af', fontWeight: 500,
-                      transition: 'background .12s, color .12s',
-                    }}
+                    style={{ background: 'rgba(0,0,0,.04)', border: '1px solid rgba(0,0,0,.08)', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.70rem', color: '#9ca3af', fontWeight: 500, transition: 'background .12s, color .12s' }}
                     onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#374151'; }}
                     onMouseOut={e => { e.currentTarget.style.background = 'rgba(0,0,0,.04)'; e.currentTarget.style.color = '#9ca3af'; }}
                   >
@@ -621,8 +783,8 @@ export default function IGDashboard({
                   </button>
                 )}
 
-                {/* Analytics info icon */}
-                <button onClick={onGoToAnalytics} title="View Insights" style={{ background: 'none', border: 'none', borderRadius: 10, width: 38, height: 38, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1c1c2e', transition: 'background .12s' }}
+                <button onClick={onGoToAnalytics} title="View Insights"
+                  style={{ background: 'none', border: 'none', borderRadius: 10, width: 38, height: 38, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1c1c2e', transition: 'background .12s' }}
                   onMouseOver={e => e.currentTarget.style.background = '#f3f4f6'}
                   onMouseOut={e => e.currentTarget.style.background = 'none'}
                 >
@@ -631,13 +793,61 @@ export default function IGDashboard({
               </div>
             </div>
 
+            {/* Member panel for groups */}
+            {isGroup && memberPanelOpen && (
+              <div style={{ borderBottom: '1px solid #efefef', padding: '12px 20px', background: '#fafafa', maxHeight: 220, overflowY: 'auto' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.82rem', color: '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>
+                  Members ({activeConv?.member_count || 0})
+                </div>
+                {(activeConv?.members || []).map(m => {
+                  const isMe      = m.user_id === currentUser?.user_id;
+                  const isOwner   = m.user_id === activeConv?.creator_user_id;
+                  return (
+                    <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+                      <Avatar name={m.display_name} size={28} rgb="0,119,255" online={onlineUsers.has(m.user_id)} />
+                      <span style={{ flex: 1, fontSize: '0.88rem', color: '#1c1c2e' }}>{m.display_name}{isMe ? ' (you)' : ''}</span>
+                      {isOwner && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#d97706', padding: '1px 6px', borderRadius: 6, fontWeight: 700 }}>★ Creator</span>}
+                      {isCreator && !isMe && (
+                        <button onClick={() => handleRemoveMember(m.user_id)}
+                          style={{ background: 'none', border: '1px solid #fca5a5', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', fontSize: '0.72rem', color: '#ef4444', transition: 'background .12s' }}
+                          onMouseOver={e => e.currentTarget.style.background = '#fff5f5'}
+                          onMouseOut={e => e.currentTarget.style.background = 'none'}
+                        >Remove</button>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {isCreator && (
+                  <div style={{ marginTop: 10, borderTop: '1px solid #efefef', paddingTop: 10 }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.78rem', color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>Add member</div>
+                    {globalUsers
+                      .filter(u => !(activeConv?.members || []).some(m => m.user_id === u.user_id))
+                      .map(u => (
+                        <button key={u.user_id} onClick={() => handleAddMember(u.user_id)}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', padding: '5px 0', cursor: 'pointer', textAlign: 'left' }}
+                          onMouseOver={e => e.currentTarget.style.opacity = '0.7'}
+                          onMouseOut={e => e.currentTarget.style.opacity = '1'}
+                        >
+                          <Avatar name={u.display_name} size={22} rgb="0,119,255" />
+                          <span style={{ fontSize: '0.85rem', color: '#374151' }}>{u.display_name}</span>
+                          <span style={{ fontSize: '0.72rem', color: '#0077ff', marginLeft: 'auto', fontWeight: 600 }}>+ Add</span>
+                        </button>
+                      ))
+                    }
+                  </div>
+                )}
+                {memberError && <div style={{ fontSize: '0.78rem', color: '#ef4444', marginTop: 6 }}>{memberError}</div>}
+              </div>
+            )}
+
             {/* Messages */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {messages.length === 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 12, color: '#9ca3af' }}>
-                  <Avatar name={activeConv?.other_display_name} size={72} rgb={activeRgb} />
+                  <Avatar name={activeLabel} size={72} rgb={activeRgb} />
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1c1c2e', marginBottom: 4 }}>{activeConv?.other_display_name}</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1c1c2e', marginBottom: 4 }}>{activeLabel}</div>
                     <div style={{ fontSize: '0.83rem', color: '#9ca3af' }}>Say hi and start the conversation ✌️</div>
                   </div>
                 </div>
@@ -646,7 +856,9 @@ export default function IGDashboard({
               {messages.map((msg, idx) => {
                 const isOwn    = msg.sender === 'user';
                 const prev     = messages[idx - 1];
-                const showName = !isOwn && (prev?.sender !== 'ai' || idx === 0);
+                // Show sender name for non-own messages, or always in group chats
+                const showName = !isOwn && (prev?.sender !== 'ai' || idx === 0 || isGroup);
+
                 const isRegen  = regeneratingIds.has(msg.id);
 
                 return (
@@ -658,7 +870,7 @@ export default function IGDashboard({
                   }}>
                     {showName && (
                       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, marginBottom: 2 }}>
-                        <Avatar name={activeConv?.other_display_name} size={26} rgb={activeRgb} />
+                        <Avatar name={msg.senderName || activeLabel} size={26} rgb={activeRgb} />
                         <span style={{ fontSize: '0.72rem', color: '#9ca3af', marginBottom: 2 }}>{msg.senderName}</span>
                       </div>
                     )}
@@ -669,25 +881,16 @@ export default function IGDashboard({
                         isOwn={isOwn}
                         isRegenerating={isRegen}
                         onClick={(m) => setSelectedMsg(m)}
+                        onDelete={onDeleteMessage}
                       />
 
-                      {/* Regenerate button */}
                       {msg.analysis && !isRegen && onRegenerateAnalysis && (
                         <button
                           onClick={() => onRegenerateAnalysis(msg.id)}
                           title="Re-run ML pipeline"
-                          style={{
-                            background: 'none', border: '1px solid rgba(0,0,0,.10)',
-                            borderRadius: '50%', width: 24, height: 24, cursor: 'pointer',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: '0.75rem', color: '#9ca3af',
-                            flexShrink: 0, opacity: 0,
-                            transition: 'opacity .15s',
-                          }}
+                          style={{ background: 'none', border: '1px solid rgba(0,0,0,.10)', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: '#9ca3af', flexShrink: 0, opacity: 0, transition: 'opacity .15s' }}
                           className="regen-btn"
-                        >
-                          ↺
-                        </button>
+                        >↺</button>
                       )}
                     </div>
                   </div>
@@ -764,7 +967,6 @@ export default function IGDashboard({
         @keyframes regen-spin {
           to { transform: rotate(360deg); }
         }
-        /* Show regen button on parent row hover */
         div:hover > div > .regen-btn { opacity: 1 !important; }
       `}</style>
     </div>

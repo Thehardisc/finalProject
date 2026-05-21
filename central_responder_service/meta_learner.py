@@ -51,7 +51,7 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             logger.warning("Loaded object is not a valid sklearn Pipeline. Fallback mode.")
             return None
 
-        # Dimension sanity check — ensure it matches our current 96D feature vector
+        # Dimension sanity check — ensure it matches our current 103D feature vector
         try:
             dummy_x = np.zeros((1, FEATURE_DIM))
             model.predict(dummy_x)
@@ -78,14 +78,37 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     Build a fixed-length float32 numpy feature vector from the 4 model output dicts
     PLUS conversation context (previous mood/valence).
 
-    Args:
-        model_outputs: dict keyed by model name.
-        context: Optional dict containing previous state, e.g.:
-            {"avg_valence": 0.5, "prev_emotion": "joy"}
+    Returns np.ndarray of shape (1, 103).
 
-    Returns:
-        np.ndarray of shape (1, 96).
+    Blocks:
+      [0:4]    VADER (4)
+      [4:11]   BERT Ekman (7)
+      [11:39]  GoEmotions (28)
+      [39:67]  EmojiNet (28)
+      [67:96]  Context: valence(1) + one-hot prev emotion(28)
+      [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
+                        goe_margin, bert_goe_agreement,
+                        vader_abs_compound, max_goe_score
     """
+    import math
+    _EPS = 1e-9
+
+    def _entropy(scores, keys):
+        probs = [max(scores.get(k, 0.0), 0.0) for k in keys]
+        total = sum(probs) + _EPS
+        probs = [p / total for p in probs]
+        return float(-sum(p * math.log(p + _EPS) for p in probs))
+
+    def _margin(scores, keys):
+        vals = sorted([scores.get(k, 0.0) for k in keys], reverse=True)
+        return float(vals[0] - vals[1]) if len(vals) >= 2 else (float(vals[0]) if vals else 0.0)
+
+    def _agreement(bert, goe):
+        shared = [l for l in BERT_LABELS if l in EMOTION_LABELS]
+        if not shared:
+            return 0.0
+        return 1.0 if max(shared, key=lambda k: bert.get(k, 0.0)) == max(shared, key=lambda k: goe.get(k, 0.0)) else 0.0
+
     context = context or {}
     vader_scores      = model_outputs.get("vader", {})
     bert_scores       = model_outputs.get("basic_bert", {})
@@ -94,36 +117,37 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
 
     vec = []
 
-    # Block 1: VADER (4 dims)
+    # Block 1: VADER (4)
     for k in VADER_KEYS:
         vec.append(float(vader_scores.get(k, 0.0)))
 
-    # Block 2: BERT Ekman (7 dims)
+    # Block 2: BERT Ekman (7)
     for k in BERT_LABELS:
         vec.append(float(bert_scores.get(k, 0.0)))
 
-    # Block 3: GoEmotions (28 dims, fixed order)
+    # Block 3: GoEmotions (28)
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    # Block 4: EmojiNet mapped to GoEmotions space (28 dims)
+    # Block 4: EmojiNet mapped to GoEmotions space (28)
     for k in EMOTION_LABELS:
         vec.append(float(emojinet_scores.get(k, 0.0)))
 
-    # Block 5: Context Engine (48 dims)
-    context_engine_scores = model_outputs.get("context_engine", {})
-    if "vector" in context_engine_scores:
-        import json
-        try:
-            ce_vec = json.loads(context_engine_scores["vector"])
-            for val in ce_vec:
-                vec.append(float(val))
-        except:
-            for _ in range(48): vec.append(0.0)
-    else:
-        for _ in range(48): vec.append(0.0)
+    # Block 5: Context (29) — valence + one-hot prev emotion
+    vec.append(float(context.get("avg_valence", 0.0)))
+    prev_emo = context.get("prev_emotion", "neutral").lower()
+    for label in EMOTION_LABELS:
+        vec.append(1.0 if label == prev_emo else 0.0)
 
-    # Total should be 115
+    # Block 6: Derived (7)
+    vec.append(_entropy(bert_scores,       BERT_LABELS))
+    vec.append(_entropy(goemotions_scores, EMOTION_LABELS))
+    vec.append(_margin(bert_scores,        BERT_LABELS))
+    vec.append(_margin(goemotions_scores,  EMOTION_LABELS))
+    vec.append(_agreement(bert_scores, goemotions_scores))
+    vec.append(abs(float(vader_scores.get("vader_compound", 0.0))))
+    vec.append(max((goemotions_scores.get(k, 0.0) for k in EMOTION_LABELS), default=0.0))
+
     arr = np.array(vec, dtype=np.float32)
     return arr.reshape(1, -1)
 
@@ -237,13 +261,14 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
         contributions = X_scaled * weights
         
         # 6. Group by block (matching build_feature_vector offsets)
-        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), Context(67-114)
+        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), Context(67-95), Derived(96-102)
         impacts = {
             "VADER":       float(np.sum(contributions[0:4])),
             "BERT":        float(np.sum(contributions[4:11])),
             "GoEmotions":  float(np.sum(contributions[11:39])),
             "EmojiNet":    float(np.sum(contributions[39:67])),
-            "Context":     float(np.sum(contributions[67:115]))
+            "Context":     float(np.sum(contributions[67:96])),
+            "Derived":     float(np.sum(contributions[96:103])),
         }
         
         # Normalize for visualization (Relative Importance)
