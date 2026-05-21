@@ -47,6 +47,10 @@ def init_db(engine):
             # Legacy
             conn.execute(text("ALTER TABLE users ALTER COLUMN username DROP NOT NULL;"))
 
+            # Group chat support
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS name VARCHAR;"))
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS creator_user_id VARCHAR;"))
+
             logger.info("Self-healing schema check complete (including auth columns).")
 
         print("[persistence_service] init_db() SUCCESS", flush=True)

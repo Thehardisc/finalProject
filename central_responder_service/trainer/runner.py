@@ -77,7 +77,10 @@ def run_one_cycle(reload_callback):
                 pct = (i / len(split)) * 100
                 logger.info(f"  [Trainer] {name} Building Features: {i}/{len(split)} ({pct:.0f}%)")
             lids = s.get("labels", [])
-            if not lids or lids[0] >= len(EMOTION_LABELS):
+            if not lids:
+                continue
+            valid_lids = [lid for lid in lids if lid < len(EMOTION_LABELS)]
+            if not valid_lids:
                 continue
             text = s["text"]
             vs = {f"vader_{k}": v for k, v in _vader(vader, text).items()}
@@ -85,12 +88,16 @@ def run_one_cycle(reload_callback):
             gs = _run(goe,  text)
             es = _emojinet(text)
             gs_list.append(gs)
+
+            # Layer 3: pick the label GoEmotions is most confident about
+            # (not blindly labels[0]) — improves label quality for multi-label samples
+            best_lid = max(valid_lids, key=lambda lid: gs.get(EMOTION_LABELS[lid], 0.0))
             synthetic_context = {
                 "avg_valence":  rng.uniform(-1.0, 1.0),
                 "prev_emotion": rng.choice(EMOTION_LABELS)
             }
             X.append(build_fv(vs, bs, gs, es, context=synthetic_context))
-            y.append(EMOTION_LABELS[lids[0]])
+            y.append(EMOTION_LABELS[best_lid])
         pt = (time.time() - t0) / len(X) if X else 0
         logger.info(f"  [Trainer] {name}: {len(X)} samples. Avg {pt*1000:.2f}ms/sample.")
         return X, y, gs_list
@@ -132,17 +139,35 @@ def run_one_cycle(reload_callback):
         return
 
     # ── Train ─────────────────────────────────────────────────────────────────
-    logger.info("⚡ PHASE: Logistic Regression Pipeline Training...")
+    logger.info("⚡ PHASE: Ensemble (Voting) Pipeline Training...")
     from sklearn.linear_model import LogisticRegression
+    from sklearn.ensemble import RandomForestClassifier, VotingClassifier, HistGradientBoostingClassifier
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
     from sklearn.metrics import accuracy_score, f1_score
 
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
-        ('clf', LogisticRegression(max_iter=1000, C=1.0, solver='lbfgs',
-                                   multi_class='multinomial', class_weight='balanced',
-                                   random_state=42))
+        ('clf', VotingClassifier(
+            estimators=[
+                ('lr', LogisticRegression(
+                    max_iter=1000, C=1.0, solver='lbfgs',
+                    multi_class='multinomial', class_weight='balanced',
+                    random_state=42
+                )),
+                ('hgb', HistGradientBoostingClassifier(
+                    max_iter=200, max_depth=6, learning_rate=0.05,
+                    min_samples_leaf=10, random_state=42
+                )),
+                ('rf', RandomForestClassifier(
+                    n_estimators=150, class_weight='balanced',
+                    max_depth=12, min_samples_leaf=5,
+                    random_state=42, n_jobs=-1
+                )),
+            ],
+            voting='soft',
+            n_jobs=-1
+        ))
     ])
     pipeline.fit(np.array(X_tr), y_tr)
 

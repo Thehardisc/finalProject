@@ -11,6 +11,10 @@ async def process_feedback_event(session, data: dict) -> None:
     msg_id = data.get("message_id")
     label  = data.get("ground_truth_emotion")
 
+    if not msg_id or not label:
+        logger.warning(f"Feedback event dropped — missing field(s): message_id={msg_id!r}, label={label!r}")
+        return
+
     if msg_id and label:
         analysis = (session.query(EmotionAnalysis)
                     .filter(EmotionAnalysis.message_id == msg_id).first())

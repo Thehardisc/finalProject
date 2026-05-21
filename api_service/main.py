@@ -104,7 +104,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         })
                         continue
                     sender          = msg_obj.get("sender_id", user_id)
-                    conversation_id = msg_obj.get("conversation_id") or user_id
+                    conversation_id = msg_obj.get("conversation_id")
+                    if not conversation_id:
+                        await websocket.send_json({"type": "error", "message": "conversation_id is required."})
+                        continue
                     event = {
                         "text":            text,
                         "conversation_id": conversation_id,

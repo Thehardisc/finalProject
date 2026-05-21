@@ -6,20 +6,13 @@ import time
 
 from shared.utils.logger import get_logger
 from shared.utils.redis_client import RedisClient
+from shared.constants import EMOTION_LABELS
 
-from ..ml.predictor       import build_feature_vector, predict_with_meta_learner
+from ..ml.predictor        import build_feature_vector, predict_with_meta_learner
 from ..ml.impact_calculator import calculate_feature_impacts
 
 logger = get_logger("central_responder")
 
-# All 27 GoEmotions labels (used for stream validation)
-EMOTION_LABELS = [
-    'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
-    'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval',
-    'disgust', 'embarrassment', 'excitement', 'fear', 'gratitude', 'grief',
-    'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization',
-    'relief', 'remorse', 'sadness', 'surprise', 'neutral'
-]
 
 OUTPUT_STREAM = "emotion_stream"
 

@@ -23,6 +23,10 @@ def detect_emotional_conflicts(vec: np.ndarray) -> Tuple[float, Optional[str]]:
         (sarcasm_score [0.0-1.0], conflict_description [str or None])
     """
     try:
+        # Flatten to 1D so indexing works whether caller passes (103,) or (1,103)
+        if vec.ndim > 1:
+            vec = vec[0]
+
         v_pos = vec[2]
         v_neg = vec[0]
         v_cmp = vec[3]
@@ -43,13 +47,13 @@ def detect_emotional_conflicts(vec: np.ndarray) -> Tuple[float, Optional[str]]:
 
         # Pattern 1: Positive text + eye-roll / negative emoji
         if pos_text_signal > 0.6 and neg_emo_signal > 0.4:
-            sarcasm_score = min(pos_text_signal, neg_emo_signal) * 1.2
+            sarcasm_score = min(min(pos_text_signal, neg_emo_signal) * 1.2, 1.0)
             conflict_desc = ("Cognitive Dissonance: High-fidelity positive text "
                              "paired with dismissive visual cues.")
 
         # Pattern 2: Extreme positive compound + emoji flip
         elif v_cmp > 0.8 and neg_emo_signal > 0.2:
-            sarcasm_score = 0.5 + neg_emo_signal
+            sarcasm_score = min(0.5 + neg_emo_signal, 1.0)
             conflict_desc = "Sarcasm detected: Semantic praise contradicts visual frustration."
 
         # Pattern 3: Passive-aggressive (formal neutral text + emoji tension)

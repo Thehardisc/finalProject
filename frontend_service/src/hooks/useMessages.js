@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { usersAPI, feedbackAPI } from '../api/client';
 
+
 /**
  * useMessages
  * Manages the message list, sending, feedback, history loading, and analysis parsing.
@@ -19,8 +20,16 @@ export function useMessages(currentUser, activeConversationId,
     const getSenderName = (senderId) => {
         if (!senderId) return 'System';
         if (currentUser && senderId === currentUser.user_id) return currentUser.display_name;
-        const conv = conversations.find(c => c.other_user_id === senderId);
-        if (conv) return conv.other_display_name;
+        // Check direct conversation
+        const direct = conversations.find(c => c.type !== 'group' && c.other_user_id === senderId);
+        if (direct) return direct.other_display_name;
+        // Check group member lists
+        for (const conv of conversations) {
+            if (conv.members) {
+                const member = conv.members.find(m => m.user_id === senderId);
+                if (member) return member.display_name;
+            }
+        }
         const gu = globalUsers.find(u => u.user_id === senderId);
         if (gu) return gu.display_name;
         return senderId.substring(0, 8);
@@ -65,9 +74,6 @@ export function useMessages(currentUser, activeConversationId,
             if (stateRes.data) {
                 setVibeAnalysis({
                     valence:     parseFloat(stateRes.data.average_valence || 0),
-                    sync_score:  0.8,
-                    resonance:   0.7,
-                    volatility:  0.2,
                     top_emotions:[stateRes.data.dominant_emotion || 'Neutral']
                 });
             }
@@ -115,6 +121,18 @@ export function useMessages(currentUser, activeConversationId,
         }
     };
 
+    const handleDeleteMessage = async (msgId) => {
+        try {
+            await feedbackAPI.delete(msgId);
+            setMessages(prev => prev.filter(m => m.id !== msgId));
+            setCurrentAnalysis(prev =>
+                prev?.data?.id === msgId ? null : prev
+            );
+        } catch (e) {
+            console.error('Failed to delete message', e);
+        }
+    };
+
     // ── History fetch on conversation change ──────────────────────────────────
     useEffect(() => {
         const fetchInitialState = async () => {
@@ -153,6 +171,6 @@ export function useMessages(currentUser, activeConversationId,
         messages, setMessages, currentAnalysis, setCurrentAnalysis,
         vibeAnalysis, setVibeAnalysis, inputValue, setInputValue,
         socketRef, messagesEndRef, fetchVibe, parseAnalysis, getSenderName,
-        sendMessage, handleFeedback, handleHistoryClick
+        sendMessage, handleFeedback, handleHistoryClick, handleDeleteMessage
     };
 }

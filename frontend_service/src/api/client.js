@@ -62,6 +62,9 @@ export const authAPI = {
 export const usersAPI = {
     list:              (currentUserId) => client.get('/users', { params: { current_user_id: currentUserId } }),
     createConversation:(body)          => client.post('/conversations', body),
+    createGroup:       (name, memberIds) => client.post('/conversations/group', { name, member_ids: memberIds }),
+    addMember:         (convId, userId)  => client.post(`/conversations/${convId}/members`, { user_id: userId }),
+    removeMember:      (convId, userId)  => client.delete(`/conversations/${convId}/members/${userId}`),
     myConversations:   (userId)        => client.get(`/conversations/${userId}`),
     conversationState: (convId)        => client.get(`/conversation/${convId}/state`),
     messages:          (convId, limit) => client.get(`/conversation/${convId}/messages`, { params: { limit } }),
@@ -73,9 +76,10 @@ export const systemAPI = {
     calibration: () => client.get('/analytics/calibration'),
 };
 
-// Feedback
+// Feedback & messages
 export const feedbackAPI = {
-    post: (messageId, label) => client.post(`/message/${messageId}/feedback`, { label }),
+    post:   (messageId, label) => client.post(`/message/${messageId}/feedback`, { label }),
+    delete: (messageId)        => client.delete(`/message/${messageId}`),
 };
 
 // Admin
