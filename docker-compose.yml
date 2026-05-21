@@ -3,6 +3,9 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    command: >
+      sh -c "redis-server
+      $${REDIS_PASSWORD:+--requirepass $$REDIS_PASSWORD}"
     healthcheck:
       test: [ "CMD", "redis-cli", "ping" ]
       interval: 5s
@@ -42,6 +45,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -60,6 +64,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -76,6 +81,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -91,24 +97,13 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+    volumes:
+      - hf_cache:/root/.cache/huggingface
 
-  emojinet_service:
-    build:
-      context: .
-      dockerfile: emojinet_service/Dockerfile
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - emotion_net
-    environment:
-      REDIS_HOST: redis
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
-      REDIS_PORT: 6379
 
   bert_service:
     build:
@@ -121,9 +116,12 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+    volumes:
+      - hf_cache:/root/.cache/huggingface
 
   central_responder_service:
     build:
@@ -136,6 +134,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -146,6 +145,7 @@ services:
       MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
     volumes:
       - ./central_responder_service/models:/app/models # use host directory directly
+      - hf_cache:/root/.cache/huggingface
 
   llm_reasoning_service:
     build:
@@ -158,6 +158,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -174,6 +175,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -191,6 +193,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -219,6 +222,7 @@ services:
       - emotion_net
     environment:
       REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
@@ -253,3 +257,4 @@ networks:
 
 volumes:
   postgres_data:
+  hf_cache:  # Persists HuggingFace model downloads across container rebuilds

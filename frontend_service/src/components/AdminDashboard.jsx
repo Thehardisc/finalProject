@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import axios from 'axios';
-
-const API_BASE = 'http://localhost:8001';
+import { adminAPI } from '../api/client';
 
 /**
  * AdminDashboard
@@ -9,26 +7,25 @@ const API_BASE = 'http://localhost:8001';
  *   token        — JWT token for Authorization header
  *   currentUser  — { user_id, display_name, email, role }
  */
-export default function AdminDashboard({ token, currentUser }) {
+export default function AdminDashboard({ currentUser }) {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [actionError, setActionError] = useState('');
     const [confirmModal, setConfirmModal] = useState(null); // { type, user }
     const [actionLoading, setActionLoading] = useState('');
 
-    const headers = { Authorization: `Bearer ${token}` };
 
     const fetchUsers = useCallback(async () => {
         setLoading(true);
         try {
-            const res = await axios.get(`${API_BASE}/admin/users`, { headers });
+            const res = await adminAPI.listUsers();
             setUsers(res.data);
         } catch (err) {
-            setActionError(err.response?.data?.detail || 'Failed to load users.');
+            setActionError(err.apiMessage || 'Failed to load users.');
         } finally {
             setLoading(false);
         }
-    }, [token]);
+    }, []);
 
     useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
@@ -36,10 +33,10 @@ export default function AdminDashboard({ token, currentUser }) {
         setActionLoading(userId);
         setActionError('');
         try {
-            await axios.patch(`${API_BASE}/admin/users/${userId}`, payload, { headers });
+            await adminAPI.updateUser(userId, payload);
             await fetchUsers();
         } catch (err) {
-            setActionError(err.response?.data?.detail || 'Update failed.');
+            setActionError(err.apiMessage || 'Update failed.');
         } finally {
             setActionLoading('');
             setConfirmModal(null);
@@ -50,10 +47,10 @@ export default function AdminDashboard({ token, currentUser }) {
         setActionLoading(userId);
         setActionError('');
         try {
-            await axios.delete(`${API_BASE}/admin/users/${userId}`, { headers });
+            await adminAPI.deleteUser(userId);
             setUsers(prev => prev.filter(u => u.user_id !== userId));
         } catch (err) {
-            setActionError(err.response?.data?.detail || 'Delete failed.');
+            setActionError(err.apiMessage || 'Delete failed.');
         } finally {
             setActionLoading('');
             setConfirmModal(null);

@@ -1,12 +1,12 @@
 {
-  "trained_at": "2026-05-16T21:26:47.144377Z",
-  "training_samples": 6724,
-  "filtered_samples": 3276,
-  "validation_accuracy": 0.541,
-  "validation_f1_macro": 0.4602,
-  "test_accuracy": 0.543,
-  "test_f1_macro": 0.4412,
-  "previous_accuracy": 0.543,
+  "trained_at": "2026-05-21T13:27:30.649375Z",
+  "training_samples": 6634,
+  "filtered_samples": 3366,
+  "validation_accuracy": 0.5755,
+  "validation_f1_macro": 0.4983,
+  "test_accuracy": 0.581,
+  "test_f1_macro": 0.4744,
+  "previous_accuracy": 0.581,
   "improvement": 0.0,
   "accuracy_gate": 0.4
 }
