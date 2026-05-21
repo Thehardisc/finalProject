@@ -1,11 +1,21 @@
 import React, { useState } from 'react';
-import { authAPI } from '../api/client';
+import axios from 'axios';
+
+const API_BASE = 'http://localhost:8001';
 
 /**
  * LoginModal
  * Props:
  *   onSuccess(userData) — called with { user_id, display_name, email, role } on success
  */
+const DEMO_SLOTS = [
+    { slot: 0, name: 'Alice Chen',    initials: 'AC', color: '#7c3aed' },
+    { slot: 1, name: 'Bob Kim',       initials: 'BK', color: '#0077ff' },
+    { slot: 2, name: 'Charlie Park',  initials: 'CP', color: '#059669' },
+    { slot: 3, name: 'Diana Lee',     initials: 'DL', color: '#dc2626' },
+    { slot: 4, name: 'Eve Zhao',      initials: 'EZ', color: '#d97706' },
+];
+
 export default function LoginModal({ onSuccess }) {
     const [tab, setTab] = useState('login'); // 'login' | 'register'
     const [email, setEmail] = useState('');
@@ -15,6 +25,7 @@ export default function LoginModal({ onSuccess }) {
     const [confirmPassword, setConfirmPassword] = useState('');
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [demoLoading, setDemoLoading] = useState(null);
 
     const resetForm = () => { 
         setEmail(''); setFirstName(''); setLastName('');
@@ -37,6 +48,20 @@ export default function LoginModal({ onSuccess }) {
         return true;
     };
 
+    const handleDemoLogin = async (slot) => {
+        setError('');
+        setDemoLoading(slot);
+        try {
+            const res = await axios.post(`${API_BASE}/auth/demo-login/${slot}`);
+            onSuccess(res.data);
+        } catch (err) {
+            const detail = err.response?.data?.detail;
+            setError(typeof detail === 'string' ? detail : 'Demo login failed. Is the server running?');
+        } finally {
+            setDemoLoading(null);
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
@@ -48,9 +73,7 @@ export default function LoginModal({ onSuccess }) {
                 ? { email: email.trim(), first_name: firstName.trim(), last_name: lastName.trim(), password }
                 : { email: email.trim(), password };
                 
-            const res = tab === 'register'
-                ? await authAPI.register(payload)
-                : await authAPI.login(payload);
+            const res = await axios.post(`${API_BASE}${endpoint}`, payload);
             onSuccess(res.data);
         } catch (err) {
             const detail = err.response?.data?.detail;
@@ -201,94 +224,160 @@ export default function LoginModal({ onSuccess }) {
                         : <>Have an account? <span role="button" tabIndex="0" style={styles.switchLink} onClick={() => { setTab('login'); resetForm(); }}>Sign in</span></>
                     }
                 </p>
+
+                {/* Demo users */}
+                <div style={styles.demoSection}>
+                    <div style={styles.demoDivider}>
+                        <span style={styles.demoDividerLine} />
+                        <span style={styles.demoDividerText}>or try a demo account</span>
+                        <span style={styles.demoDividerLine} />
+                    </div>
+                    <div style={styles.demoGrid}>
+                        {DEMO_SLOTS.map(({ slot, name, initials, color }) => (
+                            <button
+                                key={slot}
+                                onClick={() => handleDemoLogin(slot)}
+                                disabled={demoLoading !== null || loading}
+                                style={{
+                                    ...styles.demoBtn,
+                                    opacity: (demoLoading !== null || loading) ? 0.6 : 1,
+                                }}
+                                title={`Log in as ${name}`}
+                            >
+                                <div style={{
+                                    width: 36, height: 36, borderRadius: '50%',
+                                    background: color,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontSize: '0.72rem', fontWeight: 700, color: '#fff',
+                                    flexShrink: 0,
+                                    position: 'relative',
+                                }}>
+                                    {demoLoading === slot
+                                        ? <span style={{ ...styles.spinner, width: 14, height: 14, borderWidth: 2 }} />
+                                        : initials}
+                                </div>
+                                <span style={styles.demoBtnName}>{name.split(' ')[0]}</span>
+                            </button>
+                        ))}
+                    </div>
+                </div>
             </div>
         </div>
     );
 }
 
-// ── Inline styles (consistent with glassmorphism theme) ──────────────────────
+// ── Inline styles — iOS 26 Zero-Dark (white canvas) ──────────────────────
 const styles = {
     overlay: {
         position: 'fixed', inset: 0,
-        background: 'radial-gradient(ellipse at 60% 30%, #0a0f1e 0%, #060a14 100%)',
+        background: 'radial-gradient(ellipse at 40% 30%, #eef3ff 0%, #ffffff 60%, #fff5f0 100%)',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         zIndex: 1000, overflow: 'hidden',
     },
     orb1: {
-        position: 'absolute', width: 420, height: 420,
-        borderRadius: '50%', top: '-80px', left: '-100px',
-        background: 'radial-gradient(circle, rgba(0,180,255,0.18) 0%, transparent 70%)',
-        animation: 'none', filter: 'blur(40px)',
+        position: 'absolute', width: 500, height: 500,
+        borderRadius: '50%', top: '-120px', left: '-130px',
+        background: 'radial-gradient(circle, rgba(112,0,255,0.09) 0%, transparent 70%)',
+        filter: 'blur(60px)',
     },
     orb2: {
-        position: 'absolute', width: 380, height: 380,
-        borderRadius: '50%', bottom: '-60px', right: '-80px',
-        background: 'radial-gradient(circle, rgba(120,0,255,0.18) 0%, transparent 70%)',
-        filter: 'blur(40px)',
+        position: 'absolute', width: 460, height: 460,
+        borderRadius: '50%', bottom: '-80px', right: '-100px',
+        background: 'radial-gradient(circle, rgba(0,119,255,0.09) 0%, transparent 70%)',
+        filter: 'blur(60px)',
     },
     card: {
         position: 'relative', zIndex: 1,
-        background: 'rgba(255,255,255,0.04)',
-        backdropFilter: 'blur(24px)',
-        border: '1px solid rgba(255,255,255,0.1)',
-        borderRadius: '24px',
+        background: 'rgba(255,255,255,0.82)',
+        backdropFilter: 'blur(28px) saturate(200%)',
+        WebkitBackdropFilter: 'blur(28px) saturate(200%)',
+        border: '1px solid rgba(255,255,255,0.92)',
+        borderRadius: '28px',
         padding: '48px 44px',
         width: '100%', maxWidth: '420px',
-        boxShadow: '0 8px 64px rgba(0,0,0,0.6)',
+        boxShadow: '0 24px 80px rgba(0,0,0,0.10), inset 0 1px 1px rgba(255,255,255,1)',
     },
     logoRow: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '6px' },
     logoIcon: {
         width: '36px', height: '36px', borderRadius: '10px',
-        background: 'linear-gradient(135deg, #00b4ff 0%, #7000ff 100%)',
-        boxShadow: '0 0 20px rgba(0,180,255,0.5)',
+        background: 'linear-gradient(135deg, #0077ff 0%, #7000ff 100%)',
+        boxShadow: '0 4px 16px rgba(0,119,255,0.35)',
     },
-    logoText: { margin: 0, fontSize: '1.8rem', fontWeight: 700, color: '#fff', letterSpacing: '-0.5px' },
-    tagline: { margin: '0 0 28px 0', fontSize: '0.85rem', color: 'rgba(255,255,255,0.4)' },
+    logoText: { margin: 0, fontSize: '1.8rem', fontWeight: 700, color: '#1c1c2e', letterSpacing: '-0.5px' },
+    tagline: { margin: '0 0 28px 0', fontSize: '0.85rem', color: '#6b7280' },
     tabRow: {
-        display: 'flex', background: 'rgba(255,255,255,0.05)',
+        display: 'flex', background: 'rgba(0,0,0,0.04)',
         borderRadius: '10px', padding: '4px', marginBottom: '28px',
     },
     tabBtn: {
         flex: 1, padding: '9px', border: 'none', borderRadius: '8px',
         cursor: 'pointer', background: 'transparent',
-        color: 'rgba(255,255,255,0.5)', fontSize: '0.9rem', fontWeight: 500,
+        color: '#6b7280', fontSize: '0.9rem', fontWeight: 500,
         transition: 'all 0.2s',
     },
     tabActive: {
-        background: 'rgba(0,180,255,0.2)',
-        color: '#00b4ff',
-        boxShadow: '0 0 12px rgba(0,180,255,0.2)',
+        background: 'rgba(0,119,255,0.10)',
+        color: '#0077ff',
+        boxShadow: '0 2px 8px rgba(0,119,255,0.12)',
     },
     form: { display: 'flex', flexDirection: 'column', gap: '6px' },
-    label: { fontSize: '0.78rem', fontWeight: 600, color: 'rgba(255,255,255,0.5)', letterSpacing: '0.05em', textTransform: 'uppercase', marginTop: '10px' },
+    label: {
+        fontSize: '0.78rem', fontWeight: 600, color: '#6b7280',
+        letterSpacing: '0.05em', textTransform: 'uppercase', marginTop: '10px',
+    },
     input: {
         padding: '12px 14px',
-        background: 'rgba(255,255,255,0.07)',
-        border: '1px solid rgba(255,255,255,0.12)',
-        borderRadius: '10px', color: '#fff',
+        background: 'rgba(255,255,255,0.85)',
+        border: '1px solid rgba(0,0,0,0.09)',
+        borderRadius: '10px', color: '#1c1c2e',
         fontSize: '0.95rem', outline: 'none',
-        transition: 'border-color 0.2s',
+        transition: 'border-color 0.2s, box-shadow 0.2s',
+        boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.04)',
     },
     errorBox: {
         marginTop: '10px', padding: '10px 14px',
-        background: 'rgba(255,60,60,0.12)', border: '1px solid rgba(255,60,60,0.3)',
-        borderRadius: '8px', color: '#ff7070', fontSize: '0.85rem',
+        background: 'rgba(255,34,68,0.07)', border: '1px solid rgba(255,34,68,0.25)',
+        borderRadius: '8px', color: '#cc0022', fontSize: '0.85rem',
     },
     submitBtn: {
         marginTop: '22px', padding: '14px',
-        background: 'linear-gradient(135deg, #00b4ff 0%, #7000ff 100%)',
+        background: 'linear-gradient(135deg, #0077ff 0%, #7000ff 100%)',
         border: 'none', borderRadius: '12px', color: '#fff',
         fontWeight: 700, fontSize: '1rem', cursor: 'pointer',
         transition: 'opacity 0.2s, transform 0.1s',
         display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '48px',
+        boxShadow: '0 6px 20px rgba(0,119,255,0.35)',
     },
     spinner: {
         width: '20px', height: '20px', borderRadius: '50%',
-        border: '2px solid rgba(255,255,255,0.3)',
+        border: '2px solid rgba(255,255,255,0.35)',
         borderTopColor: '#fff',
         animation: 'spin 0.7s linear infinite',
         display: 'inline-block',
     },
-    switchHint: { marginTop: '20px', textAlign: 'center', fontSize: '0.85rem', color: 'rgba(255,255,255,0.4)' },
-    switchLink: { color: '#00b4ff', cursor: 'pointer', textDecoration: 'underline' },
+    switchHint: { marginTop: '20px', textAlign: 'center', fontSize: '0.85rem', color: '#6b7280' },
+    switchLink: { color: '#0077ff', cursor: 'pointer', textDecoration: 'underline' },
+    demoSection: { marginTop: '24px' },
+    demoDivider: {
+        display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px',
+    },
+    demoDividerLine: {
+        flex: 1, height: '1px', background: 'rgba(0,0,0,0.08)',
+    },
+    demoDividerText: {
+        fontSize: '0.75rem', color: '#9ca3af', whiteSpace: 'nowrap', fontWeight: 500,
+    },
+    demoGrid: {
+        display: 'flex', gap: '8px', justifyContent: 'space-between',
+    },
+    demoBtn: {
+        flex: 1,
+        display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+        background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.06)',
+        borderRadius: '12px', padding: '10px 4px',
+        cursor: 'pointer', transition: 'background 0.15s, transform 0.1s',
+    },
+    demoBtnName: {
+        fontSize: '0.72rem', fontWeight: 600, color: '#374151',
+    },
 };

@@ -2,9 +2,9 @@
 .dissonance-meter {
     padding: 24px;
     margin-bottom: 24px;
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(255, 34, 68, 0.04);
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 34, 68, 0.1);
 }
 
 .dissonance-meter .meter-label {
@@ -29,7 +29,7 @@
 
 .meter-track {
     height: 6px;
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(0, 0, 0, 0.06);
     border-radius: 3px;
     overflow: hidden;
 }
