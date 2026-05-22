@@ -3,6 +3,7 @@ import axios from 'axios';
 import LoginModal from './components/LoginModal';
 import IGDashboard from './pages/IGDashboard';
 import AnalyticsPage from './pages/AnalyticsPage';
+import AdminPipelinePage from './pages/AdminPipelinePage';
 import './glass/CrystalGlass.css';
 
 const API_BASE = import.meta.env.VITE_API_URL  || 'http://localhost:8001';
@@ -46,7 +47,7 @@ function parseAnalysis(msg) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics'
+  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'admin'
 
   // ── Auth ────────────────────────────────────────────────────────────────
   const [currentUser, setCurrentUser]       = useState(null);
@@ -482,6 +483,7 @@ export default function App() {
           onRemoveMember={handleRemoveMember}
           onDeleteMessage={handleDeleteMessage}
           onGoToAnalytics={() => setView('analytics')}
+          onGoToAdmin={() => setView('admin')}
           onLogout={handleLogout}
           status={status}
           messages={messages}
@@ -504,6 +506,13 @@ export default function App() {
           currentUser={currentUser}
           onBack={() => setView('dashboard')}
           onRefresh={fetchAnalytics}
+        />
+      )}
+
+      {view === 'admin' && (
+        <AdminPipelinePage
+          currentUser={currentUser}
+          onBack={() => setView('dashboard')}
         />
       )}
     </div>
