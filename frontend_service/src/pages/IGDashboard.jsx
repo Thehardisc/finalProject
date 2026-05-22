@@ -403,6 +403,7 @@ export default function IGDashboard({
   onRemoveMember,
   onDeleteMessage,
   onGoToAnalytics,
+  onGoToAdmin,
   onLogout,
   status,
   messages,
@@ -579,6 +580,15 @@ export default function IGDashboard({
                 >
                   <span>✨</span> Analytics
                 </button>
+                {currentUser?.role === 'admin' && (
+                  <button onClick={() => { setShowProfileMenu(false); onGoToAdmin(); }}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 10 }}
+                    onMouseOver={e => e.currentTarget.style.background = '#f5f3ff'}
+                    onMouseOut={e => e.currentTarget.style.background = 'none'}
+                  >
+                    <span>🔬</span> Pipeline Inspector
+                  </button>
+                )}
                 <div style={{ borderTop: '1px solid #f0f0f0' }}>
                   <button onClick={onLogout}
                     style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: 10 }}

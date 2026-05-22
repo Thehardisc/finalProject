@@ -84,7 +84,11 @@ export const feedbackAPI = {
 
 // Admin
 export const adminAPI = {
-    listUsers:   ()               => client.get('/admin/users'),
-    updateUser:  (userId, body)   => client.patch(`/admin/users/${userId}`, body),
-    deleteUser:  (userId)         => client.delete(`/admin/users/${userId}`),
+    listUsers:        ()                     => client.get('/admin/users'),
+    updateUser:       (userId, body)         => client.patch(`/admin/users/${userId}`, body),
+    deleteUser:       (userId)               => client.delete(`/admin/users/${userId}`),
+    recentAnalyses:   (limit = 50, convId)   => client.get('/admin/recent-analyses', {
+        params: { limit, ...(convId ? { conversation_id: convId } : {}) },
+    }),
+    pipelineDetail:   (messageId)            => client.get(`/admin/pipeline/${messageId}`),
 };
