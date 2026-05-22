@@ -104,25 +104,50 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
     
-    # format model outputs
+    # format model outputs — separate context_engine from ML models
     model_outputs = {}
     for res in partial_results:
         model_name = res.get("model_name")
         scores = res.get("scores", {})
         model_outputs[model_name] = scores
 
-    # get context
+    # Extract context_engine enrichment (optional — may not arrive before the 3 ML models)
+    ce            = model_outputs.pop("context_engine", {})
+    hist_val      = float(ce.get("historical_valence", 0.0))
+    resonance     = float(ce.get("topic_resonance",    0.0))
+    ce_volatility = float(ce.get("volatility",         0.0))
+    ce_available  = bool(ce)
+
+    # get context from previous message's aggregation result
     conv_id = original_data.get("conversation_id", "conv-1")
     context = {"avg_valence": 0.0, "prev_emotion": "neutral"}
     try:
         state_key = f"conversation:{conv_id}"
         state = await r.hgetall(state_key)
         if state:
-            context["avg_valence"] = float(state.get("average_valence", 0.0))
+            context["avg_valence"]  = float(state.get("average_valence", 0.0))
             context["prev_emotion"] = state.get("dominant_emotion", "neutral")
-            logger.debug(f"Context injected for {conv_id}: Valence={context['avg_valence']}, Mood={context['prev_emotion']}")
     except Exception as e:
         logger.warning(f"Failed to fetch context for {conv_id}: {e}")
+
+    # Blend EMA valence with user's historical valence for this topic.
+    # When topic_resonance is high the user has strong historical feelings about
+    # this semantic area — let that shift the effective context by up to 30%.
+    if ce_available and resonance > 0.05 and hist_val != 0.0:
+        context["avg_valence"] = (
+            (1.0 - 0.3 * resonance) * context["avg_valence"]
+            + 0.3 * resonance * hist_val
+        )
+        logger.debug(
+            f"Context enriched by episodic memory: resonance={resonance:.2f}, "
+            f"hist_val={hist_val:.3f} → effective_val={context['avg_valence']:.3f}"
+        )
+
+    logger.debug(
+        f"Context injected for {conv_id}: "
+        f"val={context['avg_valence']:.3f}, mood={context['prev_emotion']}, "
+        f"ce={'yes' if ce_available else 'no'}"
+    )
 
     # predict logic
     fv = build_feature_vector(model_outputs, context=context)
@@ -163,14 +188,22 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
 
     # format output
     pipeline_log = {
-        "models": model_outputs,
-        "aggregated": final_scores,
+        "models":            model_outputs,
+        "aggregated":        final_scores,
         "dominant_selected": dominant_emotion,
-        "decision_mode": "meta-learner",
-        "meta_confidence": meta_confidence,
-        "logic_map": logic_map,
-        "sarcasm_score": float(sarcasm_score),
-        "conflict": conflict_desc
+        "decision_mode":     "meta-learner",
+        "meta_confidence":   meta_confidence,
+        "logic_map":         logic_map,
+        "sarcasm_score":     float(sarcasm_score),
+        "conflict":          conflict_desc,
+        "context_snapshot":  {
+            "prev_emotion":       context["prev_emotion"],
+            "avg_valence":        round(context["avg_valence"], 4),
+            "historical_valence": round(hist_val, 4),
+            "topic_resonance":    round(resonance, 4),
+            "volatility":         round(ce_volatility, 4),
+            "ce_available":       ce_available,
+        },
     }
     
     # Inject VADER scores into the final payload for the Aggregation/Frontend service

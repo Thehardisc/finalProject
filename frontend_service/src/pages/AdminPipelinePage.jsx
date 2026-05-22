@@ -215,29 +215,53 @@ function LogicMapCard({ logicMap, dominant }) {
   );
 }
 
+function ValenceBar({ value }) {
+  const clamped = Math.max(-1, Math.min(1, value ?? 0));
+  const isPos   = clamped >= 0;
+  const pct     = Math.abs(clamped) * 50;
+  const color   = isPos ? '0,210,120' : '255,82,82';
+  return (
+    <div style={{ position: 'relative', height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', margin: '4px 0 2px' }}>
+      <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(255,255,255,0.2)' }} />
+      <div style={{
+        position: 'absolute', top: 0, height: '100%', borderRadius: 3,
+        width: `${pct}%`, background: `rgb(${color})`,
+        left: isPos ? '50%' : `${50 - pct}%`,
+      }} />
+    </div>
+  );
+}
+
 function ContextCard({ decision, context }) {
-  const { reasoning, raw_emotions } = context;
+  const { reasoning, raw_emotions, context_snapshot: cs } = context;
   const { sarcasm_score, conflict, logic_map } = decision;
 
-  const contextPct  = logic_map?.Context ?? null;
+  const contextPct   = logic_map?.Context ?? null;
   const contextShift = raw_emotions?.context_shift
     ? (typeof raw_emotions.context_shift === 'string'
-        ? JSON.parse(raw_emotions.context_shift)
-        : raw_emotions.context_shift)
+        ? JSON.parse(raw_emotions.context_shift) : raw_emotions.context_shift)
     : null;
 
-  const hasSarcasm = sarcasm_score != null && sarcasm_score > 0.15;
+  const hasSarcasm  = sarcasm_score != null && sarcasm_score > 0.15;
   const hasConflict = !!conflict;
-  const hasShift   = !!contextShift;
-  const hasReason  = reasoning && Object.keys(reasoning).length > 0;
+  const hasShift    = !!contextShift;
+  const hasReason   = reasoning && Object.keys(reasoning).length > 0;
+  const hasSnapshot = !!cs;
+
+  const row = (label, val, color = 'rgba(255,255,255,0.55)') => (
+    <div style={S.contextRow}>
+      <span style={S.ctxLabel}>{label}</span>
+      <span style={{ ...S.ctxValue, color }}>{val}</span>
+    </div>
+  );
 
   return (
     <div style={{ ...S.stageCard, borderColor: 'rgba(255,100,150,0.3)', background: 'rgba(255,100,150,0.04)' }}>
       <div style={S.stageHeader}>
         <span style={{ fontSize: '1.1rem' }}>🔗</span>
         <div>
-          <div style={{ ...S.stageTitle, color: 'rgb(255,100,150)' }}>Context Impact</div>
-          <div style={S.stageDesc}>How conversation history influenced this result</div>
+          <div style={{ ...S.stageTitle, color: 'rgb(255,100,150)' }}>Context Engine</div>
+          <div style={S.stageDesc}>Episodic memory + conversation history influence</div>
         </div>
         {contextPct != null && (
           <div style={{
@@ -252,10 +276,59 @@ function ContextCard({ decision, context }) {
 
       <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
 
+        {/* Snapshot grid */}
+        {hasSnapshot && (
+          <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
+            <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.35)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+              Conversation State Injected
+            </div>
+            {row('Previous emotion', cs.prev_emotion || 'neutral',
+              `rgb(${rgb(cs.prev_emotion || 'neutral')})`)}
+            <div style={S.contextRow}>
+              <span style={S.ctxLabel}>EMA valence</span>
+              <div style={{ flex: 1, margin: '0 12px' }}><ValenceBar value={cs.avg_valence} /></div>
+              <span style={{ ...S.ctxValue, color: cs.avg_valence >= 0 ? 'rgb(0,210,120)' : 'rgb(255,82,82)' }}>
+                {cs.avg_valence >= 0 ? '+' : ''}{(cs.avg_valence * 100).toFixed(1)}%
+              </span>
+            </div>
+
+            {cs.ce_available && (
+              <>
+                <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '8px 0' }} />
+                <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.35)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                  Episodic Memory (Qdrant)
+                </div>
+                <div style={S.contextRow}>
+                  <span style={S.ctxLabel}>Historical valence</span>
+                  <div style={{ flex: 1, margin: '0 12px' }}><ValenceBar value={cs.historical_valence} /></div>
+                  <span style={{ ...S.ctxValue, color: cs.historical_valence >= 0 ? 'rgb(0,210,120)' : 'rgb(255,82,82)' }}>
+                    {cs.historical_valence >= 0 ? '+' : ''}{(cs.historical_valence * 100).toFixed(1)}%
+                  </span>
+                </div>
+                {row('Topic resonance',
+                  cs.topic_resonance > 0
+                    ? `${(cs.topic_resonance * 100).toFixed(0)}% similarity to past`
+                    : 'No similar history found',
+                  cs.topic_resonance > 0.3 ? 'rgb(255,200,80)' : 'rgba(255,255,255,0.4)')}
+                {row('Volatility',
+                  cs.volatility > 0.01
+                    ? `${(cs.volatility * 100).toFixed(1)}% (${cs.volatility > 0.1 ? 'High' : cs.volatility > 0.03 ? 'Moderate' : 'Low'})`
+                    : 'Stable',
+                  cs.volatility > 0.1 ? 'rgb(255,150,50)' : 'rgba(255,255,255,0.45)')}
+              </>
+            )}
+            {!cs.ce_available && (
+              <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic', marginTop: 4 }}>
+                Episodic memory arrived after aggregation window — base EMA context used.
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Context contribution bar */}
         {contextPct != null && (
           <div style={S.contextRow}>
-            <span style={S.ctxLabel}>Context contribution</span>
+            <span style={S.ctxLabel}>Context block weight</span>
             <div style={{ flex: 1, height: 6, borderRadius: 3, background: 'rgba(255,255,255,0.07)', margin: '0 12px' }}>
               <div style={{
                 height: '100%', width: `${Math.min(contextPct * 100, 100)}%`,
@@ -270,14 +343,11 @@ function ContextCard({ decision, context }) {
         {hasShift && (
           <div style={S.contextChip}>
             <span style={{ fontSize: '0.8rem' }}>⚡</span>
-            <span>Mood shift detected: </span>
+            <span>Mood shift: </span>
             <strong style={{ color: `rgb(${rgb(contextShift.from)})` }}>{contextShift.from}</strong>
             <span style={{ color: 'rgba(255,255,255,0.4)', margin: '0 4px' }}>→</span>
             <strong style={{ color: `rgb(${rgb(contextShift.to)})` }}>{contextShift.to}</strong>
-            <span style={{
-              marginLeft: 6, fontSize: '0.68rem', padding: '1px 7px',
-              background: 'rgba(255,255,255,0.08)', borderRadius: 10,
-            }}>
+            <span style={{ marginLeft: 6, fontSize: '0.68rem', padding: '1px 7px', background: 'rgba(255,255,255,0.08)', borderRadius: 10 }}>
               {contextShift.significance}
             </span>
           </div>
@@ -287,7 +357,7 @@ function ContextCard({ decision, context }) {
         {hasSarcasm && (
           <div style={{ ...S.contextChip, background: 'rgba(255,200,0,0.08)', borderColor: 'rgba(255,200,0,0.2)' }}>
             <span style={{ fontSize: '0.8rem' }}>😏</span>
-            <span style={{ color: 'rgba(255,255,255,0.7)' }}>Sarcasm / irony detected — </span>
+            <span style={{ color: 'rgba(255,255,255,0.7)' }}>Sarcasm / irony — </span>
             <strong style={{ color: 'rgb(255,200,0)' }}>score {(sarcasm_score * 100).toFixed(0)}%</strong>
           </div>
         )}
@@ -301,7 +371,7 @@ function ContextCard({ decision, context }) {
           </div>
         )}
 
-        {/* Reasoning JSON */}
+        {/* Reasoning */}
         {hasReason && (
           <div style={{ padding: '10px 12px', background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
             <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.4)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
@@ -321,7 +391,7 @@ function ContextCard({ decision, context }) {
           </div>
         )}
 
-        {!hasShift && !hasSarcasm && !hasConflict && !hasReason && contextPct == null && (
+        {!hasSnapshot && !hasShift && !hasSarcasm && !hasConflict && !hasReason && contextPct == null && (
           <div style={S.emptyMsg}>No context influence detected for this message.</div>
         )}
       </div>

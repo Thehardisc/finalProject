@@ -197,11 +197,11 @@ async def startup_event():
     asyncio.create_task(redis_listener())
 
 async def redis_listener():
-    """Listen to preprocessed_stream and process messages."""
-    group_name = "context_engine_group"
-    client_id = f"context_engine_{uuid.uuid4().hex[:6]}"
+    """Listen to preprocessed_stream and publish named context features."""
+    group_name  = "context_engine_group"
+    client_id   = f"context_engine_{uuid.uuid4().hex[:6]}"
     stream_name = "preprocessed_stream"
-    
+
     try:
         await context_engine.redis.xgroup_create(stream_name, group_name, mkstream=True)
     except Exception as e:
@@ -209,7 +209,7 @@ async def redis_listener():
             logger.error(f"Group creation error: {e}")
 
     logger.info(f"Context Engine listening on {stream_name}...")
-    
+
     while True:
         try:
             messages = await context_engine.redis.xreadgroup(
@@ -218,46 +218,59 @@ async def redis_listener():
             if messages:
                 for stream, msgs in messages:
                     for msg_id, msg_data in msgs:
-                        text = msg_data.get("text", "")
-                        user_id = msg_data.get("user_id", "anonymous")
-                        conversation_id = msg_data.get("conversation_id", "")
-                        raw_msg_id = msg_data.get("message_id", "")
-                        
-                        embedding = context_engine.embedder.encode(text).tolist()
-                        
-                        estimated_valence = 0.0 
-                        
-                        linguistic_markers = {
-                            "length": len(text),
-                            "latency_ms": 0
-                        }
-                        
-                        vector = await context_engine.build_115_dim_context_vector(
-                            user_id=user_id,
-                            current_valence=estimated_valence,
-                            linguistic_markers=linguistic_markers,
-                            current_embedding=embedding
-                        )
-                        
-                        asyncio.create_task(
-                            context_engine.save_to_episodic_memory(user_id, text, estimated_valence, embedding, "neutral")
-                        )
-                        
-                        # Use hset for partial results to match the new architecture!
-                        # In the new Central Responder, we fetch all from HASH.
-                        # Wait, we write to partial_analysis_stream, and the Ingestion Service or Central Responder picks it up?
-                        # No! The individual workers (vader, bert, go_emotions) write to `partial_analysis_stream` using `redis_client.publish_event("partial_analysis_stream", payload)`.
-                        # Let's do that via xadd to `partial_analysis_stream` directly!
-                        
-                        payload = {
-                            "message_id": raw_msg_id,
-                            "model_name": "context_engine",
-                            "scores": json.dumps({"vector": json.dumps(vector)}),
-                            "original_data": json.dumps(msg_data)
-                        }
-                        
-                        await context_engine.redis.xadd("partial_analysis_stream", payload)
-                        await context_engine.redis.xack(stream_name, group_name, msg_id)
+                        try:
+                            text            = msg_data.get("text", "")
+                            user_id         = msg_data.get("user_id", "anonymous")
+                            conversation_id = msg_data.get("conversation_id", "")
+                            raw_msg_id      = msg_data.get("message_id", "")
+
+                            # Read REAL conversation state written by aggregation_service
+                            # for the previous message in this conversation.
+                            state        = await context_engine.redis.hgetall(f"conversation:{conversation_id}")
+                            prev_valence = float(state.get("average_valence", 0.0)) if state else 0.0
+                            prev_emotion = (state.get("dominant_emotion", "neutral") if state else "neutral")
+
+                            embedding = context_engine.embedder.encode(text).tolist()
+
+                            linguistic_markers = {"length": len(text), "latency_ms": 0}
+
+                            # Run episodic-memory lookup and working-memory update in parallel
+                            baseline_data, volatility = await asyncio.gather(
+                                context_engine.calculate_user_baseline(user_id, embedding),
+                                context_engine.update_working_memory(user_id, prev_valence, linguistic_markers),
+                            )
+
+                            # Persist to Qdrant with REAL valence and emotion (not hardcoded 0/"neutral")
+                            asyncio.create_task(
+                                context_engine.save_to_episodic_memory(
+                                    user_id, text, prev_valence, embedding, prev_emotion
+                                )
+                            )
+
+                            # Send named scalar features — central_responder uses these directly
+                            # without needing to parse a raw 48-dim vector.
+                            payload = {
+                                "message_id": raw_msg_id,
+                                "model_name": "context_engine",
+                                "scores": json.dumps({
+                                    "historical_valence": baseline_data["historical_valence"],
+                                    "topic_resonance":    baseline_data["topic_resonance"],
+                                    "volatility":         float(volatility),
+                                    "prev_valence":       prev_valence,
+                                }),
+                                "original_data": json.dumps(msg_data),
+                            }
+
+                            await context_engine.redis.xadd("partial_analysis_stream", payload)
+                            await context_engine.redis.xack(stream_name, group_name, msg_id)
+
+                        except Exception as msg_err:
+                            logger.error(f"Context engine failed on {msg_id}: {msg_err}")
+                            try:
+                                await context_engine.redis.xack(stream_name, group_name, msg_id)
+                            except Exception:
+                                pass
+
         except Exception as e:
             logger.error(f"Redis listener error: {e}")
             await asyncio.sleep(1)
