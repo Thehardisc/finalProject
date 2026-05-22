@@ -55,15 +55,19 @@ def fetch_live_data(vader, bert, goe):
 
             logger.info(f"  [SQL] Found {len(rows)} verified live samples with context tracking.")
 
+            ema = 0.0
+            alpha = 0.35
             for text_content, label, prev_emo in rows:
                 vs = {f"vader_{k}": v for k, v in _vader(vader, text_content).items()}
                 bs = _run(bert, text_content)
                 gs = _run(goe,  text_content)
                 es = _emojinet(text_content)
-                context = {"avg_valence": 0.0, "prev_emotion": prev_emo or "neutral"}
+                context = {"avg_valence": ema, "prev_emotion": prev_emo or "neutral"}
                 fv = build_fv(vs, bs, gs, es, context=context)
                 X.append(fv)
                 y.append(label)
+                # Update EMA for next sample (matches inference-time aggregation_service)
+                ema = alpha * vs.get("vader_compound", 0.0) + (1.0 - alpha) * ema
 
         return X, y
     except Exception as e:

@@ -57,7 +57,7 @@ async def main():
                 for stream, msgs in messages:
                     for message_id, data in msgs:
                         try:
-                            text_to_analyze = data.get("processed_text", "") or data.get("processed_text_demojized", "")
+                            text_to_analyze = data.get("text", "") or data.get("original_text", "")
                             start_time = time.time()
                             logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
 
