@@ -18,6 +18,9 @@ from meta_learner import (
 # import background trainer
 from trainer import start_trainer_thread
 
+# import trajectory LSTM
+from trajectory.inference import load_trajectory_model, run_trajectory_step
+
 import emoji as emoji_lib
 from shared.constants import EMOJI_EMOTION_DB
 
@@ -67,6 +70,15 @@ else:
 
 start_trainer_thread(on_model_reload)
 logger.info("Background meta-learner retraining daemon is ACTIVATED with transient auto-garbage collection.")
+
+# load trajectory LSTM (optional — degrades gracefully if missing)
+_model_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
+TRAJECTORY_MODEL = load_trajectory_model(
+    model_path=os.path.join(_model_dir, 'trajectory_lstm.pt'),
+    config_path=os.path.join(_model_dir, 'trajectory_config.json'),
+)
+if TRAJECTORY_MODEL is not None:
+    logger.info("Trajectory LSTM loaded — conversation direction prediction ACTIVE.")
 
 
 # All 27 GoEmotions labels
@@ -186,6 +198,20 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     # Calculate Logic Map (Impact Scores)
     logic_map = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion)
 
+    # Run trajectory LSTM step — updates conversation hidden state in Redis,
+    # returns predicted next-message emotion distribution + trajectory embedding
+    trajectory = await run_trajectory_step(
+        model=TRAJECTORY_MODEL,
+        model_outputs=model_outputs,
+        conv_id=conv_id,
+        redis=r,
+    )
+    if trajectory:
+        logger.debug(
+            f"Trajectory: next predicted='{trajectory.get('top_predicted')}' "
+            f"| top-5={list(trajectory.get('predicted_next', {}).keys())}"
+        )
+
     # format output
     pipeline_log = {
         "models":            model_outputs,
@@ -196,6 +222,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "logic_map":         logic_map,
         "sarcasm_score":     float(sarcasm_score),
         "conflict":          conflict_desc,
+        "trajectory":        trajectory,
         "context_snapshot":  {
             "prev_emotion":       context["prev_emotion"],
             "avg_valence":        round(context["avg_valence"], 4),

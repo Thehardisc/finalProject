@@ -623,9 +623,10 @@ async def admin_pipeline_detail(
             "conflict":      pipeline_log.get("conflict"),
         },
         "context": {
-            "reasoning":       reasoning,
-            "raw_emotions":    emotions,
+            "reasoning":        reasoning,
+            "raw_emotions":     emotions,
             "context_snapshot": pipeline_log.get("context_snapshot"),
+            "lstm_trajectory":  pipeline_log.get("trajectory"),
         },
         "ground_truth": d.get("ground_truth_emotion"),
         "is_verified":  d.get("is_verified", False),
