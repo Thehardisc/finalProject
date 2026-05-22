@@ -1,0 +1,279 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: >
+      sh -c "redis-server
+      $${REDIS_PASSWORD:+--requirepass $$REDIS_PASSWORD}"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - emotion_net
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: emotion_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - emotion_net
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U user -d emotion_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ingestion_service:
+    build:
+      context: .
+      dockerfile: ingestion_service/Dockerfile
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
+
+  preprocessing_service:
+    build:
+      context: .
+      dockerfile: preprocessing_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+
+  vader_service:
+    build:
+      context: .
+      dockerfile: vader_service/Dockerfile
+
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+
+  goemotions_service:
+    build:
+      context: .
+      dockerfile: goemotions_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+
+
+  bert_service:
+    build:
+      context: .
+      dockerfile: bert_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+
+  central_responder_service:
+    build:
+      context: .
+      dockerfile: central_responder_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+      # ── Periodic retraining (background thread inside this container) ────
+      RETRAIN_INTERVAL_SECONDS: ${RETRAIN_INTERVAL_SECONDS:-1800}
+      ACCURACY_GATE: ${ACCURACY_GATE:-0.40}
+      MAX_SAMPLES: ${MAX_SAMPLES:-2500}
+      MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
+    volumes:
+      - ./central_responder_service/models:/app/models # use host directory directly
+      - hf_cache:/root/.cache/huggingface
+
+  llm_reasoning_service:
+    build:
+      context: .
+      dockerfile: llm_reasoning_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+      LLM_PROVIDER: ${LLM_PROVIDER:-RULE_BASED}
+
+  aggregation_service:
+    build:
+      context: .
+      dockerfile: aggregation_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+
+  persistence_service:
+    build:
+      context: .
+      dockerfile: persistence_service/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+      DB_HOST: db
+    volumes:
+      - ./central_responder_service/models:/app/models:ro # Read-only access to readiness marker
+
+  api_service:
+    build:
+      context: .
+      dockerfile: api_service/Dockerfile
+    ports:
+      - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      central_responder_service:
+        condition: service_started
+      aggregation_service:
+        condition: service_started
+      persistence_service:
+        condition: service_started
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
+      RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
+      # DB credentials (used by asyncpg in analytics/messages endpoints)
+      DB_HOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-emotion_db}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+    volumes:
+      - ./central_responder_service/models:/app/models:ro
+
+
+  frontend_service:
+    build:
+      context: ./frontend_service
+    ports:
+      - "5173:80"
+    depends_on:
+      - api_service
+    networks:
+      - emotion_net
+
+  qdrant:
+    image: qdrant/qdrant:v1.7.0
+    ports:
+      - "6333:6333"
+    networks:
+      - emotion_net
+
+  context_engine_service:
+    build:
+      context: ./context_engine_service
+    environment:
+      - REDIS_HOST=redis
+      - QDRANT_HOST=qdrant
+    depends_on:
+      - redis
+      - qdrant
+    networks:
+      - emotion_net
+
+networks:
+  emotion_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  hf_cache:  # Persists HuggingFace model downloads across container rebuilds

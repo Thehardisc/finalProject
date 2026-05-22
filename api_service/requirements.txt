@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+redis
+asyncpg
+websockets
+bcrypt
+python-jose[cryptography]
+python-multipart

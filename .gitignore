@@ -1,0 +1,31 @@
+# ── Dependencies ──────────────────────────────
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+venv
+
+# ── Build artifacts ───────────────────────────
+frontend_service/dist/
+frontend_service/node_modules/
+
+# ── ML Model artifacts (generated, not source) ─
+central_responder_service/models/*.pkl
+central_responder_service/models/*.json
+!central_responder_service/models/.gitkeep
+
+# ── Runtime logs ──────────────────────────────
+logs/
+output.txt
+output_utf8.txt
+
+# ── Secrets — never commit these ──────────────
+.env
+.env.*
+!.env.example
+
+# ── IDE / OS ──────────────────────────────────
+.DS_Store
+.vscode/
+.idea/
+*.swp

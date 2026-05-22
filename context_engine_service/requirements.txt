@@ -1,0 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+fastapi
+uvicorn
+redis
+qdrant-client
+numpy
+torch==2.6.0+cpu
+sentence-transformers
