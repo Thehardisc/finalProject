@@ -16,10 +16,8 @@ BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surpris
 # Feature Dimension: VADER(4) + BERT(7) + GoEmotions(28) + EmojiNet(28) + Context(29) + Derived(7) = 103
 FEATURE_DIM = 103
 
-# emojinet knowledge base
-# Single source of truth for emoji → emotion mappings.
-# Used by both emojinet_service (inference) and trainer.py (feature extraction).
-# Keeping them in sync here prevents silent divergence between training and serving.
+# Emoji → emotion knowledge base.
+# Used by central_responder inline emojinet and trainer feature extraction.
 EMOJI_EMOTION_DB: dict[str, dict] = {
     "😂": {
         "emotions": {"joy": 0.9, "amusement": 0.95},
