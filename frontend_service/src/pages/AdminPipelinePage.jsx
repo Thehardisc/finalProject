@@ -476,42 +476,46 @@ function DecisionCard({ decision }) {
   );
 }
 
-function TrajectoryCard({ trajectory, currentDominant }) {
-  if (!trajectory || trajectory.length === 0) return null;
-  const all = [...trajectory, { dominant: currentDominant, isCurrent: true }];
+function TrajectoryCard({ trajectory, currentDominant, lstmTrajectory }) {
+  const hasHistory = trajectory && trajectory.length > 0;
+  const hasLSTM    = lstmTrajectory && lstmTrajectory.model_available;
+
+  if (!hasHistory && !hasLSTM) return null;
+
+  const all = hasHistory
+    ? [...trajectory, { dominant: currentDominant, isCurrent: true }]
+    : [{ dominant: currentDominant, isCurrent: true }];
+
+  const predicted    = lstmTrajectory?.top_predicted;
+  const predictedMap = lstmTrajectory?.predicted_next || {};
+  const top5Entries  = Object.entries(predictedMap).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  const predRgb      = predicted ? rgb(predicted) : '100,180,255';
 
   return (
     <div style={S.stageCard}>
       <div style={S.stageHeader}>
         <span style={{ fontSize: '1.1rem' }}>📈</span>
         <div>
-          <div style={{ ...S.stageTitle, color: 'rgb(100,200,255)' }}>Mood Trajectory</div>
-          <div style={S.stageDesc}>Conversation emotion history leading to this message</div>
+          <div style={{ ...S.stageTitle, color: 'rgb(100,200,255)' }}>Conversation Trajectory</div>
+          <div style={S.stageDesc}>Emotional history + LSTM next-message prediction</div>
         </div>
       </div>
 
+      {/* History chain */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 0, marginTop: 16, overflowX: 'auto', paddingBottom: 4 }}>
         {all.map((item, i) => {
-          const emoRgb   = rgb(item.dominant);
+          const emoRgb    = rgb(item.dominant);
           const isCurrent = item.isCurrent;
           return (
             <React.Fragment key={i}>
               {i > 0 && (
-                <div style={{
-                  width: 20, height: 2, flexShrink: 0,
-                  background: 'rgba(255,255,255,0.15)',
-                }} />
+                <div style={{ width: 20, height: 2, flexShrink: 0, background: 'rgba(255,255,255,0.15)' }} />
               )}
-              <div style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                flexShrink: 0,
-              }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                 <div style={{
-                  width: isCurrent ? 36 : 26, height: isCurrent ? 36 : 26,
-                  borderRadius: '50%',
+                  width: isCurrent ? 36 : 26, height: isCurrent ? 36 : 26, borderRadius: '50%',
                   background: `rgba(${emoRgb},${isCurrent ? 0.3 : 0.15})`,
                   border: `2px solid rgba(${emoRgb},${isCurrent ? 0.8 : 0.4})`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
                   boxShadow: isCurrent ? `0 0 12px rgba(${emoRgb},0.4)` : 'none',
                 }} />
                 <span style={{
@@ -526,7 +530,45 @@ function TrajectoryCard({ trajectory, currentDominant }) {
             </React.Fragment>
           );
         })}
+
+        {/* Predicted next node */}
+        {hasLSTM && predicted && (
+          <>
+            <div style={{ width: 24, height: 2, flexShrink: 0, background: `rgba(${predRgb},0.4)`, borderTop: '2px dashed rgba(255,255,255,0.2)' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+              <div style={{
+                width: 30, height: 30, borderRadius: '50%', flexShrink: 0,
+                background: `rgba(${predRgb},0.1)`,
+                border: `2px dashed rgba(${predRgb},0.6)`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <span style={{ fontSize: '0.6rem', color: `rgba(${predRgb},0.7)` }}>?</span>
+              </div>
+              <span style={{ fontSize: '0.6rem', color: `rgba(${predRgb},0.8)`, textTransform: 'capitalize', textAlign: 'center', maxWidth: 60 }}>
+                {predicted}
+              </span>
+            </div>
+          </>
+        )}
       </div>
+
+      {/* LSTM predicted next emotion breakdown */}
+      {hasLSTM && top5Entries.length > 0 && (
+        <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid rgba(255,255,255,0.07)' }}>
+          <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.4)', marginBottom: 10, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+            LSTM — predicted next message
+          </div>
+          {top5Entries.map(([emo, score]) => (
+            <Bar key={emo} label={emo} value={score} color={rgb(emo)} highlight={emo === predicted} />
+          ))}
+        </div>
+      )}
+
+      {!hasLSTM && (
+        <div style={{ marginTop: 12, fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic' }}>
+          LSTM trajectory model not yet loaded — train with more conversations to enable next-message prediction.
+        </div>
+      )}
     </div>
   );
 }
@@ -749,7 +791,11 @@ export default function AdminPipelinePage({ currentUser, onBack }) {
 
                 {/* Step 8 — Trajectory */}
                 <PipelineStep num={8} label="Mood Trajectory">
-                  <TrajectoryCard trajectory={detail.trajectory} currentDominant={detail.decision.dominant} />
+                  <TrajectoryCard
+                    trajectory={detail.trajectory}
+                    currentDominant={detail.decision.dominant}
+                    lstmTrajectory={detail.context?.lstm_trajectory}
+                  />
                 </PipelineStep>
               </div>
             </>
