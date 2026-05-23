@@ -1,18 +1,7 @@
 {
+  "hidden_dim": 128,
+  "num_layers": 2,
+  "dropout": 0.2,
   "input_dim": 67,
-  "hidden_dim": 64,
-  "num_layers": 1,
-  "output_dim": 28,
-  "dropout": 0.1,
-  "lr": 0.001,
-  "loss_fn": "mse",
-  "epochs": 80,
-  "patience": 20,
-  "n_train": 3,
-  "n_val": 0,
-  "n_test": 2,
-  "test_loss": 0.009968416765332222,
-  "top1_acc": 0.3888888888888889,
-  "top3_acc": 0.7777777777777778,
-  "best_epoch": 79
+  "output_dim": 28
 }
