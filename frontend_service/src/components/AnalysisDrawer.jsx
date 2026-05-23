@@ -237,6 +237,93 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         )}
 
+        {/* ── Context Engine snapshot ── */}
+        {data.context_snapshot && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={sectionTitle}>Context Engine</div>
+            <div style={{
+              background: 'rgba(0,119,255,0.05)',
+              border: '1px solid rgba(0,119,255,0.15)',
+              borderRadius: 12, padding: '12px 14px',
+            }}>
+              {/* Valence arc */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+                <div style={{
+                  padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
+                  background: 'rgba(0,0,0,0.06)', color: '#374151', textTransform: 'capitalize',
+                }}>
+                  {data.context_snapshot.prev_emotion || 'none'}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>→</div>
+                <div style={{
+                  padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
+                  background: `rgba(${domRgb},0.15)`, color: `rgb(${domRgb})`, textTransform: 'capitalize',
+                }}>
+                  {data.final_dominant_emotion}
+                </div>
+              </div>
+
+              {/* Stats grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                {[
+                  { label: 'Avg Valence', value: data.context_snapshot.avg_valence?.toFixed(3), color: data.context_snapshot.avg_valence >= 0 ? '#16a34a' : '#dc2626' },
+                  { label: 'Topic Resonance', value: `${((data.context_snapshot.topic_resonance || 0) * 100).toFixed(0)}%`, color: '#7c3aed' },
+                  { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#d97706' },
+                  { label: 'Episodic Memory', value: data.context_snapshot.ce_available ? '✓ active' : '✗ off', color: data.context_snapshot.ce_available ? '#16a34a' : '#9ca3af' },
+                ].map(({ label, value, color }) => (
+                  <div key={label} style={{ padding: '7px 10px', background: 'rgba(255,255,255,0.7)', borderRadius: 8 }}>
+                    <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 700, color }}>{value ?? '—'}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── LSTM Trajectory / State Machine ── */}
+        {data.lstm_trajectory?.model_available && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={sectionTitle}>Trajectory — Next Predicted</div>
+            <div style={{
+              background: 'rgba(112,0,255,0.05)',
+              border: '1px solid rgba(112,0,255,0.18)',
+              borderRadius: 12, padding: '12px 14px',
+            }}>
+              <div style={{ marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{
+                  padding: '4px 12px', borderRadius: 99, fontSize: '0.78rem', fontWeight: 800,
+                  background: `rgba(${EmotionPalette[data.lstm_trajectory.top_predicted?.toLowerCase()] || '112,0,255'},0.15)`,
+                  color: `rgb(${EmotionPalette[data.lstm_trajectory.top_predicted?.toLowerCase()] || '112,0,255'})`,
+                  textTransform: 'capitalize',
+                }}>
+                  → {data.lstm_trajectory.top_predicted}
+                </div>
+                <span style={{ fontSize: '0.70rem', color: '#9ca3af' }}>most likely next emotion</span>
+              </div>
+
+              {Object.entries(data.lstm_trajectory.predicted_next || {}).map(([emo, score]) => {
+                const rgb = EmotionPalette[emo.toLowerCase()] || '112,0,255';
+                return (
+                  <div key={emo} style={{ marginBottom: 7 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                      <span style={{ fontSize: '0.74rem', color: '#374151', textTransform: 'capitalize' }}>{emo}</span>
+                      <span style={{ fontSize: '0.70rem', fontWeight: 700, color: `rgb(${rgb})` }}>{(score * 100).toFixed(0)}%</span>
+                    </div>
+                    <div style={{ height: 5, borderRadius: 3, background: 'rgba(0,0,0,0.07)' }}>
+                      <div style={{
+                        height: '100%', width: `${score * 100}%`,
+                        background: `linear-gradient(90deg, rgba(${rgb},0.8), rgba(${rgb},0.4))`,
+                        borderRadius: 3, transition: 'width 0.6s cubic-bezier(0.34,1.2,0.64,1)',
+                      }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* ── Human-in-the-loop ── */}
         <div style={{
           background: '#f8f9fa', borderRadius: 12, padding: '13px',

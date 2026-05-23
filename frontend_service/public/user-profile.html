@@ -1,0 +1,408 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>User Profile · InnerLink v2</title>
+  <link rel="stylesheet" href="tokens.css"/>
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+  <style>
+    .dashboard {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      height: 100vh;
+    }
+
+    .sidebar {
+      background: var(--il-glass-bg);
+      backdrop-filter: var(--il-blur);
+      -webkit-backdrop-filter: var(--il-blur);
+      border-right: 1px solid var(--il-glass-border);
+      box-shadow: var(--il-glass-glow), inset 0 1px 0 rgba(255,255,255,1);
+      display: flex; flex-direction: column;
+      padding: 24px 0;
+    }
+
+    .logo-area {
+      padding: 0 20px 20px;
+      display: flex; align-items: center; gap: 12px;
+      border-bottom: 1px solid var(--il-hairline);
+      margin-bottom: 20px;
+    }
+    .mark {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: linear-gradient(135deg,#0077ff,#7000ff);
+      box-shadow: 0 4px 16px rgba(0,119,255,.35);
+    }
+    .logo-text { font-size: 20px; font-weight: 700; color: var(--il-fg-1); letter-spacing: -0.5px; }
+
+    .nav { flex: 1; padding: 0 12px; display: flex; flex-direction: column; gap: 4px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 10px;
+      background: none; border: 0; cursor: pointer;
+      font: inherit; color: var(--il-fg-2);
+      transition: background .15s;
+    }
+    .nav-item:hover { background: rgba(0,0,0,.04); }
+    .nav-item.active {
+      background: linear-gradient(135deg, rgba(0,119,255,.12), rgba(112,0,255,.08));
+      color: #0077ff; font-weight: 600;
+      box-shadow: 0 2px 12px rgba(0,119,255,.16);
+    }
+    .nav-item svg { width: 20px; height: 20px; }
+
+    .main {
+      overflow-y: auto;
+      padding: 32px;
+    }
+
+    .page-header {
+      margin-bottom: 28px;
+    }
+    .page-title {
+      font-size: 28px; font-weight: 800; color: var(--il-fg-1);
+      letter-spacing: -0.5px; margin: 0 0 6px 0;
+    }
+    .page-subtitle {
+      font-size: 14px; color: var(--il-fg-3); margin: 0;
+    }
+
+    .profile-hero {
+      background: var(--il-glass-bg);
+      backdrop-filter: var(--il-blur);
+      -webkit-backdrop-filter: var(--il-blur);
+      border: 1px solid var(--il-glass-border);
+      border-radius: 24px;
+      padding: 32px;
+      margin-bottom: 24px;
+      box-shadow: var(--il-shadow-md), var(--il-shadow-inset), var(--il-glass-glow);
+      display: flex; gap: 28px; align-items: center;
+      animation: ilFadeUp .4s cubic-bezier(.34,1.2,.64,1) both;
+    }
+
+    .avatar-large {
+      width: 100px; height: 100px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, rgba(0,119,255,.2), rgba(112,0,255,.15));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 38px; font-weight: 800; color: #0077ff;
+      box-shadow: 0 8px 32px rgba(0,119,255,.25), inset 0 2px 8px rgba(255,255,255,.5);
+      flex-shrink: 0;
+    }
+
+    .profile-info { flex: 1; }
+    .profile-name {
+      font-size: 26px; font-weight: 800; color: var(--il-fg-1);
+      margin: 0 0 4px 0; letter-spacing: -0.4px;
+    }
+    .profile-role {
+      font-size: 14px; color: var(--il-fg-3);
+      margin: 0 0 12px 0;
+    }
+    .profile-stats {
+      display: flex; gap: 24px;
+    }
+    .stat-item {
+      display: flex; flex-direction: column;
+    }
+    .stat-value {
+      font-size: 22px; font-weight: 800;
+      background: linear-gradient(135deg, #0077ff, #7000ff);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .stat-label {
+      font-size: 11px; color: var(--il-fg-4);
+      text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+    }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 18px; }
+    .grid-full { grid-column: 1 / -1; }
+
+    .card {
+      background: var(--il-glass-bg);
+      backdrop-filter: var(--il-blur);
+      -webkit-backdrop-filter: var(--il-blur);
+      border: 1px solid var(--il-glass-border);
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: var(--il-shadow-md), var(--il-shadow-inset), var(--il-glass-glow);
+      animation: ilFadeUp .4s cubic-bezier(.34,1.2,.64,1) both;
+    }
+    .card:nth-child(2) { animation-delay: .12s; }
+    .card:nth-child(3) { animation-delay: .2s; }
+    .card:nth-child(4) { animation-delay: .28s; }
+
+    .card-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 15px; font-weight: 700; color: var(--il-fg-1);
+      margin: 0 0 4px 0;
+    }
+    .card-subtitle {
+      font-size: 11px; color: var(--il-fg-4); text-transform: uppercase;
+      letter-spacing: .06em; font-weight: 600;
+    }
+
+    .emotion-patterns { display: flex; flex-direction: column; gap: 12px; }
+    .pattern-row {
+      display: flex; align-items: center; gap: 12px;
+    }
+    .pattern-bar {
+      flex: 1; height: 8px; border-radius: 4px;
+      background: rgba(0,0,0,.06);
+      position: relative; overflow: hidden;
+    }
+    .pattern-fill {
+      height: 100%; border-radius: 4px;
+      animation: ilBarGrow .8s cubic-bezier(.34,1.2,.64,1) both;
+    }
+    .pattern-label {
+      font-size: 12px; font-weight: 600; color: var(--il-fg-2);
+      width: 80px; text-align: right; text-transform: capitalize;
+    }
+    .pattern-value {
+      font-size: 12px; font-weight: 700; font-family: var(--il-font-mono);
+      width: 45px;
+    }
+
+    .timeline-wrapper { position: relative; height: 200px; }
+  </style>
+</head>
+<body>
+  <div class="il-shell">
+    <div class="dashboard">
+      <div class="sidebar">
+        <div class="logo-area">
+          <div class="mark"></div>
+          <div class="logo-text">InnerLink</div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-analytics"/></svg>
+            Analytics
+          </button>
+          <button class="nav-item">
+            <svg fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            Messages
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-timeline"/></svg>
+            History
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-group"/></svg>
+            Groups
+          </button>
+          <button class="nav-item active">
+            <svg><use href="../../assets/icons-gradient.svg#icon-user"/></svg>
+            Profile
+          </button>
+          <button class="nav-item" style="margin-top:auto;">
+            <svg><use href="../../assets/icons-gradient.svg#icon-settings"/></svg>
+            Settings
+          </button>
+        </nav>
+      </div>
+
+      <main class="main">
+        <div class="page-header">
+          <h1 class="page-title">Your Profile</h1>
+          <p class="page-subtitle">Personal patterns · Emotion history · Communication style</p>
+        </div>
+
+        <div class="profile-hero">
+          <div class="avatar-large">AC</div>
+          <div class="profile-info">
+            <h2 class="profile-name">Alex Chen</h2>
+            <p class="profile-role">Product Designer · San Francisco</p>
+            <div class="profile-stats">
+              <div class="stat-item">
+                <div class="stat-value">2,847</div>
+                <div class="stat-label">Messages</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">24</div>
+                <div class="stat-label">Conversations</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">12</div>
+                <div class="stat-label">Groups</div>
+              </div>
+              <div class="stat-item">
+                <div class="stat-value">87%</div>
+                <div class="stat-label">Joy Index</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">Personal baseline</div>
+                <div class="card-title">Emotion Patterns</div>
+              </div>
+              <svg width="20" height="20"><use href="../../assets/icons-gradient.svg#icon-emotion"/></svg>
+            </div>
+            <div class="emotion-patterns">
+              <div class="pattern-row">
+                <div class="pattern-label">Joy</div>
+                <div class="pattern-bar">
+                  <div class="pattern-fill" style="width: 68%; background: linear-gradient(90deg, rgba(52,199,89,.6), rgba(255,196,0,.5));"></div>
+                </div>
+                <div class="pattern-value" style="color: rgb(52,199,89);">68%</div>
+              </div>
+              <div class="pattern-row">
+                <div class="pattern-label">Excitement</div>
+                <div class="pattern-bar">
+                  <div class="pattern-fill" style="width: 52%; background: linear-gradient(90deg, rgba(255,126,0,.6), rgba(255,126,0,.4)); animation-delay: .1s;"></div>
+                </div>
+                <div class="pattern-value" style="color: rgb(255,126,0);">52%</div>
+              </div>
+              <div class="pattern-row">
+                <div class="pattern-label">Love</div>
+                <div class="pattern-bar">
+                  <div class="pattern-fill" style="width: 44%; background: linear-gradient(90deg, rgba(255,20,130,.6), rgba(255,20,130,.4)); animation-delay: .2s;"></div>
+                </div>
+                <div class="pattern-value" style="color: rgb(255,20,130);">44%</div>
+              </div>
+              <div class="pattern-row">
+                <div class="pattern-label">Sadness</div>
+                <div class="pattern-bar">
+                  <div class="pattern-fill" style="width: 18%; background: linear-gradient(90deg, rgba(0,122,255,.6), rgba(0,122,255,.4)); animation-delay: .3s;"></div>
+                </div>
+                <div class="pattern-value" style="color: rgb(0,122,255);">18%</div>
+              </div>
+              <div class="pattern-row">
+                <div class="pattern-label">Neutral</div>
+                <div class="pattern-bar">
+                  <div class="pattern-fill" style="width: 24%; background: linear-gradient(90deg, rgba(0,0,0,.3), rgba(0,0,0,.15)); animation-delay: .4s;"></div>
+                </div>
+                <div class="pattern-value" style="color: rgba(0,0,0,.5);">24%</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card grid-full">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">30-day history</div>
+                <div class="card-title">Emotion Timeline</div>
+              </div>
+              <svg width="20" height="20"><use href="../../assets/icons-gradient.svg#icon-timeline"/></svg>
+            </div>
+            <div class="timeline-wrapper" id="timeline-root"></div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // Emotion Timeline component with animation
+    function EmotionTimeline() {
+      const [currentDay, setCurrentDay] = useState(0);
+
+      useEffect(() => {
+        const timer = setInterval(() => {
+          setCurrentDay(d => (d + 1) % 30);
+        }, 2000);
+        return () => clearInterval(timer);
+      }, []);
+
+      const emotions = [
+        { name: 'joy', color: 'rgba(52,199,89,0.7)', values: generateWave(30, 0.6, 0.3) },
+        { name: 'excitement', color: 'rgba(255,126,0,0.6)', values: generateWave(30, 0.4, 0.2) },
+        { name: 'love', color: 'rgba(255,20,130,0.5)', values: generateWave(30, 0.35, 0.15) },
+        { name: 'sadness', color: 'rgba(0,122,255,0.5)', values: generateWave(30, 0.15, 0.1) },
+      ];
+
+      return (
+        <svg width="100%" height="200" style={{overflow: 'visible'}}>
+          <defs>
+            {emotions.map((emo, i) => (
+              <linearGradient key={emo.name} id={`grad-${emo.name}`} x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stopColor={emo.color} stopOpacity="0.6"/>
+                <stop offset="100%" stopColor={emo.color} stopOpacity="0.1"/>
+              </linearGradient>
+            ))}
+          </defs>
+
+          {emotions.map((emo, idx) => {
+            const points = emo.values.map((v, i) => {
+              const x = (i / 29) * 100;
+              const y = 100 - (v * 180);
+              return `${x},${y}`;
+            }).join(' ');
+            const areaPoints = `0,200 ${points} 100,200`;
+
+            return (
+              <g key={emo.name} style={{
+                opacity: 0,
+                animation: `ilFadeUp 0.6s cubic-bezier(0.34,1.2,0.64,1) ${idx * 0.15}s forwards`
+              }}>
+                <polyline
+                  points={areaPoints}
+                  fill={`url(#grad-${emo.name})`}
+                  opacity="0.5"
+                />
+                <polyline
+                  points={points}
+                  fill="none"
+                  stroke={emo.color}
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </g>
+            );
+          })}
+
+          {/* Current day indicator */}
+          <line
+            x1={`${(currentDay / 29) * 100}%`}
+            y1="0"
+            x2={`${(currentDay / 29) * 100}%`}
+            y2="200"
+            stroke="rgba(0,119,255,0.4)"
+            strokeWidth="2"
+            strokeDasharray="4,4"
+            style={{
+              transition: 'all 1.8s cubic-bezier(0.34,1.2,0.64,1)'
+            }}
+          />
+          <circle
+            cx={`${(currentDay / 29) * 100}%`}
+            cy="10"
+            r="5"
+            fill="#0077ff"
+            style={{
+              transition: 'all 1.8s cubic-bezier(0.34,1.2,0.64,1)',
+              filter: 'drop-shadow(0 2px 6px rgba(0,119,255,0.4))'
+            }}
+          />
+        </svg>
+      );
+    }
+
+    function generateWave(length, base, amplitude) {
+      return Array.from({length}, (_, i) => {
+        const wave = Math.sin(i * 0.3) * amplitude;
+        const noise = (Math.random() - 0.5) * 0.08;
+        return Math.max(0, Math.min(1, base + wave + noise));
+      });
+    }
+
+    ReactDOM.render(<EmotionTimeline />, document.getElementById('timeline-root'));
+  </script>
+</body>
+</html>
