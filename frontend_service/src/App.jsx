@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import LoginModal from './components/LoginModal';
+import DemoRunner from './components/DemoRunner';
 import IGDashboard from './pages/IGDashboard';
 import AnalyticsPage from './pages/AnalyticsPage';
+import LiveAnalyticsDashboardPage from './pages/LiveAnalyticsDashboardPage';
 import AdminPipelinePage from './pages/AdminPipelinePage';
-import './glass/CrystalGlass.css';
+import './glass/CrystalGlass-v2.css';
 
 const API_BASE = import.meta.env.VITE_API_URL  || 'http://localhost:8001';
 const WS_BASE  = import.meta.env.VITE_WS_URL   || 'ws://localhost:8001';
@@ -47,7 +49,7 @@ function parseAnalysis(msg) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'admin'
+  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'live-analytics' | 'admin'
 
   // ── Auth ────────────────────────────────────────────────────────────────
   const [currentUser, setCurrentUser]       = useState(null);
@@ -412,6 +414,13 @@ export default function App() {
     if (last?.analysis) setCurrentAnalysis(last.analysis);
   };
 
+  const handleDemoStart = async (convId) => {
+    await fetchConversations();
+    setActiveConversationId(convId);
+    setMessages([]);
+    setCurrentAnalysis(null);
+  };
+
   // ── Render: loading gate ──────────────────────────────────────────────────
   if (currentUser && !systemReady) {
     return (
@@ -483,6 +492,7 @@ export default function App() {
           onRemoveMember={handleRemoveMember}
           onDeleteMessage={handleDeleteMessage}
           onGoToAnalytics={() => setView('analytics')}
+          onGoToLiveAnalytics={() => setView('live-analytics')}
           onGoToAdmin={() => setView('admin')}
           onLogout={handleLogout}
           status={status}
@@ -495,6 +505,8 @@ export default function App() {
           regeneratingIds={regeneratingIds}
           onRegenerateAnalysis={handleRegenerateAnalysis}
           onInjectDemo={handleInjectDemo}
+          socketRef={socketRef}
+          onDemoStart={handleDemoStart}
         />
       )}
 
@@ -506,6 +518,13 @@ export default function App() {
           currentUser={currentUser}
           onBack={() => setView('dashboard')}
           onRefresh={fetchAnalytics}
+        />
+      )}
+
+      {view === 'live-analytics' && (
+        <LiveAnalyticsDashboardPage
+          currentUser={currentUser}
+          onBack={() => setView('dashboard')}
         />
       )}
 

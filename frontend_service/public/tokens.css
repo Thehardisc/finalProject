@@ -1,0 +1,99 @@
+/* InnerLink app · UI kit tokens.
+   Extends the root design system. Nothing redefined here — just imports +
+   a couple kit-local helpers. */
+@import url("../../colors_and_type.css");
+
+html, body, #root { height: 100%; margin: 0; }
+body {
+  background: var(--il-canvas);
+  font-family: var(--il-font-sans);
+  color: var(--il-fg-1);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Crystal Glass shell — chromatic atmosphere v2 UPGRADED */
+.il-shell {
+  width: 100vw; height: 100vh; overflow: hidden;
+  background:
+    radial-gradient(ellipse at 18% 12%, rgba(112,0,255,.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 82% 88%, rgba(0,119,255,.12) 0%, transparent 50%),
+    #ffffff;
+  position: relative;
+}
+
+/* Floating atmosphere orbs — larger, more prominent */
+.il-shell::before,
+.il-shell::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+  animation: ilFloating 16s ease-in-out infinite;
+}
+.il-shell::before {
+  width: 600px; height: 600px;
+  background: radial-gradient(circle, rgba(112,0,255,.14) 0%, transparent 70%);
+  top: -200px; left: -180px;
+}
+.il-shell::after {
+  width: 550px; height: 550px;
+  background: radial-gradient(circle, rgba(0,119,255,.14) 0%, transparent 70%);
+  bottom: -150px; right: -160px;
+  animation-delay: -8s;
+}
+
+@keyframes ilFloating {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  33% { transform: translate(30px, -40px) scale(1.05); }
+  66% { transform: translate(-25px, 35px) scale(0.95); }
+}
+
+/* Frosted panel — v2 stronger glass + glow */
+.il-glass {
+  background: var(--il-glass-bg);
+  backdrop-filter: var(--il-blur);
+  -webkit-backdrop-filter: var(--il-blur);
+  border: 1px solid var(--il-glass-border);
+  border-radius: var(--il-radius-xl);
+  box-shadow: var(--il-shadow-md), var(--il-shadow-inset), var(--il-glass-glow);
+}
+
+/* Emotion-shifting glass — changes tint based on emotion */
+.il-glass-emotion {
+  background: var(--il-glass-bg);
+  backdrop-filter: var(--il-blur-emotion);
+  -webkit-backdrop-filter: var(--il-blur-emotion);
+  border: 1.5px solid rgba(255, 255, 255, 0.85);
+  border-radius: var(--il-radius-xl);
+  box-shadow: 
+    var(--il-shadow-md),
+    var(--il-shadow-inset),
+    inset 0 0 60px rgba(var(--emotion-rgb, 0,119,255), 0.08);
+  transition: box-shadow 0.6s var(--il-ease-spring), border-color 0.6s;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.10); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.18); }
+
+/* Animations the kit uses */
+@keyframes ilFadeUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes ilDrop {
+  0%   { transform: translateY(-32px) scaleY(0.80); opacity: 0; }
+  52%  { transform: translateY(5px)   scaleY(1.05); opacity: 1; }
+  70%  { transform: translateY(-3px)  scaleY(0.97); }
+  85%  { transform: translateY(2px)   scaleY(1.01); }
+  100% { transform: translateY(0)     scaleY(1);    opacity: 1; }
+}
+@keyframes ilPulse { 50% { opacity: .5; transform: scale(1.5); } }
+@keyframes ilSpin  { to { transform: rotate(360deg); } }
+@keyframes ilSweep { from { background-position: -200% center; } to { background-position: 200% center; } }
+@keyframes ilShimmer {
+  0% { background-position: -200% center; opacity: 0; }
+  50% { opacity: 1; }
+  100% { background-position: 200% center; opacity: 0; }
+}
+

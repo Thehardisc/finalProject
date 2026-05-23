@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
 import TelemetryPanel  from '../components/TelemetryPanel';
 import AnalysisDrawer  from '../components/AnalysisDrawer';
+import DemoRunner      from '../components/DemoRunner';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -403,6 +404,7 @@ export default function IGDashboard({
   onRemoveMember,
   onDeleteMessage,
   onGoToAnalytics,
+  onGoToLiveAnalytics,
   onGoToAdmin,
   onLogout,
   status,
@@ -415,6 +417,8 @@ export default function IGDashboard({
   onRegenerateAnalysis,
   onInjectDemo,
   regeneratingIds = new Set(),
+  socketRef,
+  onDemoStart,
 }) {
   const [search, setSearch]                   = useState('');
   const [showCompose, setShowCompose]         = useState(false);
@@ -580,6 +584,15 @@ export default function IGDashboard({
                 >
                   <span>✨</span> Analytics
                 </button>
+                {onGoToLiveAnalytics && (
+                  <button onClick={() => { setShowProfileMenu(false); onGoToLiveAnalytics(); }}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
+                    onMouseOver={e => e.currentTarget.style.background = '#f8f9fa'}
+                    onMouseOut={e => e.currentTarget.style.background = 'none'}
+                  >
+                    <span>📊</span> Live Analytics
+                  </button>
+                )}
                 {currentUser?.role === 'admin' && (
                   <button onClick={() => { setShowProfileMenu(false); onGoToAdmin(); }}
                     style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 10 }}
@@ -776,6 +789,14 @@ export default function IGDashboard({
                     style={{ background: memberPanelOpen ? '#f0f6ff' : 'none', border: `1px solid ${memberPanelOpen ? '#0077ff' : 'rgba(0,0,0,.10)'}`, borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.75rem', color: memberPanelOpen ? '#0077ff' : '#6b7280', fontWeight: 500, transition: 'all .15s' }}>
                     👥 Members
                   </button>
+                )}
+
+                {socketRef && onDemoStart && (
+                  <DemoRunner
+                    currentUser={currentUser}
+                    socketRef={socketRef}
+                    onDemoStart={onDemoStart}
+                  />
                 )}
 
                 {onInjectDemo && (

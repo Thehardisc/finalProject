@@ -168,6 +168,8 @@ async def _handle_conversation_update(message_id, data):
             "context_shift":          json.loads(data.get("context_shift", "null")),
             "logic_map":              pipeline_log.get("logic_map", {}),
             "sender_id":              data.get("user_id"),
+            "context_snapshot":       pipeline_log.get("context_snapshot"),
+            "lstm_trajectory":        pipeline_log.get("trajectory"),
         },
         "vibe": {
             "valence":     conv_state.get("average_valence", 0),
