@@ -145,10 +145,12 @@ class PipelineRunner:
 
             async def sender():
                 for i, text in enumerate(messages):
+                    # Alternate senders: even turns = Alice, odd turns = Bob
+                    turn_sender = self._alice["user_id"] if i % 2 == 0 else self._bob["user_id"]
                     payload = json.dumps({
                         "text":            text,
                         "conversation_id": conv_id,
-                        "sender_id":       self._alice["user_id"],
+                        "sender_id":       turn_sender,
                     })
                     await ws.send(payload)
                     logger.debug(f"  Sent [{i+1}/{total_messages}]: {text[:60]}")
@@ -156,6 +158,8 @@ class PipelineRunner:
                         await asyncio.sleep(MSG_SEND_INTERVAL)
                 # After last message, wait for pipeline to finish all messages
                 await asyncio.sleep(tail_wait)
+                # Close WebSocket so receiver() unblocks and asyncio.gather() can return
+                await ws.close()
 
             async def receiver():
                 try:
