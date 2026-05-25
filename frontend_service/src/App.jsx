@@ -260,7 +260,7 @@ export default function App() {
               }
               return prev;
             });
-          } else if (payload.type === 'partial') {
+          } else if (payload.type === 'model_ready') {
             setPartialModels(prev => {
               const next = new Set(prev);
               next.add(payload.model);
