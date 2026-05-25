@@ -186,6 +186,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             f"| top-5={list(trajectory.get('predicted_next', {}).keys())}"
         )
 
+    cdm_probs = context_vector[0:7] if ce_available else [0.0] * 7
+    cdm_state_idx = cdm_probs.index(max(cdm_probs)) if ce_available else None
+
     pipeline_log = {
         "models":            model_outputs,
         "aggregated":        final_scores,
@@ -197,12 +200,17 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "conflict":          conflict_desc,
         "trajectory":        trajectory,
         "context_snapshot":  {
-            "prev_emotion":       prev_emotion,
-            "cur_valence":        cur_val,
-            "historical_valence": hist_val,
-            "topic_resonance":    resonance,
-            "volatility":         volatility,
-            "ce_available":       ce_available,
+            "prev_emotion":         prev_emotion,
+            "cur_valence":          cur_val,
+            "historical_valence":   hist_val,
+            "topic_resonance":      resonance,
+            "volatility":           volatility,
+            "ce_available":         ce_available,
+            "cdm_state_probs":      [round(float(p), 4) for p in cdm_probs],
+            "cdm_current_state":    cdm_state_idx,
+            "cdm_residency":        round(float(context_vector[7]), 3) if ce_available else 0.0,
+            "cdm_entry_abruptness": round(float(context_vector[11]), 3) if ce_available else 0.0,
+            "cdm_available":        ce_available,
         },
     }
 

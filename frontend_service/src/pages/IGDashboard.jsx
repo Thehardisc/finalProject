@@ -1008,6 +1008,7 @@ export default function IGDashboard({
             <TelemetryPanel
               processing={processing}
               lastAnalysis={currentAnalysis}
+              partialModels={partialModels}
             />
           )}
         </div>

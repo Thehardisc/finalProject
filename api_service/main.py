@@ -252,11 +252,24 @@ async def _handle_reasoning_update(message_id, data):
                 await manager.broadcast_to_user(uid, payload)
 
 
+async def _handle_model_ready(message_id, data):
+    payload = {
+        "type":       "model_ready",
+        "message_id": data.get("message_id"),
+        "model":      data.get("model"),
+    }
+    conv_id = data.get("conversation_id")
+    if conv_id:
+        user_ids = await _get_participants(get_pool(), conv_id)
+        for uid in user_ids:
+            await manager.broadcast_to_user(uid, payload)
+
+
 async def redis_listener():
     """Listen to Redis streams and push updates to connected WebSocket clients."""
     logger.info("Starting Redis Listener for WebSockets...")
     r = redis_client.redis
-    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream"]
+    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream", "partial_result_stream"]
     last_ids = {k: "$" for k in STREAM_KEYS}
 
     while True:
@@ -272,6 +285,8 @@ async def redis_listener():
                             await _handle_conversation_update(message_id, data)
                         elif stream_name == "reasoning_update_stream":
                             await _handle_reasoning_update(message_id, data)
+                        elif stream_name == "partial_result_stream":
+                            await _handle_model_ready(message_id, data)
         except Exception as e:
             logger.log_exception("WebSocket Redis Listener Error", e)
             await asyncio.sleep(1)
@@ -309,8 +324,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 msg_obj = json.loads(data)
                 text = msg_obj.get("text")
                 if text:
-                    # SEC FIX: Enforce sender identity from JWT, ignoring user-provided 'sender_id'
-                    sender = user_id
+                    # Admins may impersonate sender_id (used by DemoRunner for bi-directional demo)
+                    sender = (
+                        msg_obj.get("sender_id")
+                        if user_data.get("role") == "admin" and msg_obj.get("sender_id")
+                        else user_id
+                    )
                     conversation_id = msg_obj.get("conversation_id")
                     if not conversation_id:
                         await websocket.send_json({"type": "error", "message": "conversation_id is required."})
