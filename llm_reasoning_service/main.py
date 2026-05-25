@@ -115,7 +115,15 @@ async def main():
                                 pass
 
         except Exception as e:
-            logger.log_exception("EXPLAINER SERVICE — Redis error, retrying in 1s", e)
+            if "NOGROUP" in str(e):
+                try:
+                    await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
+                    logger.info("Re-created consumer group after NOGROUP error.")
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error(f"Failed to re-create group: {cg_err}")
+            else:
+                logger.log_exception("EXPLAINER SERVICE — Redis error, retrying in 1s", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":
