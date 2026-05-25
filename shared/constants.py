@@ -14,10 +14,10 @@ VADER_KEYS  = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
 BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
 
 # Feature vector layout:
-#   ML_DIM  [0:39]   = VADER(4) + BERT(7) + GoEmotions(28)
-#   CONTEXT [39:190] = Context Engine 151-dim vector
+#   ML_DIM  [0:39]  = VADER(4) + BERT(7) + GoEmotions(28)
+#   CONTEXT [39:62] = Context Engine 23-dim CDM scalars
 #
-# Context vector internal layout (151 dims):
+# Context vector internal layout (23 dims):
 #   [0:7]    CDM state probabilities (7 conversation states)
 #   [7]      state_residency         (how long in current state, 0-1)
 #   [8:11]   transition_path         (last 3 state indices / 7)
@@ -33,10 +33,9 @@ BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surpris
 #   [20]     current_valence         (EMA valence of conversation)
 #   [21]     message_length
 #   [22]     latency_ms
-#   [23:151] embedding[:128]         (SentenceTransformer, expanded from 42)
 ML_DIM      = 39    # VADER(4) + BERT(7) + GoE(28)
-CONTEXT_DIM = 151   # CDM(23) + embedding(128)
-FEATURE_DIM = 190   # ML_DIM(39) + CONTEXT_DIM(151)
+CONTEXT_DIM = 23    # CDM scalars only (no raw embedding)
+FEATURE_DIM = 62    # ML_DIM(39) + CONTEXT_DIM(23)
 
 # Named index map for the context vector — import these instead of hardcoding integers.
 # Any change to CONTEXT_DIM layout must update these constants AND context_engine_service/main.py.
@@ -55,7 +54,6 @@ CTX_VOLATILITY     = 19            # EMA variance
 CTX_CURR_VALENCE   = 20            # EMA valence of conversation
 CTX_MSG_LENGTH     = 21            # character count
 CTX_LATENCY_MS     = 22            # time since previous message
-CTX_EMBEDDING      = slice(23, 151) # SentenceTransformer[:128]
 
 # CDM — 7 latent conversation states
 CDM_STATES = [

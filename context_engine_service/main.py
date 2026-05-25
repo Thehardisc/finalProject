@@ -1,10 +1,10 @@
 """
 context_engine_service/main.py — Context Engine Service (CDM edition).
 
-Listens to preprocessed_stream, builds a 151-dim context vector per message,
+Listens to preprocessed_stream, builds a 23-dim context vector per message,
 and publishes it to partial_analysis_stream for the central_responder_service.
 
-Context vector layout (151 dims — must match shared/constants.py CONTEXT_DIM):
+Context vector layout (23 dims — must match shared/constants.py CONTEXT_DIM):
   [0:7]    CDM state probabilities (7 latent conversation states)
   [7]      state_residency         (consecutive messages in current state, normalised)
   [8:11]   transition_path         (last 3 state indices / 7)
@@ -20,7 +20,6 @@ Context vector layout (151 dims — must match shared/constants.py CONTEXT_DIM):
   [20]     current_valence         (EMA valence of whole conversation)
   [21]     message_length          (char count)
   [22]     latency_ms              (time since previous message)
-  [23:151] embedding[:128]         (SentenceTransformer all-MiniLM-L6-v2 prefix)
 """
 
 import asyncio
@@ -203,7 +202,7 @@ class ContextEngineService:
         last_emotions:      Dict,
     ) -> List[float]:
         """
-        Build the 151-dim CDM context vector for the current message.
+        Build the 23-dim CDM context vector for the current message.
         Reads Redis state written by aggregation_service for the PREVIOUS message,
         so all features capture momentum and trajectory rather than instantaneous values.
         """
@@ -281,25 +280,23 @@ class ContextEngineService:
         await self.redis.ltrim(state_hist_key, 0, 9)
         await self.redis.expire(state_hist_key, 86400 * 7)
 
-        # ── Assemble 151-dim vector ────────────────────────────────────────────
+        # ── Assemble 23-dim CDM vector ─────────────────────────────────────────
         ctx = np.zeros(CONTEXT_DIM, dtype=np.float64)
-        ctx[0:7]    = cdm_probs
-        ctx[7]      = state_residency
-        ctx[8:11]   = transition_path[:3]
-        ctx[11]     = entry_abruptness
-        ctx[12]     = topic_coherence
-        ctx[13]     = emotion_entropy
-        ctx[14]     = speaker_divergence
-        ctx[15]     = velocity
-        ctx[16]     = acceleration
-        ctx[17]     = baseline_data["historical_valence"]
-        ctx[18]     = baseline_data["topic_resonance"]
-        ctx[19]     = volatility
-        ctx[20]     = current_valence
-        ctx[21]     = float(linguistic_markers.get("length", 0))
-        ctx[22]     = float(linguistic_markers.get("latency_ms", 0))
-        embed_arr   = np.array(current_embedding, dtype=np.float64) if current_embedding else np.zeros(384)
-        ctx[23:151] = embed_arr[:128]
+        ctx[0:7]  = cdm_probs
+        ctx[7]    = state_residency
+        ctx[8:11] = transition_path[:3]
+        ctx[11]   = entry_abruptness
+        ctx[12]   = topic_coherence
+        ctx[13]   = emotion_entropy
+        ctx[14]   = speaker_divergence
+        ctx[15]   = velocity
+        ctx[16]   = acceleration
+        ctx[17]   = baseline_data["historical_valence"]
+        ctx[18]   = baseline_data["topic_resonance"]
+        ctx[19]   = volatility
+        ctx[20]   = current_valence
+        ctx[21]   = float(linguistic_markers.get("length", 0))
+        ctx[22]   = float(linguistic_markers.get("latency_ms", 0))
 
         return ctx.tolist()
 
@@ -340,7 +337,7 @@ context_engine = ContextEngineService(
 
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Initializing Context Engine (CDM 151-dim)...")
+    logger.info("Initializing Context Engine (CDM 23-dim)...")
     await context_engine.initialize()
     asyncio.create_task(redis_listener())
 
