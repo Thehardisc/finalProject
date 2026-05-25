@@ -34,7 +34,6 @@ from typing import Dict, List
 
 # Make cdm.py importable from any launch directory (project root or service dir)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from cdm import CDM
 from shared.constants import (
     CONTEXT_DIM,
@@ -57,8 +56,6 @@ app = FastAPI()
 REDIS_HOST  = os.getenv("REDIS_HOST",  "redis")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
 STREAM_MAXLEN = int(os.getenv("REDIS_STREAM_MAXLEN", 10_000))
-
-CONTEXT_DIM = 151  # must stay in sync with shared/constants.py
 
 # GoEmotions label order — must match shared/constants.py EMOTION_LABELS
 _GOEMOTION_LABELS = [

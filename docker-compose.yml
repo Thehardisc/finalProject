@@ -268,7 +268,8 @@ services:
 
   context_engine_service:
     build:
-      context: ./context_engine_service
+      context: .
+      dockerfile: context_engine_service/Dockerfile
     environment:
       - REDIS_HOST=redis
       - QDRANT_HOST=qdrant
