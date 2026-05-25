@@ -19,7 +19,7 @@ from shared.utils.logger import get_logger
 
 logger = get_logger("meta_learner")
 
-from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM
+from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM, ML_DIM
 
 
 # Default model path inside the container (mounted via Docker volume)
@@ -51,7 +51,7 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             logger.warning("Loaded object is not a valid sklearn Pipeline. Fallback mode.")
             return None
 
-        # Dimension sanity check — ensure it matches our current 190D feature vector
+        # Dimension sanity check — ensure it matches our current 62D feature vector
         try:
             dummy_x = np.zeros((1, FEATURE_DIM))
             model.predict(dummy_x)
@@ -76,13 +76,13 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
 def build_feature_vector(model_outputs: dict, context_vector: list = None) -> np.ndarray:
     """
     Build a fixed-length float32 numpy feature vector.
-    Returns np.ndarray of shape (1, 190).
+    Returns np.ndarray of shape (1, 62).
 
     Layout:
-      [0:4]    VADER (4)        ─── ML block (39 dims)
-      [4:11]   BERT Ekman (7)   │
-      [11:39]  GoEmotions (28)  ─
-      [39:190] Context Engine (151) — CDM states, trajectory, embedding[:128]
+      [0:4]   VADER (4)        ─── ML block (39 dims)
+      [4:11]  BERT Ekman (7)   │
+      [11:39] GoEmotions (28)  ─
+      [39:62] Context Engine (23) — CDM scalars only
     """
     vader_scores      = model_outputs.get("vader", {})
     bert_scores       = model_outputs.get("basic_bert", {})
@@ -102,8 +102,8 @@ def build_feature_vector(model_outputs: dict, context_vector: list = None) -> np
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    # Context Engine (151) — CDM state machine + trajectory + embedding[:128]
-    ctx = context_vector if (context_vector and len(context_vector) == 151) else [0.0] * 151
+    # Context Engine (23) — CDM scalars only
+    ctx = context_vector if (context_vector and len(context_vector) == CONTEXT_DIM) else [0.0] * CONTEXT_DIM
     vec.extend(ctx)
 
     arr = np.array(vec, dtype=np.float32)
@@ -119,7 +119,7 @@ def predict_with_meta_learner(
 
     Args:
         model: Loaded sklearn Pipeline (from load_meta_learner).
-        feature_vector: np.ndarray of shape (1, 190) from build_feature_vector().
+        feature_vector: np.ndarray of shape (1, 62) from build_feature_vector().
 
     Returns:
         (dominant_emotion: str, confidence: float, all_scores: dict)
@@ -152,7 +152,7 @@ def detect_emotional_conflicts(vec: np.ndarray):
     try:
         # Flatten (1, FEATURE_DIM) → (FEATURE_DIM,) so scalar indexing works
         v = vec.flatten()
-        # Offsets: VADER[0:4] BERT[4:11] GoE[11:39] Context[39:190]
+        # Offsets: VADER[0:4] BERT[4:11] GoE[11:39] Context[39:62]
         v_pos = float(v[2])    # VADER pos
         v_neg = float(v[0])    # VADER neg
         v_cmp = float(v[3])    # VADER compound
@@ -194,44 +194,39 @@ def detect_emotional_conflicts(vec: np.ndarray):
 
 def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emotion: str) -> dict:
     """
-    Calculate the contribution of each high-level model/context block 
-    to the final prediction logic.
+    Block-level feature attribution via leave-one-out sensitivity.
+
+    Measures how much the predicted-class probability drops when each block
+    is zeroed out. Model-agnostic — works for MLP, LR, or any sklearn Pipeline.
+    4 forward passes total; negligible inference latency.
     """
     try:
-        # 1. Access components from sklearn Pipeline
-        scaler = model.named_steps['scaler']
-        clf    = model.named_steps['clf']
-        
-        # 2. Scale features (to match clf's expected input)
-        X_scaled = scaler.transform(feature_vector)[0]
-        
-        # 3. Find index of the predicted class
-        classes = list(clf.classes_)
+        classes = list(model.classes_)
         if predicted_emotion not in classes:
             return {}
         class_idx = classes.index(predicted_emotion)
-        
-        # 4. Get coefficients for this specific class (num_features,)
-        # For binary case clf.coef_ is (1, d), for multi (c, d)
-        weights = clf.coef_[class_idx]
-        
-        # 5. Calculate raw contributions
-        contributions = X_scaled * weights
-        
-        # 6. Group by block — offsets match FEATURE_DIM=190
-        # VADER[0:4] BERT[4:11] GoE[11:39] Context[39:190]
-        impacts = {
-            "VADER":      float(np.sum(contributions[0:4])),
-            "BERT":       float(np.sum(contributions[4:11])),
-            "GoEmotions": float(np.sum(contributions[11:39])),
-            "Context":    float(np.sum(contributions[39:190])),
+
+        base_proba = float(model.predict_proba(feature_vector)[0][class_idx])
+
+        # Block offsets: VADER[0:4] BERT[4:11] GoE[11:39] Context[39:FEATURE_DIM]
+        blocks = {
+            "VADER":      slice(0,     4),
+            "BERT":       slice(4,     11),
+            "GoEmotions": slice(11,    ML_DIM),
+            "Context":    slice(ML_DIM, FEATURE_DIM),
         }
-        
-        # Normalize for visualization (Relative Importance)
-        total = sum(abs(v) for v in impacts.values())
+
+        impacts = {}
+        for name, sl in blocks.items():
+            x_masked = feature_vector.copy()
+            x_masked[0, sl] = 0.0
+            masked_proba = float(model.predict_proba(x_masked)[0][class_idx])
+            impacts[name] = abs(base_proba - masked_proba)
+
+        total = sum(impacts.values())
         if total > 0:
             return {k: round(v / total, 4) for k, v in impacts.items()}
-        return impacts
+        return {k: 0.25 for k in impacts}
 
     except Exception as e:
         logger.warning(f"Failed to calculate impacts: {e}")

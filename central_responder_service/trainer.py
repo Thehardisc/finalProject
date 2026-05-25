@@ -43,7 +43,7 @@ MODEL_PATH       = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.p
 META_PATH        = MODEL_PATH.with_name("meta_weights_meta.json")
 
 import random as _random_mod
-from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM
+from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM
 from meta_learner import build_feature_vector
 
 
@@ -115,23 +115,17 @@ def _get_analyzers(device):
 
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     from transformers import pipeline as hf_pipeline
-    try:
-        from sentence_transformers import SentenceTransformer
-        embedder = SentenceTransformer('all-MiniLM-L6-v2')
-    except ImportError:
-        logger.warning("sentence_transformers not installed — embedding slice of context vector will be zeros")
-        embedder = None
 
-    vader    = SentimentIntensityAnalyzer()
-    bert     = hf_pipeline("text-classification",
-                            model="j-hartmann/emotion-english-distilroberta-base",
-                            return_all_scores=True, device=device)
-    goe      = hf_pipeline("text-classification",
-                            model="SamLowe/roberta-base-go_emotions",
-                            return_all_scores=True, device=device)
+    vader = SentimentIntensityAnalyzer()
+    bert  = hf_pipeline("text-classification",
+                         model="j-hartmann/emotion-english-distilroberta-base",
+                         return_all_scores=True, device=device)
+    goe   = hf_pipeline("text-classification",
+                         model="SamLowe/roberta-base-go_emotions",
+                         return_all_scores=True, device=device)
 
     logger.info("Analyzers fully loaded.")
-    return vader, bert, goe, embedder
+    return vader, bert, goe
 
 def _vader(v, text):
     s = v.polarity_scores(text)
@@ -142,31 +136,22 @@ def _run(model, text):
     except: return {}
 
 
-def build_synthetic_context_vector(text: str, rng, embedder) -> list:
-    """Build a 151-dim synthetic context vector for training samples.
-    CDM scalar features [0:23] are left as zeros — they have no ground-truth
-    values for the GoEmotions static dataset, and injecting random values would
-    add pure noise that hurts LogisticRegression accuracy.
-    Only the embedding slice [23:151] is filled with real SentenceTransformer
-    values, which are directly informative about the text semantics.
+def build_synthetic_context_vector() -> list:
+    """Build a 23-dim synthetic context vector for training samples.
+    All CDM scalars are zeroed — no ground-truth conversation dynamics exist
+    for the GoEmotions static dataset. Zeros are safe: the MLP will learn
+    to down-weight the context block when it carries no signal.
     """
-    ctx = [0.0] * 151
-    # [0:23] CDM scalars — zeros (no ground-truth available for static dataset)
-    # [23:151] real embedding — highly informative, matches inference distribution
-    if embedder is not None:
-        emb = embedder.encode(text)
-        ctx[23:151] = emb[:128].tolist()
-    return ctx
+    return [0.0] * CONTEXT_DIM
 
 
 # fetch data
-def fetch_live_data(vader, bert, goe, embedder):
+def fetch_live_data(vader, bert, goe):
     """
     Fetch verified samples from PostgreSQL (emotion_analysis joined with messages).
     Returns (X, y) lists of feature vectors and labels.
     """
     X, y = [], []
-    rng = _random_mod.Random()
     try:
         engine = create_engine(DATABASE_URL)
         with engine.begin() as conn:
@@ -198,7 +183,7 @@ def fetch_live_data(vader, bert, goe, embedder):
                 vs = {f"vader_{k}": v for k, v in _vader(vader, text_content).items()}
                 bs = _run(bert, text_content)
                 gs = _run(goe,  text_content)
-                ctx = build_synthetic_context_vector(text_content, rng, embedder)
+                ctx = build_synthetic_context_vector()
                 fv = build_feature_vector({"vader": vs, "basic_bert": bs, "go_emotions": gs}, context_vector=ctx)
                 X.append(fv.flatten())
                 y.append(label)
@@ -245,7 +230,7 @@ def run_one_cycle(reload_callback):
 
             import torch
             device = 0 if torch.cuda.is_available() else -1
-            vader, bert, goe, embedder = _get_analyzers(device)
+            vader, bert, goe = _get_analyzers(device)
 
             logger.info("Successfully loaded features from cache.")
         except Exception as e:
@@ -271,9 +256,7 @@ def run_one_cycle(reload_callback):
         # Setup device mapping and load analyzers
         import torch
         device = 0 if torch.cuda.is_available() else -1
-        vader, bert, goe, embedder = _get_analyzers(device)
-
-        rng = _random_mod.Random(42)  # Seeded for reproducibility
+        vader, bert, goe = _get_analyzers(device)
 
         def process(split, name):
             X, y, gs_list = [], [], []
@@ -288,7 +271,7 @@ def run_one_cycle(reload_callback):
                 bs = _run(bert, text)
                 gs = _run(goe,  text)
                 gs_list.append(gs)
-                ctx = build_synthetic_context_vector(text, rng, embedder)
+                ctx = build_synthetic_context_vector()
                 X.append(build_feature_vector({"vader": vs, "basic_bert": bs, "go_emotions": gs}, context_vector=ctx).flatten())
                 y.append(EMOTION_LABELS[lids[0]])
             pt = (time.time() - t0) / len(X) if X else 0
@@ -311,7 +294,7 @@ def run_one_cycle(reload_callback):
             }, f)
  
     # Fetch Live Supervised Data
-    X_live, y_live = fetch_live_data(vader, bert, goe, embedder)
+    X_live, y_live = fetch_live_data(vader, bert, goe)
     if X_live:
         # Augment training set with live data
         # We can duplicate live data to give it more weight if the set is small
@@ -325,7 +308,7 @@ def run_one_cycle(reload_callback):
         logger.info(f"  [Trainer] Augmented training set with {len(X_live)} live verified samples (weight={weight})")
 
     # Aggressive memory cleanup immediately after features are computed limits RAM peak
-    del vader, bert, goe, embedder
+    del vader, bert, goe
     import gc
     gc.collect()
     logger.info("Aggressively purged transient analyzers from RAM.")
@@ -352,17 +335,23 @@ def run_one_cycle(reload_callback):
         return
 
     # Train
-    logger.info("⚡ PHASE: Logistic Regression Pipeline Training...")
-    from sklearn.linear_model import LogisticRegression
+    logger.info("⚡ PHASE: MLP Pipeline Training...")
+    from sklearn.neural_network import MLPClassifier
     from sklearn.preprocessing import StandardScaler
     from sklearn.pipeline import Pipeline
     from sklearn.metrics import accuracy_score, f1_score
 
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
-        ('clf', LogisticRegression(max_iter=1000, C=1.0, solver='lbfgs',
-                                    multi_class='multinomial', class_weight='balanced',
-                                    random_state=42))
+        ('clf', MLPClassifier(
+            hidden_layer_sizes=(256, 128),
+            activation='relu',
+            max_iter=500,
+            random_state=42,
+            early_stopping=True,
+            validation_fraction=0.1,
+            n_iter_no_change=15,
+        ))
     ])
     # vstack normalises (1,N) items from build_feature_vector into a clean (n, FEATURE_DIM) matrix
     X_tr_arr = np.vstack([np.array(fv).flatten() for fv in X_tr])
