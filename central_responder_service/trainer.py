@@ -115,7 +115,12 @@ def _get_analyzers(device):
 
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     from transformers import pipeline as hf_pipeline
-    from sentence_transformers import SentenceTransformer
+    try:
+        from sentence_transformers import SentenceTransformer
+        embedder = SentenceTransformer('all-MiniLM-L6-v2')
+    except ImportError:
+        logger.warning("sentence_transformers not installed — embedding slice of context vector will be zeros")
+        embedder = None
 
     vader    = SentimentIntensityAnalyzer()
     bert     = hf_pipeline("text-classification",
@@ -124,7 +129,6 @@ def _get_analyzers(device):
     goe      = hf_pipeline("text-classification",
                             model="SamLowe/roberta-base-go_emotions",
                             return_all_scores=True, device=device)
-    embedder = SentenceTransformer('all-MiniLM-L6-v2')
 
     logger.info("Analyzers fully loaded.")
     return vader, bert, goe, embedder
@@ -167,8 +171,9 @@ def build_synthetic_context_vector(text: str, rng, embedder) -> list:
     ctx[20] = rng.uniform(-1.0, 1.0)   # current_valence
     ctx[21] = float(len(text))         # message_length
     ctx[22] = 0.0                       # latency_ms (unavailable for historical data)
-    emb = embedder.encode(text)
-    ctx[23:151] = emb[:128].tolist()
+    if embedder is not None:
+        emb = embedder.encode(text)
+        ctx[23:151] = emb[:128].tolist()
     return ctx
 
 
