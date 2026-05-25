@@ -8,6 +8,7 @@ import json
 import asyncio
 import time
 import uuid
+from collections import OrderedDict
 from typing import List, Optional
 
 # Add parent directory to path to import shared
@@ -100,6 +101,35 @@ async def get_system_status():
     return payload
 
 
+# ── Stream Metrics ─────────────────────────────────────────────────────────────
+
+MONITORED_STREAMS = [
+    "message_stream",
+    "preprocessed_stream",
+    "partial_analysis_stream",
+    "emotion_stream",
+    "conversation_update_stream",
+]
+
+@app.get("/metrics/streams")
+async def get_stream_depths():
+    """Returns current XLEN for each Redis stream. Use as an early warning for consumer lag."""
+    if not redis_client.redis:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "redis unavailable"}, status_code=503)
+    try:
+        depths = {}
+        for stream in MONITORED_STREAMS:
+            try:
+                depths[stream] = await redis_client.redis.xlen(stream)
+            except Exception:
+                depths[stream] = None
+        return {"timestamp": time.time(), "streams": depths, "maxlen": int(os.getenv("REDIS_STREAM_MAXLEN", 10_000))}
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 # ── WebSocket Manager ──────────────────────────────────────────────────────────
 
 class ConnectionManager:
@@ -133,6 +163,26 @@ class ConnectionManager:
 
 
 manager = ConnectionManager()
+
+# LRU cache: conversation_id → [user_id, ...]; evicts oldest when >1000 entries
+_participant_cache: OrderedDict = OrderedDict()
+_PARTICIPANT_CACHE_MAX = 1000
+
+
+async def _get_participants(pool, conv_id: str) -> list:
+    """Fetch conversation participants with LRU caching to avoid N+1 DB queries."""
+    if conv_id in _participant_cache:
+        _participant_cache.move_to_end(conv_id)
+        return _participant_cache[conv_id]
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id FROM conversation_participants WHERE conversation_id = $1", conv_id
+        )
+    user_ids = [r["user_id"] for r in rows]
+    _participant_cache[conv_id] = user_ids
+    if len(_participant_cache) > _PARTICIPANT_CACHE_MAX:
+        _participant_cache.popitem(last=False)
+    return user_ids
 
 
 # ── Redis Stream → WebSocket bridge ───────────────────────────────────────────
@@ -177,13 +227,9 @@ async def _handle_conversation_update(message_id, data):
         },
     }
 
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT user_id FROM conversation_participants WHERE conversation_id = $1", convo_id
-        )
-        for r in rows:
-            await manager.broadcast_to_user(r["user_id"], payload)
+    user_ids = await _get_participants(get_pool(), convo_id)
+    for uid in user_ids:
+        await manager.broadcast_to_user(uid, payload)
 
 
 async def _handle_reasoning_update(message_id, data):
@@ -200,12 +246,10 @@ async def _handle_reasoning_update(message_id, data):
             convo_id = await conn.fetchval(
                 "SELECT conversation_id FROM messages WHERE message_id = $1", msg_id
             )
-            if convo_id:
-                rows = await conn.fetch(
-                    "SELECT user_id FROM conversation_participants WHERE conversation_id = $1", convo_id
-                )
-                for r in rows:
-                    await manager.broadcast_to_user(r["user_id"], payload)
+        if convo_id:
+            user_ids = await _get_participants(pool, convo_id)
+            for uid in user_ids:
+                await manager.broadcast_to_user(uid, payload)
 
 
 async def redis_listener():
@@ -265,7 +309,8 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 msg_obj = json.loads(data)
                 text = msg_obj.get("text")
                 if text:
-                    sender = msg_obj.get("sender_id", user_id)
+                    # SEC FIX: Enforce sender identity from JWT, ignoring user-provided 'sender_id'
+                    sender = user_id
                     conversation_id = msg_obj.get("conversation_id")
                     if not conversation_id:
                         await websocket.send_json({"type": "error", "message": "conversation_id is required."})
@@ -613,7 +658,6 @@ async def admin_pipeline_detail(
             "vader":      models.get("vader", {}),
             "bert":       models.get("basic_bert", {}),
             "goemotions": models.get("go_emotions", {}),
-            "emojinet":   models.get("emojinet", {}),
         },
         "decision": {
             "aggregated":    pipeline_log.get("aggregated", {}),

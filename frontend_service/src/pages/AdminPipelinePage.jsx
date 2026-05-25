@@ -2,7 +2,7 @@
  * AdminPipelinePage — Step-by-step ML pipeline inspector for admins.
  *
  * Shows every stage of the analysis pipeline for any message:
- *   Input → VADER → BERT → GoEmotions → EmojiNet → Meta-Learner → Context Impact
+ *   Input → VADER → BERT → GoEmotions → Context Engine → Meta-Learner → Context Impact
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../api/client';
@@ -15,20 +15,18 @@ const rgb = (emo) => EmotionPalette[emo?.toLowerCase()] || EmotionPalette.neutra
 const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '—';
 const pct = (v)  => v != null ? `${(v * 100).toFixed(1)}%` : '—';
 
-const STAGE_ORDER = ['vader', 'bert', 'goemotions', 'emojinet'];
+const STAGE_ORDER = ['vader', 'bert', 'goemotions'];
 
 const STAGE_META = {
-  vader:      { label: 'VADER',       icon: '📊', color: '255,180,0',   desc: 'Lexicon-based sentiment' },
-  bert:       { label: 'BERT',        icon: '🤖', color: '0,119,255',   desc: 'Ekman 7-emotion classifier' },
-  goemotions: { label: 'GoEmotions',  icon: '🧠', color: '162,67,220',  desc: '28-class emotion model' },
-  emojinet:   { label: 'EmojiNet',    icon: '😀', color: '0,210,150',   desc: 'Emoji semantic mapping' },
+  vader:      { label: 'VADER',      icon: '📊', color: '255,180,0',  desc: 'Lexicon-based sentiment' },
+  bert:       { label: 'BERT',       icon: '🤖', color: '0,119,255',  desc: 'Ekman 7-emotion classifier' },
+  goemotions: { label: 'GoEmotions', icon: '🧠', color: '162,67,220', desc: '28-class emotion model' },
 };
 
 const MODEL_LABEL_MAP = {
   VADER:      'vader',
   BERT:       'bert',
   GoEmotions: 'goemotions',
-  EmojiNet:   'emojinet',
   Context:    'context',
 };
 
@@ -171,8 +169,7 @@ function LogicMapCard({ logicMap, dominant }) {
     VADER:      '255,180,0',
     BERT:       '0,119,255',
     GoEmotions: '162,67,220',
-    EmojiNet:   '0,210,150',
-    Context:    '255,100,150',
+    Context:    '20,184,166',
   };
 
   return (
@@ -767,24 +764,19 @@ export default function AdminPipelinePage({ currentUser, onBack }) {
                   <StageCard stageKey="goemotions" data={detail.stages.goemotions} />
                 </PipelineStep>
 
-                {/* Step 4 — EmojiNet */}
-                <PipelineStep num={4} label="EmojiNet">
-                  <StageCard stageKey="emojinet" data={detail.stages.emojinet} />
-                </PipelineStep>
-
-                {/* Step 5 — Context */}
-                <PipelineStep num={5} label="Context Engine">
+                {/* Step 4 — Context */}
+                <PipelineStep num={4} label="Context Engine">
                   <ContextCard decision={detail.decision} context={detail.context} />
                 </PipelineStep>
 
-                {/* Step 6 — Meta-Learner */}
-                <PipelineStep num={6} label="Meta-Learner Decision">
+                {/* Step 5 — Meta-Learner */}
+                <PipelineStep num={5} label="Meta-Learner Decision">
                   <DecisionCard decision={detail.decision} />
                 </PipelineStep>
 
-                {/* Step 7 — Logic Map */}
+                {/* Step 6 — Logic Map */}
                 {detail.decision.logic_map && Object.keys(detail.decision.logic_map).length > 0 && (
-                  <PipelineStep num={7} label="Model Contributions">
+                  <PipelineStep num={6} label="Model Contributions">
                     <LogicMapCard logicMap={detail.decision.logic_map} dominant={detail.decision.dominant} />
                   </PipelineStep>
                 )}

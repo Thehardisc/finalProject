@@ -1,7 +1,7 @@
 """
 ConversationLSTM — learns emotional trajectory dynamics from conversation sequences.
 
-Input  at each timestep: 67-dim feature vector (go_emotions + bert + vader + emojinet)
+Input  at each timestep: 39-dim feature vector (go_emotions + bert + vader)
 Output at each timestep: 28-dim predicted emotion distribution for the NEXT message
 
 The LSTM hidden state h_t IS the "conversation state" — a continuous learned

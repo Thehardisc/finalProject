@@ -35,9 +35,7 @@ class RuleBasedExplainer:
         if context_shift:
             insights.append(f"Detected a sudden emotional shift. While the text seems {emotion}, the conversation trajectory suggests underlying complexity.")
 
-        if strongest == "EmojiNet":
-            insights.append(f"Analysis is heavily driven by visual cues. The use of specific emojis confirms a strong {emotion} vibe.")
-        elif strongest == "BERT":
+        if strongest == "BERT":
             insights.append(f"Deep linguistic patterns suggest a layer of {emotion} that isn't immediately obvious from keywords alone.")
         elif strongest == "VADER":
             insights.append(f"The sentiment is clearly defined by explicit emotional keywords in the message.")
