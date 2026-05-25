@@ -9,4 +9,5 @@ transformers>=4.35.0
 vaderSentiment>=3.3.2
 emoji>=2.8.0
 datasets>=2.14.0
+sentence-transformers>=2.2.0
 
