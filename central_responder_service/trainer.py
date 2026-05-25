@@ -144,33 +144,15 @@ def _run(model, text):
 
 def build_synthetic_context_vector(text: str, rng, embedder) -> list:
     """Build a 151-dim synthetic context vector for training samples.
-    Matches the CDM layout defined in shared/constants.py CONTEXT_DIM=151.
-    Scalars use random realistic ranges; embedding slice uses the real encoder.
+    CDM scalar features [0:23] are left as zeros — they have no ground-truth
+    values for the GoEmotions static dataset, and injecting random values would
+    add pure noise that hurts LogisticRegression accuracy.
+    Only the embedding slice [23:151] is filled with real SentenceTransformer
+    values, which are directly informative about the text semantics.
     """
-    import numpy as _np
     ctx = [0.0] * 151
-
-    # [0:7] CDM state probs — random simplex draw
-    raw = [rng.random() for _ in range(7)]
-    s = sum(raw)
-    ctx[0:7] = [v / s for v in raw]
-
-    ctx[7]  = rng.uniform(0.0, 1.0)    # state_residency
-    ctx[8]  = rng.randint(0, 6) / 7.0  # transition_path[0]
-    ctx[9]  = rng.randint(0, 6) / 7.0  # transition_path[1]
-    ctx[10] = rng.randint(0, 6) / 7.0  # transition_path[2]
-    ctx[11] = rng.uniform(0.0, 1.0)    # entry_abruptness
-    ctx[12] = rng.uniform(-1.0, 1.0)   # topic_coherence
-    ctx[13] = rng.uniform(0.5, 3.3)    # emotion_entropy (realistic range for 28 labels)
-    ctx[14] = rng.uniform(0.0, 0.5)    # speaker_divergence
-    ctx[15] = rng.uniform(-0.5, 0.5)   # velocity
-    ctx[16] = rng.uniform(-0.3, 0.3)   # acceleration
-    ctx[17] = rng.uniform(-1.0, 1.0)   # historical_valence
-    ctx[18] = rng.uniform(0.0, 1.0)    # topic_resonance
-    ctx[19] = rng.uniform(0.0, 0.3)    # volatility
-    ctx[20] = rng.uniform(-1.0, 1.0)   # current_valence
-    ctx[21] = float(len(text))         # message_length
-    ctx[22] = 0.0                       # latency_ms (unavailable for historical data)
+    # [0:23] CDM scalars — zeros (no ground-truth available for static dataset)
+    # [23:151] real embedding — highly informative, matches inference distribution
     if embedder is not None:
         emb = embedder.encode(text)
         ctx[23:151] = emb[:128].tolist()
