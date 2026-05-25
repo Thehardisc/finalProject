@@ -24,6 +24,10 @@ from trajectory.inference import load_trajectory_model, run_trajectory_step
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
+from shared.constants import (
+    CONTEXT_DIM,
+    CTX_HIST_VALENCE, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
+)
 
 logger = get_logger("central_responder")
 
@@ -84,7 +88,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
 
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
 
-    # Separate context_engine (48-dim vector) from ML model score dicts
+    # Separate context_engine (151-dim CDM vector) from ML model score dicts
     model_outputs = {}
     context_vector = None
     for res in partial_results:
@@ -99,9 +103,16 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         else:
             model_outputs[model_name] = res.get("scores", {})
 
-    ce_available = context_vector is not None and len(context_vector) == 48
+    ce_available = context_vector is not None and len(context_vector) == CONTEXT_DIM
     if not ce_available:
-        context_vector = [0.0] * 48
+        received_dim = len(context_vector) if context_vector else 0
+        if received_dim > 0:
+            logger.warning(
+                f"[SCHEMA MISMATCH] context_vector dim={received_dim}, "
+                f"expected {CONTEXT_DIM} (CONTEXT_DIM in shared/constants.py). "
+                f"Injecting zeros — check context_engine_service version."
+            )
+        context_vector = [0.0] * CONTEXT_DIM
 
     # Fetch prev_emotion from Redis for context-shift detection
     conv_id = original_data.get("conversation_id", "conv-1")
@@ -126,11 +137,17 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
 
-    # Scalar summary from context_vector[0:4] for logging/snapshot
-    hist_val   = round(float(context_vector[0]), 4)
-    resonance  = round(float(context_vector[1]), 4)
-    volatility = round(float(context_vector[2]), 4)
-    cur_val    = round(float(context_vector[3]), 4)
+    # Prefer named scalars published by context_engine (no index guessing).
+    # Fall back to indexed access only if the named fields are absent (old version).
+    _ce_packet = next((r for r in partial_results if r.get("model_name") == "context_engine"), {})
+    def _named(key, idx):
+        v = _ce_packet.get(key)
+        return round(float(v), 4) if v is not None else round(float(context_vector[idx]), 4)
+
+    hist_val   = _named("ctx_hist_valence",    CTX_HIST_VALENCE)
+    resonance  = _named("ctx_topic_resonance", CTX_RESONANCE)
+    volatility = _named("ctx_volatility",      CTX_VOLATILITY)
+    cur_val    = _named("ctx_curr_valence",    CTX_CURR_VALENCE)
 
     top_3 = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:3]
     stats = {
@@ -251,12 +268,18 @@ async def main():
                         msg_id = data.get("message_id")
                         model_name = data.get("model_name")
 
-                        # context_engine publishes context_vector; all other models publish scores
+                        # context_engine publishes context_vector + named scalars
                         if model_name == "context_engine":
                             full_packet = {
-                                "model_name":    model_name,
-                                "context_vector": data.get("context_vector"),
-                                "original_data": data.get("original_data"),
+                                "model_name":          model_name,
+                                "context_vector":      data.get("context_vector"),
+                                "original_data":       data.get("original_data"),
+                                # Named scalars — read by aggregate_and_publish without index guessing
+                                "ctx_hist_valence":    data.get("ctx_hist_valence"),
+                                "ctx_topic_resonance": data.get("ctx_topic_resonance"),
+                                "ctx_volatility":      data.get("ctx_volatility"),
+                                "ctx_curr_valence":    data.get("ctx_curr_valence"),
+                                "ctx_dim":             data.get("ctx_dim"),
                             }
                         else:
                             scores_raw = data.get("scores")

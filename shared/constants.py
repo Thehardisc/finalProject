@@ -38,6 +38,25 @@ ML_DIM      = 39    # VADER(4) + BERT(7) + GoE(28)
 CONTEXT_DIM = 151   # CDM(23) + embedding(128)
 FEATURE_DIM = 190   # ML_DIM(39) + CONTEXT_DIM(151)
 
+# Named index map for the context vector — import these instead of hardcoding integers.
+# Any change to CONTEXT_DIM layout must update these constants AND context_engine_service/main.py.
+CTX_CDM_PROBS      = slice(0, 7)   # CDM state probability distribution
+CTX_RESIDENCY      = 7             # how long in current state (0-1)
+CTX_TRANSITION     = slice(8, 11)  # last 3 state indices / 7
+CTX_ABRUPTNESS     = 11            # entry abruptness (0-1)
+CTX_COHERENCE      = 12            # topic coherence (cosine similarity)
+CTX_ENTROPY        = 13            # Shannon entropy of GoEmotions distribution
+CTX_SPK_DIVERGENCE = 14            # speaker divergence (std of per-speaker valences)
+CTX_VELOCITY       = 15            # Δvalence vs previous message
+CTX_ACCELERATION   = 16            # Δ²valence
+CTX_HIST_VALENCE   = 17            # Qdrant episodic memory valence
+CTX_RESONANCE      = 18            # Qdrant topic resonance score
+CTX_VOLATILITY     = 19            # EMA variance
+CTX_CURR_VALENCE   = 20            # EMA valence of conversation
+CTX_MSG_LENGTH     = 21            # character count
+CTX_LATENCY_MS     = 22            # time since previous message
+CTX_EMBEDDING      = slice(23, 151) # SentenceTransformer[:128]
+
 # CDM — 7 latent conversation states
 CDM_STATES = [
     "NEUTRAL_EXPLORE",    # 0 — low intensity, topic wandering
