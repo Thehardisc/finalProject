@@ -139,18 +139,36 @@ def _run(model, text):
 
 
 def build_synthetic_context_vector(text: str, rng, embedder) -> list:
-    """Build a 48-dim synthetic context vector for training samples.
-    Scalars [0:6] use random realistic ranges; [6:48] use the real SentenceTransformer embedding.
+    """Build a 151-dim synthetic context vector for training samples.
+    Matches the CDM layout defined in shared/constants.py CONTEXT_DIM=151.
+    Scalars use random realistic ranges; embedding slice uses the real encoder.
     """
-    ctx = [0.0] * 48
-    ctx[0] = rng.uniform(-1.0, 1.0)   # historical_valence
-    ctx[1] = rng.uniform(0.0, 1.0)    # topic_resonance
-    ctx[2] = rng.uniform(0.0, 0.3)    # volatility (realistic EMA range)
-    ctx[3] = rng.uniform(-1.0, 1.0)   # current_valence
-    ctx[4] = float(len(text))         # msg_length (raw chars, matches context_engine)
-    ctx[5] = 0.0                       # latency_ms (unavailable for historical data)
+    import numpy as _np
+    ctx = [0.0] * 151
+
+    # [0:7] CDM state probs — random simplex draw
+    raw = [rng.random() for _ in range(7)]
+    s = sum(raw)
+    ctx[0:7] = [v / s for v in raw]
+
+    ctx[7]  = rng.uniform(0.0, 1.0)    # state_residency
+    ctx[8]  = rng.randint(0, 6) / 7.0  # transition_path[0]
+    ctx[9]  = rng.randint(0, 6) / 7.0  # transition_path[1]
+    ctx[10] = rng.randint(0, 6) / 7.0  # transition_path[2]
+    ctx[11] = rng.uniform(0.0, 1.0)    # entry_abruptness
+    ctx[12] = rng.uniform(-1.0, 1.0)   # topic_coherence
+    ctx[13] = rng.uniform(0.5, 3.3)    # emotion_entropy (realistic range for 28 labels)
+    ctx[14] = rng.uniform(0.0, 0.5)    # speaker_divergence
+    ctx[15] = rng.uniform(-0.5, 0.5)   # velocity
+    ctx[16] = rng.uniform(-0.3, 0.3)   # acceleration
+    ctx[17] = rng.uniform(-1.0, 1.0)   # historical_valence
+    ctx[18] = rng.uniform(0.0, 1.0)    # topic_resonance
+    ctx[19] = rng.uniform(0.0, 0.3)    # volatility
+    ctx[20] = rng.uniform(-1.0, 1.0)   # current_valence
+    ctx[21] = float(len(text))         # message_length
+    ctx[22] = 0.0                       # latency_ms (unavailable for historical data)
     emb = embedder.encode(text)
-    ctx[6:48] = emb[:42].tolist()
+    ctx[23:151] = emb[:128].tolist()
     return ctx
 
 
@@ -359,10 +377,15 @@ def run_one_cycle(reload_callback):
                                     multi_class='multinomial', class_weight='balanced',
                                     random_state=42))
     ])
-    pipeline.fit(np.array(X_tr), y_tr)
+    # vstack normalises (1,N) items from build_feature_vector into a clean (n, FEATURE_DIM) matrix
+    X_tr_arr = np.vstack([np.array(fv).flatten() for fv in X_tr])
+    X_v_arr  = np.vstack([np.array(fv).flatten() for fv in X_v])
+    X_te_arr = np.vstack([np.array(fv).flatten() for fv in X_te])
 
-    y_v_pred  = pipeline.predict(np.array(X_v))
-    y_te_pred = pipeline.predict(np.array(X_te))
+    pipeline.fit(X_tr_arr, y_tr)
+
+    y_v_pred  = pipeline.predict(X_v_arr)
+    y_te_pred = pipeline.predict(X_te_arr)
 
     val_acc   = accuracy_score(y_v,  y_v_pred)
     test_acc  = accuracy_score(y_te, y_te_pred)
