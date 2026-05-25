@@ -34,7 +34,12 @@ from typing import Dict, List
 
 # Make cdm.py importable from any launch directory (project root or service dir)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from cdm import CDM
+from shared.constants import (
+    CONTEXT_DIM,
+    CTX_HIST_VALENCE, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
+)
 
 from fastapi import FastAPI
 import redis.asyncio as aioredis
@@ -429,13 +434,21 @@ async def redis_listener():
                                 )
                             )
 
+                            # Publish raw vector + named scalars so consumers never
+                            # need to guess indices. If CONTEXT_DIM changes, only
+                            # shared/constants.py and this block need updating.
                             await context_engine.redis.xadd(
                                 "partial_analysis_stream",
                                 {
-                                    "message_id":     raw_msg_id,
-                                    "model_name":     "context_engine",
-                                    "context_vector": json.dumps(context_vector),
-                                    "original_data":  json.dumps(msg_data),
+                                    "message_id":          raw_msg_id,
+                                    "model_name":          "context_engine",
+                                    "context_vector":      json.dumps(context_vector),
+                                    "original_data":       json.dumps(msg_data),
+                                    "ctx_dim":             str(len(context_vector)),
+                                    "ctx_hist_valence":    str(context_vector[CTX_HIST_VALENCE]),
+                                    "ctx_topic_resonance": str(context_vector[CTX_RESONANCE]),
+                                    "ctx_volatility":      str(context_vector[CTX_VOLATILITY]),
+                                    "ctx_curr_valence":    str(context_vector[CTX_CURR_VALENCE]),
                                 },
                                 maxlen=STREAM_MAXLEN, approximate=True,
                             )
