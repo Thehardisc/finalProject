@@ -21,8 +21,6 @@ from trainer import start_trainer_thread
 # import trajectory LSTM
 from trajectory.inference import load_trajectory_model, run_trajectory_step
 
-import emoji as emoji_lib
-from shared.constants import EMOJI_EMOTION_DB
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
@@ -81,125 +79,84 @@ if TRAJECTORY_MODEL is not None:
     logger.info("Trajectory LSTM loaded — conversation direction prediction ACTIVE.")
 
 
-# All 27 GoEmotions labels
-EMOTION_LABELS = [
-    'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring', 
-    'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval', 
-    'disgust', 'embarrassment', 'excitement', 'fear', 'gratitude', 'grief', 
-    'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization', 
-    'relief', 'remorse', 'sadness', 'surprise', 'neutral'
-]
-
-def _emojinet_inline(text: str) -> dict:
-    """Compute emoji emotion scores inline — no network hop needed."""
-    try:
-        found  = emoji_lib.distinct_emoji_list(text)
-        scores = {}
-        count  = 0
-        for ch in found:
-            entry = EMOJI_EMOTION_DB.get(ch) or EMOJI_EMOTION_DB.get(ch.replace('️', ''))
-            if entry:
-                for emo, sc in entry.get("emotions", {}).items():
-                    scores[emo] = scores.get(emo, 0.0) + sc
-                count += 1
-        if count:
-            result = {k: v / count for k, v in scores.items()}
-            result.setdefault("neutral", 0.0)
-            return result
-    except Exception as e:
-        logger.warning(f"Inline emojinet error: {e}")
-    return {}
-
-
 async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     logger.debug(f"Aggregating results for {message_id}...")
-    
+
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
-    
-    # format model outputs — separate context_engine from ML models
+
+    # Separate context_engine (48-dim vector) from ML model score dicts
     model_outputs = {}
+    context_vector = None
     for res in partial_results:
         model_name = res.get("model_name")
-        scores = res.get("scores", {})
-        model_outputs[model_name] = scores
+        if model_name == "context_engine":
+            raw_cv = res.get("context_vector")
+            if raw_cv:
+                try:
+                    context_vector = json.loads(raw_cv) if isinstance(raw_cv, str) else raw_cv
+                except (json.JSONDecodeError, TypeError):
+                    context_vector = None
+        else:
+            model_outputs[model_name] = res.get("scores", {})
 
-    # Extract context_engine enrichment (optional — may not arrive before the 3 ML models)
-    ce            = model_outputs.pop("context_engine", {})
-    hist_val      = float(ce.get("historical_valence", 0.0))
-    resonance     = float(ce.get("topic_resonance",    0.0))
-    ce_volatility = float(ce.get("volatility",         0.0))
-    ce_available  = bool(ce)
+    ce_available = context_vector is not None and len(context_vector) == 48
+    if not ce_available:
+        context_vector = [0.0] * 48
 
-    # get context from previous message's aggregation result
+    # Fetch prev_emotion from Redis for context-shift detection
     conv_id = original_data.get("conversation_id", "conv-1")
-    context = {"avg_valence": 0.0, "prev_emotion": "neutral"}
+    prev_emotion = "neutral"
     try:
-        state_key = f"conversation:{conv_id}"
-        state = await r.hgetall(state_key)
+        state = await r.hgetall(f"conversation:{conv_id}")
         if state:
-            context["avg_valence"]  = float(state.get("average_valence", 0.0))
-            context["prev_emotion"] = state.get("dominant_emotion", "neutral")
+            prev_emotion = state.get("dominant_emotion", "neutral")
     except Exception as e:
-        logger.warning(f"Failed to fetch context for {conv_id}: {e}")
-
-    # Blend EMA valence with user's historical valence for this topic.
-    # When topic_resonance is high the user has strong historical feelings about
-    # this semantic area — let that shift the effective context by up to 30%.
-    if ce_available and resonance > 0.05 and hist_val != 0.0:
-        context["avg_valence"] = (
-            (1.0 - 0.3 * resonance) * context["avg_valence"]
-            + 0.3 * resonance * hist_val
-        )
-        logger.debug(
-            f"Context enriched by episodic memory: resonance={resonance:.2f}, "
-            f"hist_val={hist_val:.3f} → effective_val={context['avg_valence']:.3f}"
-        )
+        logger.warning(f"Failed to fetch prev_emotion for {conv_id}: {e}")
 
     logger.debug(
-        f"Context injected for {conv_id}: "
-        f"val={context['avg_valence']:.3f}, mood={context['prev_emotion']}, "
-        f"ce={'yes' if ce_available else 'no'}"
+        f"Context for {conv_id}: prev_emotion={prev_emotion}, "
+        f"ce={'yes' if ce_available else 'no (zeros)'}"
     )
 
-    # predict logic
-    fv = build_feature_vector(model_outputs, context=context)
+    # Predict
+    fv = build_feature_vector(model_outputs, context_vector=context_vector)
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc = predict_with_meta_learner(META_LEARNER, fv)
 
-    # calculate latency
-    # E2E Latency (from ingestion)
+    # E2E Latency
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
 
-    # Log Stats Block
+    # Scalar summary from context_vector[0:4] for logging/snapshot
+    hist_val   = round(float(context_vector[0]), 4)
+    resonance  = round(float(context_vector[1]), 4)
+    volatility = round(float(context_vector[2]), 4)
+    cur_val    = round(float(context_vector[3]), 4)
+
     top_3 = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:3]
     stats = {
-        "Message ID": message_id,
-        "Dominant Emotion": f"'{dominant_emotion}' ({meta_confidence:.2%})",
-        "Context Injected": f"Val:{context['avg_valence']:.2f}, Mood:{context['prev_emotion']}",
-        "Top 3 Probabilities": ", ".join([f"{e}:{s:.2%}" for e, s in top_3]),
-        "E2E Latency": f"{e2e_lat:.2f}ms",
-        "Agg Latency": f"{agg_lat:.2f}ms"
+        "Message ID":        message_id,
+        "Dominant Emotion":  f"'{dominant_emotion}' ({meta_confidence:.2%})",
+        "Prev Emotion":      prev_emotion,
+        "CE Context":        f"cur:{cur_val:.3f} hist:{hist_val:.3f} vol:{volatility:.3f} ce={'yes' if ce_available else 'no'}",
+        "Top 3":             ", ".join([f"{e}:{s:.2%}" for e, s in top_3]),
+        "E2E Latency":       f"{e2e_lat:.2f}ms",
+        "Agg Latency":       f"{agg_lat:.2f}ms",
     }
     if conflict_desc:
         stats["Conflict"] = conflict_desc
-
     logger.log_stats(f"Meta-Inference: {message_id}", stats)
 
-    # evaluate sarcasm
     reasoning = None
     if conflict_desc or sarcasm_score > 0.3:
-         reasoning = {
-             "type": "Contextual Dissonance" if conflict_desc else "Sarcastic Intent",
-             "details": conflict_desc or "Emotional signal flip detected.",
-             "sarcasm_score": float(sarcasm_score),
-             "action": "Meta-Learner nuance override applied."
-         }
+        reasoning = {
+            "type":         "Contextual Dissonance" if conflict_desc else "Sarcastic Intent",
+            "details":      conflict_desc or "Emotional signal flip detected.",
+            "sarcasm_score": float(sarcasm_score),
+            "action":        "Meta-Learner nuance override applied.",
+        }
 
-    # Calculate Logic Map (Impact Scores)
     logic_map = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion)
 
-    # Run trajectory LSTM step — updates conversation hidden state in Redis,
-    # returns predicted next-message emotion distribution + trajectory embedding
     trajectory = await run_trajectory_step(
         model=TRAJECTORY_MODEL,
         model_outputs=model_outputs,
@@ -212,7 +169,6 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             f"| top-5={list(trajectory.get('predicted_next', {}).keys())}"
         )
 
-    # format output
     pipeline_log = {
         "models":            model_outputs,
         "aggregated":        final_scores,
@@ -224,42 +180,42 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "conflict":          conflict_desc,
         "trajectory":        trajectory,
         "context_snapshot":  {
-            "prev_emotion":       context["prev_emotion"],
-            "avg_valence":        round(context["avg_valence"], 4),
-            "historical_valence": round(hist_val, 4),
-            "topic_resonance":    round(resonance, 4),
-            "volatility":         round(ce_volatility, 4),
+            "prev_emotion":       prev_emotion,
+            "cur_valence":        cur_val,
+            "historical_valence": hist_val,
+            "topic_resonance":    resonance,
+            "volatility":         volatility,
             "ce_available":       ce_available,
         },
     }
-    
+
     # Inject VADER scores into the final payload for the Aggregation/Frontend service
     if "vader" in model_outputs:
         for k, v in model_outputs["vader"].items():
-             final_scores[k] = v
+            final_scores[k] = v
 
     output_event = original_data.copy()
-    output_event["emotions"] = json.dumps(final_scores)
-    output_event["dominant_emotion"] = dominant_emotion 
-    output_event["pipeline_log"] = json.dumps(pipeline_log)
+    output_event["emotions"]         = json.dumps(final_scores)
+    output_event["dominant_emotion"] = dominant_emotion
+    output_event["pipeline_log"]     = json.dumps(pipeline_log)
     if reasoning:
         output_event["reasoning"] = json.dumps(reasoning)
-        
-    # Context Divergence Detection (Bonus)
-    prev_mood = context.get("prev_emotion", "neutral")
-    if prev_mood != "neutral" and dominant_emotion != prev_mood:
+
+    # Context Divergence Detection
+    if prev_emotion != "neutral" and dominant_emotion != prev_emotion:
         divergence = {
-            "type": "Context Shift",
-            "from": prev_mood,
-            "to": dominant_emotion,
-            "significance": "High" if meta_confidence > 0.7 else "Moderate"
+            "type":         "Context Shift",
+            "from":         prev_emotion,
+            "to":           dominant_emotion,
+            "significance": "High" if meta_confidence > 0.7 else "Moderate",
         }
         output_event["context_shift"] = json.dumps(divergence)
 
     await redis_client.publish_event(OUTPUT_STREAM, output_event)
     
-    # Cleanup
-    await r.delete(f"{PENDING_KEY_PREFIX}{message_id}")
+    # Cleanup is handled by the in-memory dict caller
+
+pending_aggregations = {}
 
 async def main():
     await redis_client.connect()
@@ -275,96 +231,104 @@ async def main():
     
     while True:
         try:
-            # Read new partial results
-            streams = {INPUT_STREAM: ">"}
-            messages = await r.xreadgroup(GROUP_NAME, CONSUMER_NAME, streams, count=10, block=2000)
-            
+            # PEL recovery: reclaim partial results idle >30s (handles crash-before-ACK)
+            try:
+                _, stale, _ = await r.xautoclaim(INPUT_STREAM, GROUP_NAME, CONSUMER_NAME, min_idle_time=30_000, start_id='0-0', count=10)
+                if stale:
+                    logger.info(f"[PEL] Reclaimed {len(stale)} stale message(s) from partial_analysis_stream")
+                    messages = [(INPUT_STREAM, stale)]
+                else:
+                    messages = None
+            except Exception:
+                messages = None
+
+            if not messages:
+                messages = await r.xreadgroup(GROUP_NAME, CONSUMER_NAME, {INPUT_STREAM: ">"}, count=10, block=2000)
+
             if messages:
                 for stream, msgs in messages:
                      for record_id, data in msgs:
                         msg_id = data.get("message_id")
                         model_name = data.get("model_name")
-                        scores_raw = data.get("scores")
-                        
-                        scores = scores_raw
-                        if isinstance(scores_raw, str):
-                            try:
-                                scores = json.loads(scores_raw)
-                            except (json.JSONDecodeError, TypeError) as e:
-                                logger.warning(f"Cannot parse scores for model '{model_name}' (msg {msg_id}): {e}")
-                        
-                        # Store in Pending Hash
-                        # Key: pending_aggregation:<msg_id>
-                        # Field: model_name
-                        # Value: JSON(full_data_packet)
-                        
-                        full_packet = {
-                            "model_name": model_name,
-                            "scores": scores,
-                            "original_data": data.get("original_data") # This might be doubly nested string
-                        }
-                        
+
+                        # context_engine publishes context_vector; all other models publish scores
+                        if model_name == "context_engine":
+                            full_packet = {
+                                "model_name":    model_name,
+                                "context_vector": data.get("context_vector"),
+                                "original_data": data.get("original_data"),
+                            }
+                        else:
+                            scores_raw = data.get("scores")
+                            scores = scores_raw
+                            if isinstance(scores_raw, str):
+                                try:
+                                    scores = json.loads(scores_raw)
+                                except (json.JSONDecodeError, TypeError) as e:
+                                    logger.warning(f"Cannot parse scores for model '{model_name}' (msg {msg_id}): {e}")
+                            full_packet = {
+                                "model_name":    model_name,
+                                "scores":        scores,
+                                "original_data": data.get("original_data"),
+                            }
+
                         # Handle original_data if it's a string
                         if isinstance(full_packet["original_data"], str):
-                             try:
-                                 full_packet["original_data"] = json.loads(full_packet["original_data"])
-                             except:
-                                 pass
+                            try:
+                                full_packet["original_data"] = json.loads(full_packet["original_data"])
+                            except Exception:
+                                pass
 
-                        pending_key = f"{PENDING_KEY_PREFIX}{msg_id}"
+                        if msg_id not in pending_aggregations:
+                            pending_aggregations[msg_id] = {"arrival_timestamp": time.time(), "models": {}}
+                        
+                        pending_aggregations[msg_id]["models"][model_name] = full_packet
 
-                        # setup pending object
-                        # add expiration
-                        is_new_key = not await r.exists(pending_key)
-                        if is_new_key:
-                            await r.hset(pending_key, "arrival_timestamp", time.time())
+                        # Publish partial result for streaming pipeline progress in the frontend
+                        if model_name != "context_engine":
+                            orig = full_packet.get("original_data")
+                            conv_id = orig.get("conversation_id") if isinstance(orig, dict) else None
+                            if conv_id:
+                                try:
+                                    await redis_client.publish_event("partial_result_stream", {
+                                        "message_id":      msg_id,
+                                        "conversation_id": conv_id,
+                                        "model":           model_name,
+                                    })
+                                except Exception:
+                                    pass
 
-                        await r.hset(pending_key, model_name, json.dumps(full_packet))
-                        await r.expire(pending_key, 30)  # refresh TTL on every update
-
-                        # emojinet computed inline below; context read from Redis in aggregate_and_publish
                         expected_models = ["go_emotions", "basic_bert", "vader"]
 
-                        current_results = await r.hgetall(pending_key)
-                        received_models = [k for k in current_results.keys() if k != "arrival_timestamp"]
+                        current_results = pending_aggregations[msg_id]["models"]
+                        received_models = list(current_results.keys())
 
                         if all(m in received_models for m in expected_models):
                             logger.debug(f"All models received for {msg_id}. Aggregating.")
 
-                            all_packets = []
-                            arrival_ts = float(current_results.get("arrival_timestamp", time.time()))
+                            all_packets = list(current_results.values())
+                            arrival_ts = pending_aggregations[msg_id]["arrival_timestamp"]
                             agg_lat = (time.time() - arrival_ts) * 1000
-
-                            for m, packet_str in current_results.items():
-                                if m == "arrival_timestamp":
-                                    continue
-                                try:
-                                    all_packets.append(json.loads(packet_str))
-                                except Exception:
-                                    logger.error(f"Failed to parse packet for model {m}")
-
-                            # Compute emojinet inline and inject as synthetic packet
-                            first_original = next(
-                                (p.get("original_data", {}) for p in all_packets if p.get("original_data")), {}
-                            )
-                            raw_text = first_original.get("text", "") or first_original.get("original_text", "")
-                            emoji_scores = _emojinet_inline(raw_text)
-                            all_packets.append({
-                                "model_name":    "emojinet",
-                                "scores":        emoji_scores,
-                                "original_data": first_original,
-                            })
 
                             try:
                                 await aggregate_and_publish(msg_id, all_packets, r, agg_lat=agg_lat)
                             except Exception as agg_err:
                                 logger.error(f"[AGGREGATION FAILED] {msg_id}: {agg_err}")
+                            
+                            # Cleanup
+                            del pending_aggregations[msg_id]
                         else:
                             missing = list(set(expected_models) - set(received_models))
                             logger.debug(f"Message {msg_id} waiting for: {missing}")
 
                         # ACK the stream record regardless of outcome
                         await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
+                        
+            # Cleanup stale pending aggregations older than 60 seconds
+            current_time = time.time()
+            stale_keys = [msg_id for msg_id, info in pending_aggregations.items() if current_time - info["arrival_timestamp"] > 60]
+            for stale_key in stale_keys:
+                del pending_aggregations[stale_key]
 
         except Exception as e:
             logger.log_exception("CENTRAL RESPONDER CRITICAL ERROR", e)

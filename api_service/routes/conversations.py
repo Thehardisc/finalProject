@@ -233,9 +233,19 @@ async def my_conversations(user_id: str):
                     {"user_id": m["user_id"], "display_name": m["display_name"]}
                 )
 
-    result = []
     all_rows = list(direct_rows) + list(group_rows)
 
+    # Fetch all Redis conversation states in one pipeline instead of one-by-one
+    redis_states = {}
+    if _redis_client and _redis_client.redis and all_rows:
+        pipe = _redis_client.redis.pipeline()
+        for row in all_rows:
+            pipe.hgetall(f"conversation:{row['conversation_id']}")
+        states = await pipe.execute()
+        for row, state in zip(all_rows, states):
+            redis_states[row["conversation_id"]] = state
+
+    result = []
     for row in all_rows:
         d = dict(row)
         cid = d["conversation_id"]
@@ -244,10 +254,10 @@ async def my_conversations(user_id: str):
             d["members"] = group_members.get(cid, [])
             d["member_count"] = len(d["members"])
 
-        if _redis_client and _redis_client.redis:
-            state = await _redis_client.redis.hgetall(f"conversation:{cid}")
-            d["average_valence"]  = float(state.get("average_valence", 0.0)) if state else 0.0
-            d["dominant_emotion"] = state.get("dominant_emotion", "Neutral") if state else "Neutral"
+        state = redis_states.get(cid)
+        if state:
+            d["average_valence"]  = float(state.get("average_valence", 0.0))
+            d["dominant_emotion"] = state.get("dominant_emotion", "Neutral")
         else:
             d["average_valence"]  = 0.0
             d["dominant_emotion"] = "Neutral"

@@ -51,7 +51,7 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             logger.warning("Loaded object is not a valid sklearn Pipeline. Fallback mode.")
             return None
 
-        # Dimension sanity check — ensure it matches our current 103D feature vector
+        # Dimension sanity check — ensure it matches our current 190D feature vector
         try:
             dummy_x = np.zeros((1, FEATURE_DIM))
             model.predict(dummy_x)
@@ -73,80 +73,38 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
         return None
 
 
-def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarray:
+def build_feature_vector(model_outputs: dict, context_vector: list = None) -> np.ndarray:
     """
-    Build a fixed-length float32 numpy feature vector from the 4 model output dicts
-    PLUS conversation context (previous mood/valence).
+    Build a fixed-length float32 numpy feature vector.
+    Returns np.ndarray of shape (1, 190).
 
-    Returns np.ndarray of shape (1, 103).
-
-    Blocks:
-      [0:4]    VADER (4)
-      [4:11]   BERT Ekman (7)
-      [11:39]  GoEmotions (28)
-      [39:67]  EmojiNet (28)
-      [67:96]  Context: valence(1) + one-hot prev emotion(28)
-      [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
-                        goe_margin, bert_goe_agreement,
-                        vader_abs_compound, max_goe_score
+    Layout:
+      [0:4]    VADER (4)        ─── ML block (39 dims)
+      [4:11]   BERT Ekman (7)   │
+      [11:39]  GoEmotions (28)  ─
+      [39:190] Context Engine (151) — CDM states, trajectory, embedding[:128]
     """
-    import math
-    _EPS = 1e-9
-
-    def _entropy(scores, keys):
-        probs = [max(scores.get(k, 0.0), 0.0) for k in keys]
-        total = sum(probs) + _EPS
-        probs = [p / total for p in probs]
-        return float(-sum(p * math.log(p + _EPS) for p in probs))
-
-    def _margin(scores, keys):
-        vals = sorted([scores.get(k, 0.0) for k in keys], reverse=True)
-        return float(vals[0] - vals[1]) if len(vals) >= 2 else (float(vals[0]) if vals else 0.0)
-
-    def _agreement(bert, goe):
-        shared = [l for l in BERT_LABELS if l in EMOTION_LABELS]
-        if not shared:
-            return 0.0
-        return 1.0 if max(shared, key=lambda k: bert.get(k, 0.0)) == max(shared, key=lambda k: goe.get(k, 0.0)) else 0.0
-
-    context = context or {}
     vader_scores      = model_outputs.get("vader", {})
     bert_scores       = model_outputs.get("basic_bert", {})
     goemotions_scores = model_outputs.get("go_emotions", {})
-    emojinet_scores   = model_outputs.get("emojinet", {})
 
     vec = []
 
-    # Block 1: VADER (4)
+    # VADER (4)
     for k in VADER_KEYS:
         vec.append(float(vader_scores.get(k, 0.0)))
 
-    # Block 2: BERT Ekman (7)
+    # BERT Ekman (7)
     for k in BERT_LABELS:
         vec.append(float(bert_scores.get(k, 0.0)))
 
-    # Block 3: GoEmotions (28)
+    # GoEmotions (28)
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    # Block 4: EmojiNet mapped to GoEmotions space (28)
-    for k in EMOTION_LABELS:
-        vec.append(float(emojinet_scores.get(k, 0.0)))
-
-    # Block 5: Context (29) — valence + one-hot prev emotion
-    vec.append(float(context.get("avg_valence", 0.0)))
-    prev_emo = context.get("prev_emotion", "neutral").lower()
-    for label in EMOTION_LABELS:
-        vec.append(1.0 if label == prev_emo else 0.0)
-
-    # Block 6: Derived (7)
-    vec.append(_entropy(bert_scores,       BERT_LABELS))
-    vec.append(_entropy(goemotions_scores, EMOTION_LABELS))
-    vec.append(_margin(bert_scores,        BERT_LABELS))
-    vec.append(_margin(goemotions_scores,  EMOTION_LABELS))
-    vec.append(_agreement(bert_scores, goemotions_scores))
-    vec.append(abs(float(vader_scores.get("vader_compound", 0.0))))
-    vec.append(max((goemotions_scores.get(k, 0.0) for k in EMOTION_LABELS), default=0.0))
+    # Context Engine (151) — CDM state machine + trajectory + embedding[:128]
+    ctx = context_vector if (context_vector and len(context_vector) == 151) else [0.0] * 151
+    vec.extend(ctx)
 
     arr = np.array(vec, dtype=np.float32)
     return arr.reshape(1, -1)
@@ -161,7 +119,7 @@ def predict_with_meta_learner(
 
     Args:
         model: Loaded sklearn Pipeline (from load_meta_learner).
-        feature_vector: np.ndarray of shape (1, 96) from build_feature_vector().
+        feature_vector: np.ndarray of shape (1, 190) from build_feature_vector().
 
     Returns:
         (dominant_emotion: str, confidence: float, all_scores: dict)
@@ -192,20 +150,20 @@ def detect_emotional_conflicts(vec: np.ndarray):
     Returns (sarcasm_score [0.0-1.0], conflict_description [str or None])
     """
     try:
-        # Offsets (Must match shared/constants.py architecture)
-        # VADER: 0-3 | BERT: 4-10 | GoE: 11-38 | Emoji: 39-66 | Ctx: 67-95
-        v_pos = vec[2]
-        v_neg = vec[0]
-        v_cmp = vec[3]
-        
-        bert_joy = vec[7]
-        bert_anger = vec[4]
-        
-        # Emoji block indices for 'negative' reactions
-        # annoyance: 3, disapproval: 10, disgust: 11
-        emo_annoyance = vec[39+3]
-        emo_disapproval = vec[39+10]
-        emo_disgust = vec[39+11]
+        # Flatten (1, FEATURE_DIM) → (FEATURE_DIM,) so scalar indexing works
+        v = vec.flatten()
+        # Offsets: VADER[0:4] BERT[4:11] GoE[11:39] Context[39:190]
+        v_pos = float(v[2])    # VADER pos
+        v_neg = float(v[0])    # VADER neg
+        v_cmp = float(v[3])    # VADER compound
+
+        bert_joy   = float(v[7])   # BERT joy   (BERT_LABELS index 3)
+        bert_anger = float(v[4])   # BERT anger (BERT_LABELS index 0)
+
+        # GoEmotions block [11:39] — EMOTION_LABELS: annoyance=3, disapproval=10, disgust=11
+        emo_annoyance   = float(v[11 + 3])
+        emo_disapproval = float(v[11 + 10])
+        emo_disgust     = float(v[11 + 11])
         
         neg_emo_signal = max(emo_annoyance, emo_disapproval, emo_disgust)
         pos_text_signal = (v_pos + bert_joy) / 2
@@ -224,7 +182,7 @@ def detect_emotional_conflicts(vec: np.ndarray):
              conflict_desc = "Sarcasm detected: Semantic praise contradicts visual frustration."
              
         # Signature: Passive Aggressive (Neutral BERT + Low intensity neg emoji)
-        elif vec[8] > 0.7 and (emo_annoyance > 0.1 or emo_disapproval > 0.1):
+        elif v[8] > 0.7 and (emo_annoyance > 0.1 or emo_disapproval > 0.1):
              sarcasm_score = 0.4
              conflict_desc = "Passive-aggression suspected: Formal 'Neutral' text with underlying emoji tension."
 
@@ -260,15 +218,13 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
         # 5. Calculate raw contributions
         contributions = X_scaled * weights
         
-        # 6. Group by block (matching build_feature_vector offsets)
-        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), Context(67-95), Derived(96-102)
+        # 6. Group by block — offsets match FEATURE_DIM=190
+        # VADER[0:4] BERT[4:11] GoE[11:39] Context[39:190]
         impacts = {
-            "VADER":       float(np.sum(contributions[0:4])),
-            "BERT":        float(np.sum(contributions[4:11])),
-            "GoEmotions":  float(np.sum(contributions[11:39])),
-            "EmojiNet":    float(np.sum(contributions[39:67])),
-            "Context":     float(np.sum(contributions[67:96])),
-            "Derived":     float(np.sum(contributions[96:103])),
+            "VADER":      float(np.sum(contributions[0:4])),
+            "BERT":       float(np.sum(contributions[4:11])),
+            "GoEmotions": float(np.sum(contributions[11:39])),
+            "Context":    float(np.sum(contributions[39:190])),
         }
         
         # Normalize for visualization (Relative Importance)

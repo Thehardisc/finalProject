@@ -2,7 +2,7 @@
 Self-contained ConversationLSTM definition for inference inside central_responder.
 Mirrors conversation_state_learner/models/lstm.py exactly — kept in sync manually.
 
-Input  per timestep : 67-dim  (go_emotions 28 + bert 7 + vader 4 + emojinet 28)
+Input  per timestep : 39-dim  (go_emotions 28 + bert 7 + vader 4)
 Output per timestep : 28-dim  predicted next-message emotion distribution
 Hidden state h_t    : [num_layers, 1, hidden_dim] — the learned conversation state
 """
@@ -12,7 +12,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from typing import Tuple, Optional
 
-MSG_DIM    = 67
+MSG_DIM    = 39
 N_EMOTIONS = 28
 
 
