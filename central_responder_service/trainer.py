@@ -348,9 +348,6 @@ def run_one_cycle(reload_callback):
             activation='relu',
             max_iter=500,
             random_state=42,
-            early_stopping=True,
-            validation_fraction=0.1,
-            n_iter_no_change=15,
         ))
     ])
     # vstack normalises (1,N) items from build_feature_vector into a clean (n, FEATURE_DIM) matrix
