@@ -75,20 +75,19 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
 
 def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarray:
     """
-    Build a fixed-length float32 numpy feature vector from the 4 model output dicts
+    Build a fixed-length float32 numpy feature vector from 3 model output dicts
     PLUS conversation context (previous mood/valence).
 
-    Returns np.ndarray of shape (1, 103).
+    Returns np.ndarray of shape (1, 75).
 
     Blocks:
-      [0:4]    VADER (4)
-      [4:11]   BERT Ekman (7)
-      [11:39]  GoEmotions (28)
-      [39:67]  EmojiNet (28)
-      [67:96]  Context: valence(1) + one-hot prev emotion(28)
-      [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
-                        goe_margin, bert_goe_agreement,
-                        vader_abs_compound, max_goe_score
+      [0:4]   VADER (4)
+      [4:11]  BERT Ekman (7)
+      [11:39] GoEmotions (28)
+      [39:68] Context: valence(1) + one-hot prev emotion(28)
+      [68:75] Derived: bert_entropy, goe_entropy, bert_margin,
+                       goe_margin, bert_goe_agreement,
+                       vader_abs_compound, max_goe_score
     """
     import math
     _EPS = 1e-9
@@ -113,7 +112,6 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     vader_scores      = model_outputs.get("vader", {})
     bert_scores       = model_outputs.get("basic_bert", {})
     goemotions_scores = model_outputs.get("go_emotions", {})
-    emojinet_scores   = model_outputs.get("emojinet", {})
 
     vec = []
 
@@ -129,17 +127,13 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    # Block 4: EmojiNet mapped to GoEmotions space (28)
-    for k in EMOTION_LABELS:
-        vec.append(float(emojinet_scores.get(k, 0.0)))
-
-    # Block 5: Context (29) — valence + one-hot prev emotion
+    # Block 4: Context (29) — valence + one-hot prev emotion
     vec.append(float(context.get("avg_valence", 0.0)))
     prev_emo = context.get("prev_emotion", "neutral").lower()
     for label in EMOTION_LABELS:
         vec.append(1.0 if label == prev_emo else 0.0)
 
-    # Block 6: Derived (7)
+    # Block 5: Derived (7)
     vec.append(_entropy(bert_scores,       BERT_LABELS))
     vec.append(_entropy(goemotions_scores, EMOTION_LABELS))
     vec.append(_margin(bert_scores,        BERT_LABELS))
@@ -193,43 +187,37 @@ def detect_emotional_conflicts(vec: np.ndarray):
     """
     try:
         # Offsets (Must match shared/constants.py architecture)
-        # VADER: 0-3 | BERT: 4-10 | GoE: 11-38 | Emoji: 39-66 | Ctx: 67-95
+        # VADER: 0-3 | BERT: 4-10 | GoE: 11-38 | Ctx: 39-67 | Derived: 68-74
         v_pos = vec[2]
         v_neg = vec[0]
         v_cmp = vec[3]
-        
-        bert_joy = vec[7]
-        bert_anger = vec[4]
-        
-        # Emoji block indices for 'negative' reactions
-        # annoyance: 3, disapproval: 10, disgust: 11
-        emo_annoyance = vec[39+3]
-        emo_disapproval = vec[39+10]
-        emo_disgust = vec[39+11]
-        
-        neg_emo_signal = max(emo_annoyance, emo_disapproval, emo_disgust)
+
+        bert_joy    = vec[7]   # joy in BERT Ekman (index 4=anger,5=disgust,6=fear,7=joy)
+        bert_anger  = vec[4]
+        bert_neutral = vec[8]  # neutral in BERT Ekman
+
         pos_text_signal = (v_pos + bert_joy) / 2
-        
+
         sarcasm_score = 0.0
         conflict_desc = None
-        
-        # Signature: Positive Text + Eye-roll/Negative Emoji
-        if pos_text_signal > 0.6 and neg_emo_signal > 0.4:
-            sarcasm_score = min(pos_text_signal, neg_emo_signal) * 1.2 # Boost score
-            conflict_desc = "Cognitive Dissonance: High-fidelity positive text paired with dismissive visual cues."
-        
-        # Signature: Extreme Positive + Flip
-        elif v_cmp > 0.8 and neg_emo_signal > 0.2:
-             sarcasm_score = 0.5 + neg_emo_signal
-             conflict_desc = "Sarcasm detected: Semantic praise contradicts visual frustration."
-             
-        # Signature: Passive Aggressive (Neutral BERT + Low intensity neg emoji)
-        elif vec[8] > 0.7 and (emo_annoyance > 0.1 or emo_disapproval > 0.1):
-             sarcasm_score = 0.4
-             conflict_desc = "Passive-aggression suspected: Formal 'Neutral' text with underlying emoji tension."
+
+        # Positive text but high VADER negativity — lexical contradiction
+        if pos_text_signal > 0.6 and v_neg > 0.4:
+            sarcasm_score = min(pos_text_signal, v_neg) * 1.2
+            conflict_desc = "Cognitive Dissonance: Positive surface text paired with high negativity signal."
+
+        # Extreme positive compound but BERT detects anger
+        elif v_cmp > 0.8 and bert_anger > 0.3:
+            sarcasm_score = 0.5 + bert_anger
+            conflict_desc = "Sarcasm detected: Semantic praise contradicts underlying anger signal."
+
+        # BERT neutral with high VADER negativity — passive-aggressive pattern
+        elif bert_neutral > 0.7 and v_neg > 0.25:
+            sarcasm_score = 0.4
+            conflict_desc = "Passive-aggression suspected: Formal neutral tone with underlying negativity."
 
         return min(sarcasm_score, 1.0), conflict_desc
-        
+
     except Exception:
         return 0.0, None
 
@@ -261,14 +249,13 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
         contributions = X_scaled * weights
         
         # 6. Group by block (matching build_feature_vector offsets)
-        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), Context(67-95), Derived(96-102)
+        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), Context(39-67), Derived(68-74)
         impacts = {
             "VADER":       float(np.sum(contributions[0:4])),
             "BERT":        float(np.sum(contributions[4:11])),
             "GoEmotions":  float(np.sum(contributions[11:39])),
-            "EmojiNet":    float(np.sum(contributions[39:67])),
-            "Context":     float(np.sum(contributions[67:96])),
-            "Derived":     float(np.sum(contributions[96:103])),
+            "Context":     float(np.sum(contributions[39:68])),
+            "Derived":     float(np.sum(contributions[68:75])),
         }
         
         # Normalize for visualization (Relative Importance)

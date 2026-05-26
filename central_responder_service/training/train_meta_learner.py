@@ -56,10 +56,10 @@ LABEL_TO_IDX = {label: i for i, label in enumerate(EMOTION_LABELS)}
 
 
 def build_feature_vector(vader_scores: dict, bert_scores: dict,
-                          goemotions_scores: dict, emojinet_scores: dict,
+                          goemotions_scores: dict,
                           prev_valence: float = 0.0, prev_mood: str = "neutral") -> np.ndarray:
     """
-    Assemble a consistent 96D fixed-length feature vector.
+    Assemble a consistent 75D fixed-length feature vector.
     Must match meta_learner.py exact ordering.
     """
     vec = []
@@ -76,14 +76,10 @@ def build_feature_vector(vader_scores: dict, bert_scores: dict,
     for k in EMOTION_LABELS:
         vec.append(goemotions_scores.get(k, 0.0))
 
-    # Block 4: EmojiNet (28 dims)
-    for k in EMOTION_LABELS:
-        vec.append(emojinet_scores.get(k, 0.0))
-        
-    # Block 5: Contextual Valence (1 dim)
+    # Block 4: Contextual Valence (1 dim)
     vec.append(prev_valence)
-    
-    # Block 6: Previous Mood One-Hot (28 dims)
+
+    # Block 5: Previous Mood One-Hot (28 dims)
     mood_vec = [0.0] * len(EMOTION_LABELS)
     if prev_mood in LABEL_TO_IDX:
         mood_vec[LABEL_TO_IDX[prev_mood]] = 1.0
@@ -150,26 +146,6 @@ def run_goemotions(goemotions_model, text: str) -> dict:
         return {}
 
 
-def run_emojinet(text: str) -> dict:
-    """EmojiNet feature extractor — uses shared EMOJI_EMOTION_DB (single source of truth)."""
-    try:
-        import emoji as emoji_lib
-        from shared.constants import EMOJI_EMOTION_DB
-        found = emoji_lib.distinct_emoji_list(text)
-        if not found:
-            return {}
-        scores, count = {}, 0
-        for char in found:
-            entry = EMOJI_EMOTION_DB.get(char) or EMOJI_EMOTION_DB.get(char.replace('\ufe0f', ''))
-            if entry:
-                for emo, score in entry["emotions"].items():
-                    scores[emo] = scores.get(emo, 0.0) + score
-                count += 1
-        return {k: v / count for k, v in scores.items()} if count else {}
-    except Exception as e:
-        logger.warning(f"  EmojiNet error: {e}")
-        return {}
-
 
 def process_split(split_data, vader, bert, goemotions, split_name: str):
     """Run all 4 analyzers on a dataset split, return (X, y)."""
@@ -191,17 +167,12 @@ def process_split(split_data, vader, bert, goemotions, split_name: str):
         vader_scores      = run_vader(vader, text)
         bert_scores       = run_bert(bert, text)
         goemotions_scores = run_goemotions(goemotions, text)
-        emojinet_scores   = run_emojinet(text)
 
-        # synthetic context injection
-        # avg_valence uniformly sampled from [-1, 1]; prev_mood randomly sampled
-        # from EMOTION_LABELS. This ensures the model learns from context features
-        # instead of treating them as always-zero noise.
         synthetic_valence = rng.uniform(-1.0, 1.0)
         synthetic_mood    = rng.choice(EMOTION_LABELS)
 
         fv = build_feature_vector(
-            vader_scores, bert_scores, goemotions_scores, emojinet_scores,
+            vader_scores, bert_scores, goemotions_scores,
             prev_valence=synthetic_valence, prev_mood=synthetic_mood
         )
 
@@ -239,24 +210,23 @@ def log_feature_importance(pipeline, feature_names):
         # Block 1: VADER (0-3)
         # Block 2: BERT (4-10)
         # Block 3: GoEmotions (11-38)
-        # Block 4: EmojiNet (39-66)
-        # Block 5: Valence (67)
-        # Block 6: Mood History (68-95)
-        
+        # Block 4: Context (39-67)
+        # Block 5: Derived (68-74)
+
         vader_imp = np.mean(importances[0:4])
         bert_imp  = np.mean(importances[4:11])
         goemo_imp = np.mean(importances[11:39])
-        emoji_imp = np.mean(importances[39:67])
-        ctx_imp   = np.mean(importances[67:96])
-        
-        sums = vader_imp + bert_imp + goemo_imp + emoji_imp + ctx_imp
-        
+        ctx_imp   = np.mean(importances[39:68])
+        deriv_imp = np.mean(importances[68:75])
+
+        sums = vader_imp + bert_imp + goemo_imp + ctx_imp + deriv_imp
+
         importance_report = {
             "BERT Semantic Layer": f"{(bert_imp/sums):.2%}",
-            "GoEmotions Depth":   f"{(goemo_imp/sums):.2%}",
-            "Emoji Visual Signal": f"{(emoji_imp/sums):.2%}",
+            "GoEmotions Depth":    f"{(goemo_imp/sums):.2%}",
             "VADER Lexicon":       f"{(vader_imp/sums):.2%}",
-            "Contextual Memory":   f"{(ctx_imp/sums):.2%}"
+            "Contextual Memory":   f"{(ctx_imp/sums):.2%}",
+            "Derived Features":    f"{(deriv_imp/sums):.2%}",
         }
         
         logger.log_stats("Knowledge Distillation (Influence)", importance_report)
@@ -354,7 +324,7 @@ def train(max_samples_per_split: int = 10000):
         "test_accuracy": round(test_acc, 4),
         "feature_dim": FEATURE_DIM,
         "emotion_labels": EMOTION_LABELS,
-        "models_used": ["vader", "basic_bert", "go_emotions", "emojinet"],
+        "models_used": ["vader", "basic_bert", "go_emotions"],
         "dataset": "google-research-datasets/go_emotions (simplified)",
         "algorithm": "LogisticRegression (sklearn Pipeline + StandardScaler)"
     }

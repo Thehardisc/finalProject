@@ -21,9 +21,6 @@ from trainer import start_trainer_thread
 # import trajectory LSTM
 from trajectory.inference import load_trajectory_model, run_trajectory_step
 
-import emoji as emoji_lib
-from shared.constants import EMOJI_EMOTION_DB
-
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 
@@ -81,35 +78,6 @@ if TRAJECTORY_MODEL is not None:
     logger.info("Trajectory LSTM loaded — conversation direction prediction ACTIVE.")
 
 
-# All 27 GoEmotions labels
-EMOTION_LABELS = [
-    'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring', 
-    'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval', 
-    'disgust', 'embarrassment', 'excitement', 'fear', 'gratitude', 'grief', 
-    'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization', 
-    'relief', 'remorse', 'sadness', 'surprise', 'neutral'
-]
-
-def _emojinet_inline(text: str) -> dict:
-    """Compute emoji emotion scores inline — no network hop needed."""
-    try:
-        found  = emoji_lib.distinct_emoji_list(text)
-        scores = {}
-        count  = 0
-        for ch in found:
-            entry = EMOJI_EMOTION_DB.get(ch) or EMOJI_EMOTION_DB.get(ch.replace('️', ''))
-            if entry:
-                for emo, sc in entry.get("emotions", {}).items():
-                    scores[emo] = scores.get(emo, 0.0) + sc
-                count += 1
-        if count:
-            result = {k: v / count for k, v in scores.items()}
-            result.setdefault("neutral", 0.0)
-            return result
-    except Exception as e:
-        logger.warning(f"Inline emojinet error: {e}")
-    return {}
-
 
 async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     logger.debug(f"Aggregating results for {message_id}...")
@@ -122,6 +90,17 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         model_name = res.get("model_name")
         scores = res.get("scores", {})
         model_outputs[model_name] = scores
+
+    # Extract emoji scores from go_emotions packet (scored at inference time via GoEmotions model)
+    model_outputs["emojinet"] = {}
+    for res in partial_results:
+        if res.get("model_name") == "go_emotions":
+            emoji_scores_raw = res.get("emoji_scores", "{}")
+            try:
+                model_outputs["emojinet"] = json.loads(emoji_scores_raw) if isinstance(emoji_scores_raw, str) else (emoji_scores_raw or {})
+            except (json.JSONDecodeError, TypeError):
+                pass
+            break
 
     # Extract context_engine enrichment (optional — may not arrive before the 3 ML models)
     ce            = model_outputs.pop("context_engine", {})
@@ -301,7 +280,8 @@ async def main():
                         full_packet = {
                             "model_name": model_name,
                             "scores": scores,
-                            "original_data": data.get("original_data") # This might be doubly nested string
+                            "original_data": data.get("original_data"), # This might be doubly nested string
+                            "emoji_scores": data.get("emoji_scores", "{}")
                         }
                         
                         # Handle original_data if it's a string
@@ -322,7 +302,6 @@ async def main():
                         await r.hset(pending_key, model_name, json.dumps(full_packet))
                         await r.expire(pending_key, 30)  # refresh TTL on every update
 
-                        # emojinet computed inline below; context read from Redis in aggregate_and_publish
                         expected_models = ["go_emotions", "basic_bert", "vader"]
 
                         current_results = await r.hgetall(pending_key)
@@ -342,18 +321,6 @@ async def main():
                                     all_packets.append(json.loads(packet_str))
                                 except Exception:
                                     logger.error(f"Failed to parse packet for model {m}")
-
-                            # Compute emojinet inline and inject as synthetic packet
-                            first_original = next(
-                                (p.get("original_data", {}) for p in all_packets if p.get("original_data")), {}
-                            )
-                            raw_text = first_original.get("text", "") or first_original.get("original_text", "")
-                            emoji_scores = _emojinet_inline(raw_text)
-                            all_packets.append({
-                                "model_name":    "emojinet",
-                                "scores":        emoji_scores,
-                                "original_data": first_original,
-                            })
 
                             try:
                                 await aggregate_and_publish(msg_id, all_packets, r, agg_lat=agg_lat)

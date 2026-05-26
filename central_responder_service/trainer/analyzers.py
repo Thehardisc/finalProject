@@ -51,18 +51,25 @@ def _run(model, text: str) -> dict:
         return {}
 
 
-def _emojinet(text: str) -> dict:
+def _emojinet(goe_model, text: str) -> dict:
     try:
+        from collections import Counter
         import emoji as emoji_lib
-        from shared.constants import EMOJI_EMOTION_DB
-        found = emoji_lib.distinct_emoji_list(text)
-        scores, count = {}, 0
-        for ch in found:
-            entry = EMOJI_EMOTION_DB.get(ch) or EMOJI_EMOTION_DB.get(ch.replace('\ufe0f', ''))
-            if entry:
-                for e, sc in entry.get("emotions", {}).items():
-                    scores[e] = scores.get(e, 0.0) + sc
-                count += 1
-        return {k: v / count for k, v in scores.items()} if count else {}
+        from shared.constants import EMOTION_LABELS
+        occurrences = emoji_lib.emoji_list(text)
+        if not occurrences:
+            return {}
+        counts = Counter(e["emoji"] for e in occurrences)
+        total = sum(counts.values())
+        weighted = {}
+        for ch, cnt in counts.items():
+            desc = emoji_lib.demojize(ch).strip(":").replace("_", " ")
+            if not desc:
+                continue
+            result = _run(goe_model, desc)
+            w = cnt / total
+            for emo, sc in result.items():
+                weighted[emo] = weighted.get(emo, 0.0) + sc * w
+        return weighted
     except Exception:
         return {}

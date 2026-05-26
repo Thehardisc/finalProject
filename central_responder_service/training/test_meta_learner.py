@@ -81,7 +81,6 @@ class TestBuildFeatureVector:
             "vader":       {"vader_neg": 0.1, "vader_neu": 0.8, "vader_pos": 0.1, "vader_compound": 0.0},
             "basic_bert":  {"joy": 0.9, "anger": 0.05},
             "go_emotions": {"joy": 0.8, "neutral": 0.1},
-            "emojinet":    {"love": 0.95},
         }
         fv = build_feature_vector(model_outputs)
         assert fv.shape == (1, FEATURE_DIM), f"Expected (1, {FEATURE_DIM}), got {fv.shape}"
@@ -94,7 +93,7 @@ class TestBuildFeatureVector:
         assert np.all(fv == 0.0), "All zeros expected when all models are missing"
 
     def test_partial_models_pad_zeros(self):
-        """Only VADER present — BERT, GoEmotions, EmojiNet blocks should be zero."""
+        """Only VADER present — BERT and GoEmotions blocks should be zero."""
         model_outputs = {
             "vader": {"vader_neg": 0.0, "vader_neu": 1.0, "vader_pos": 0.0, "vader_compound": 0.0}
         }
@@ -108,7 +107,7 @@ class TestBuildFeatureVector:
     def test_consistent_length_across_calls(self):
         """Same FEATURE_DIM regardless of which models have data."""
         outputs_a = {"go_emotions": {"joy": 0.9}}
-        outputs_b = {"vader": {"vader_compound": -0.5}, "emojinet": {"sadness": 0.8}}
+        outputs_b = {"vader": {"vader_compound": -0.5}, "go_emotions": {"sadness": 0.8}}
         fv_a = build_feature_vector(outputs_a)
         fv_b = build_feature_vector(outputs_b)
         assert fv_a.shape == fv_b.shape

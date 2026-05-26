@@ -3,12 +3,15 @@ import sys
 import os
 import json
 import time
+from collections import Counter
 import torch
 from transformers import pipeline
 
 # Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
+import emoji as emoji_lib
+from shared.constants import EMOTION_LABELS
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 
@@ -17,11 +20,10 @@ logger = get_logger("goemotions_service")
 class GoEmotionsAnalyzer:
     def __init__(self):
         logger.info("Loading GoEmotions BERT model...")
-        
-        # Determine device: CUDA (Nvidia), MPS (Mac), or CPU
+
         device = -1
         if torch.cuda.is_available():
-            device = 0 # CUDA device 0
+            device = 0
             logger.info("Using CUDA GPU")
         elif torch.backends.mps.is_available():
             device = "mps"
@@ -29,23 +31,45 @@ class GoEmotionsAnalyzer:
         else:
             logger.info("Using CPU")
 
-        # Using a model fine-tuned on GoEmotions (28 labels)
         self.classifier = pipeline(
-            "text-classification", 
-            model="bhadresh-savani/bert-base-go-emotion", 
-            top_k=None, 
+            "text-classification",
+            model="bhadresh-savani/bert-base-go-emotion",
+            top_k=None,
             device=device
         )
         logger.info("GoEmotions BERT model loaded.")
-    
+
     def analyze(self, text: str) -> dict:
-        if len(text) > 512:
-            text = text[:512]
-            
-        results = self.classifier(text)[0]
-        emotions = {res['label']: res['score'] for res in results}
-        
-        return emotions
+        results = self.classifier(text[:512])[0]
+        return {res['label']: res['score'] for res in results}
+
+    def analyze_emojis(self, text: str) -> dict:
+        """
+        Run GoEmotions on each emoji's Unicode description.
+        Returns a weighted 28-label dict (zeros when no emojis found).
+        """
+        occurrences = emoji_lib.emoji_list(text)
+        if not occurrences:
+            return {label: 0.0 for label in EMOTION_LABELS}
+
+        counts = Counter(e["emoji"] for e in occurrences)
+        total = sum(counts.values())
+        weighted = {label: 0.0 for label in EMOTION_LABELS}
+
+        for ch, cnt in counts.items():
+            desc = emoji_lib.demojize(ch).strip(":").replace("_", " ")
+            if not desc:
+                continue
+            try:
+                result = {r['label']: r['score'] for r in self.classifier(desc[:512])[0]}
+            except Exception as e:
+                logger.warning(f"Emoji scoring failed for '{ch}': {e}")
+                continue
+            w = cnt / total
+            for label in EMOTION_LABELS:
+                weighted[label] += result.get(label, 0.0) * w
+
+        return weighted
 
 redis_client = RedisClient()
 STREAM_KEY = "preprocessed_stream"
@@ -87,10 +111,12 @@ async def main():
                     for message_id, data in msgs:
                         try:
                             text_to_analyze = data.get("processed_text_demojized", "") or data.get("processed_text", "")
+                            original_text = data.get("original_text", "") or data.get("text", "")
                             start_time = time.time()
                             logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
 
                             scores = analyzer.analyze(text_to_analyze)
+                            emoji_scores = analyzer.analyze_emojis(original_text)
                             elapsed = (time.time() - start_time) * 1000
 
                             top_3 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]
@@ -106,6 +132,7 @@ async def main():
                                 "original_data": data,
                                 "model_name": MODEL_NAME,
                                 "scores": scores,
+                                "emoji_scores": json.dumps(emoji_scores),
                                 "latency_ms": elapsed
                             }
                             await redis_client.publish_event(OUTPUT_STREAM, output_event)

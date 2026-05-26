@@ -59,11 +59,11 @@ def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict,
     Assemble the 103-dimensional feature vector from 4 model score dicts + context.
 
     Blocks:
-      [0:4]   VADER (4)
-      [4:11]  BERT Ekman (7)
-      [11:39] GoEmotions (28)
-      [39:67] EmojiNet (28)
-      [67:96] Context: valence(1) + one-hot prev emotion(28)
+      [0:4]    VADER (4)
+      [4:11]   BERT Ekman (7)
+      [11:39]  GoEmotions (28)
+      [39:67]  EmojiNet (28)
+      [67:96]  Context: valence(1) + one-hot prev emotion(28)
       [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
                         goe_margin, bert_goe_agreement,
                         vader_abs_compound, max_goe_score

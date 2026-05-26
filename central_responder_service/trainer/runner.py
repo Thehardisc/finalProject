@@ -86,7 +86,7 @@ def run_one_cycle(reload_callback):
             vs = {f"vader_{k}": v for k, v in _vader(vader, text).items()}
             bs = _run(bert, text)
             gs = _run(goe,  text)
-            es = _emojinet(text)
+            es = _emojinet(goe, text)
             gs_list.append(gs)
 
             # Layer 3: pick the label GoEmotions is most confident about

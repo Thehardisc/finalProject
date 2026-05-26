@@ -19,12 +19,15 @@
   padding: 0;
 }
 
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Inter', sans-serif;
   background-color: #ffffff;
   color: var(--text-main);
-  min-height: 100vh;
-  overflow: auto;
   position: relative;
 }
 
