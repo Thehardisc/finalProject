@@ -176,9 +176,9 @@ class ContextEngineService:
             new_volatility   = self.decay_factor * prev_volatility + (1 - self.decay_factor) * current_variance
 
             await self.redis.hset(state_key, mapping={
-                "current_volatility": new_volatility,
+                "current_volatility": float(new_volatility),
                 "last_message_ts":    now,
-                "baseline_valence":   np.mean(recent_valences) if recent_valences else current_valence,
+                "baseline_valence":   float(np.mean(recent_valences)) if recent_valences else float(current_valence),
             })
             return new_volatility
         except Exception as e:
