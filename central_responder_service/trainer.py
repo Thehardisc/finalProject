@@ -136,21 +136,6 @@ def _run(model, text):
     try:    return {r['label']: r['score'] for r in model(text[:512])[0]}
     except: return {}
 
-def _emojinet(text):
-    try:
-        import emoji as emoji_lib
-        from shared.constants import EMOJI_EMOTION_DB
-        found = emoji_lib.distinct_emoji_list(text)
-        scores, count = {}, 0
-        for ch in found:
-            entry = EMOJI_EMOTION_DB.get(ch) or EMOJI_EMOTION_DB.get(ch.replace('\ufe0f', ''))
-            if entry:
-                for e, sc in entry.get("emotions", {}).items():
-                    scores[e] = scores.get(e, 0.0) + sc
-                count += 1
-        return {k: v / count for k, v in scores.items()} if count else {}
-    except Exception:
-        return {}
  
 # fetch data 
 def fetch_live_data(vader, bert, goe):
@@ -195,10 +180,9 @@ def fetch_live_data(vader, bert, goe):
                 vs = {f"vader_{k}": v for k, v in _vader(vader, text_content).items()}
                 bs = _run(bert, text_content)
                 gs = _run(goe,  text_content)
-                es = _emojinet(text_content)
-                
+
                 context = {"avg_valence": 0.0, "prev_emotion": prev_emo or "neutral"}
-                fv = build_feature_vector({"vader": vs, "basic_bert": bs, "go_emotions": gs, "emojinet": es}, context=context)
+                fv = build_feature_vector({"vader": vs, "basic_bert": bs, "go_emotions": gs}, context=context)
                 X.append(fv)
                 y.append(label)
         
@@ -258,17 +242,12 @@ def run_one_cycle(reload_callback):
             vs = {f"vader_{k}": v for k, v in _vader(vader, text).items()}
             bs = _run(bert, text)
             gs = _run(goe,  text)
-            es = _emojinet(text)
             gs_list.append(gs)
-            # setup dummy context data
-            # Instead of zeroing out all 29 context features, we inject
-            # randomly sampled values so the model actually learns to use them.
-            # avg_valence: uniform [-1, 1]; prev_emotion: random GoEmotions label.
             synthetic_context = {
                 "avg_valence":  rng.uniform(-1.0, 1.0),
                 "prev_emotion": rng.choice(EMOTION_LABELS)
             }
-            X.append(build_feature_vector({"vader": vs, "basic_bert": bs, "go_emotions": gs, "emojinet": es}, context=synthetic_context))
+            X.append(build_feature_vector({"vader": vs, "basic_bert": bs, "go_emotions": gs}, context=synthetic_context))
             y.append(EMOTION_LABELS[lids[0]])
         pt = (time.time() - t0) / len(X) if X else 0
         logger.info(f"  [Trainer] {name}: {len(X)} samples. Avg {pt*1000:.2f}ms/sample.")

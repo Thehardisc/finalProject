@@ -44,6 +44,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -63,6 +64,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -80,6 +82,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -96,6 +99,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -115,6 +119,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -133,6 +138,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -157,6 +163,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -174,6 +181,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -192,6 +200,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -221,6 +230,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -264,6 +274,7 @@ services:
     environment:
       - REDIS_HOST=redis
       - QDRANT_HOST=qdrant
+      - TZ=${TZ}
     depends_on:
       - redis
       - qdrant

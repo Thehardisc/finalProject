@@ -40,8 +40,8 @@ body {
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   background-color: #ffffff;
   color: var(--text-main);
-  min-height: 100vh;
-  overflow: auto;
+  height: 100vh;
+  overflow: hidden;
   position: relative;
   -webkit-font-smoothing: antialiased;
 }

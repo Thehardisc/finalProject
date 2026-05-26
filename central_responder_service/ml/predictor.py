@@ -45,20 +45,20 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     Returns np.ndarray of shape (1, 103).
 
     Blocks:
-      [0:4]   VADER (4)
-      [4:11]  BERT Ekman (7)
-      [11:39] GoEmotions (28)
-      [39:67] EmojiNet (28)
-      [67:96] Context: valence(1) + one-hot prev emotion(28)
+      [0:4]    VADER (4)
+      [4:11]   BERT Ekman (7)
+      [11:39]  GoEmotions (28)
+      [39:67]  EmojiNet (28)
+      [67:96]  Context: valence(1) + one-hot prev emotion(28)
       [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
-                         goe_margin, bert_goe_agreement,
-                         vader_abs_compound, max_goe_score
+                        goe_margin, bert_goe_agreement,
+                        vader_abs_compound, max_goe_score
     """
     context = context or {}
     vader_scores      = model_outputs.get("vader", {})
     bert_scores       = model_outputs.get("basic_bert", {})
     goemotions_scores = model_outputs.get("go_emotions", {})
-    emojinet_scores   = model_outputs.get("emojinet", {})
+    emoji_scores      = model_outputs.get("emojinet", {})
 
     vec = []
 
@@ -74,11 +74,11 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    # Block 4: EmojiNet mapped to GoEmotions space (28)
+    # Block 4: EmojiNet (28)
     for k in EMOTION_LABELS:
-        vec.append(float(emojinet_scores.get(k, 0.0)))
+        vec.append(float(emoji_scores.get(k, 0.0)))
 
-    # Block 5: Contextual Memory (29)
+    # Block 5: Context (29)
     vec.append(float(context.get("avg_valence", 0.0)))
     prev_emo = context.get("prev_emotion", "neutral").lower()
     for label in EMOTION_LABELS:

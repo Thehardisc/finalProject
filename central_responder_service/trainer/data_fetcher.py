@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 
 from shared.utils.logger import get_logger
 from .config import DATABASE_URL, MAX_SAMPLES
-from .analyzers import _vader, _run, _emojinet
+from .analyzers import _vader, _run
 from .preprocessor import build_fv
 
 logger = get_logger("trainer")
@@ -61,9 +61,8 @@ def fetch_live_data(vader, bert, goe):
                 vs = {f"vader_{k}": v for k, v in _vader(vader, text_content).items()}
                 bs = _run(bert, text_content)
                 gs = _run(goe,  text_content)
-                es = _emojinet(text_content)
                 context = {"avg_valence": ema, "prev_emotion": prev_emo or "neutral"}
-                fv = build_fv(vs, bs, gs, es, context=context)
+                fv = build_fv(vs, bs, gs, {}, context=context)
                 X.append(fv)
                 y.append(label)
                 # Update EMA for next sample (matches inference-time aggregation_service)

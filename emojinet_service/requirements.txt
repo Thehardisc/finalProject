@@ -1,2 +1,4 @@
 redis
+transformers
+torch
 emoji
