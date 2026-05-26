@@ -249,40 +249,45 @@ class ContextEngineService:
         # ── Emotion Entropy (previous turn's GoEmotions distribution) ─────────
         emotion_entropy = _emotion_entropy(last_emotions)
 
-        # ── CDM State Classification ───────────────────────────────────────────
-        cdm_probs         = CDM.classify(velocity, emotion_entropy, speaker_divergence, topic_coherence)
-        current_state_idx = int(np.argmax(cdm_probs))
+        # ── CDM DFSM ───────────────────────────────────────────────────────────
+        state_hist_key  = f"conv:{conversation_id}:state_hist"
+        cdm_state_key   = f"conv:{conversation_id}:cdm_state"
+
+        # Load persisted state (default: NEUTRAL_EXPLORE = 0)
+        raw_prev = await self.redis.get(cdm_state_key)
+        prev_state_idx = int(raw_prev) if raw_prev is not None else 0
+
+        current_state_idx = CDM.transition(
+            prev_state_idx, velocity, emotion_entropy, speaker_divergence, topic_coherence
+        )
+        cdm_vec = CDM.one_hot(current_state_idx)
 
         # ── State Residency & Transition Path ──────────────────────────────────
-        state_hist_key = f"conv:{conversation_id}:state_hist"
         state_hist_raw = await self.redis.lrange(state_hist_key, 0, 2)
         state_hist     = [int(x) for x in state_hist_raw]  # newest first
 
-        # How many consecutive prior messages share the current state
         residency = 0
         for s in state_hist:
             if s == current_state_idx:
                 residency += 1
             else:
                 break
-        state_residency = min(residency / 10.0, 1.0)
+        state_residency  = min(residency / 10.0, 1.0)
+        entry_abruptness = CDM.entry_abruptness(prev_state_idx, current_state_idx)
 
-        prev_state_idx   = state_hist[0] if state_hist else current_state_idx
-        entry_abruptness = abs(current_state_idx - prev_state_idx) / 6.0  # max jump = 6
-
-        # Transition path: 3 most-recent states, normalised to [0, 1]
         transition_path = [s / 7.0 for s in state_hist[:3]]
         while len(transition_path) < 3:
             transition_path.append(current_state_idx / 7.0)
 
-        # Push current state, keep 10-message window
+        # Persist new state and history
+        await self.redis.set(cdm_state_key, str(current_state_idx), ex=86400 * 7)
         await self.redis.lpush(state_hist_key, str(current_state_idx))
         await self.redis.ltrim(state_hist_key, 0, 9)
         await self.redis.expire(state_hist_key, 86400 * 7)
 
         # ── Assemble 23-dim CDM vector ─────────────────────────────────────────
         ctx = np.zeros(CONTEXT_DIM, dtype=np.float64)
-        ctx[0:7]  = cdm_probs
+        ctx[0:7]  = cdm_vec
         ctx[7]    = state_residency
         ctx[8:11] = transition_path[:3]
         ctx[11]   = entry_abruptness

@@ -18,7 +18,7 @@ BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surpris
 #   CONTEXT [39:62] = Context Engine 23-dim CDM scalars
 #
 # Context vector internal layout (23 dims):
-#   [0:7]    CDM state probabilities (7 conversation states)
+#   [0:7]    CDM state one-hot vector (DFSM — exactly one 1.0)
 #   [7]      state_residency         (how long in current state, 0-1)
 #   [8:11]   transition_path         (last 3 state indices / 7)
 #   [11]     entry_abruptness        (how abrupt the state transition was)
@@ -39,7 +39,7 @@ FEATURE_DIM = 62    # ML_DIM(39) + CONTEXT_DIM(23)
 
 # Named index map for the context vector — import these instead of hardcoding integers.
 # Any change to CONTEXT_DIM layout must update these constants AND context_engine_service/main.py.
-CTX_CDM_PROBS      = slice(0, 7)   # CDM state probability distribution
+CTX_CDM_PROBS      = slice(0, 7)   # CDM state one-hot vector (DFSM)
 CTX_RESIDENCY      = 7             # how long in current state (0-1)
 CTX_TRANSITION     = slice(8, 11)  # last 3 state indices / 7
 CTX_ABRUPTNESS     = 11            # entry abruptness (0-1)
