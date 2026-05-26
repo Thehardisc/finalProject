@@ -170,6 +170,7 @@ export default function DemoRunner({ currentUser, socketRef, onDemoStart }) {
     <>
       {/* ── Trigger button ─────────────────────────────────────────────────── */}
       <button
+        type="button"
         onClick={running ? stopDemo : () => setOpen(true)}
         title={running ? 'Stop demo' : 'Run a live demo conversation through the ML pipeline'}
         style={{
@@ -215,6 +216,7 @@ export default function DemoRunner({ currentUser, socketRef, onDemoStart }) {
               {Object.entries(SCENARIOS).map(([key, s]) => (
                 <button
                   key={key}
+                  type="button"
                   onClick={() => setSelected(key)}
                   style={{
                     padding: '12px 14px', borderRadius: 12, textAlign: 'left', cursor: 'pointer',
@@ -234,6 +236,7 @@ export default function DemoRunner({ currentUser, socketRef, onDemoStart }) {
 
             <div style={{ display: 'flex', gap: 8 }}>
               <button
+                type="button"
                 onClick={() => setOpen(false)}
                 style={{
                   flex: 1, padding: '10px 0', borderRadius: 10, cursor: 'pointer',
@@ -244,6 +247,7 @@ export default function DemoRunner({ currentUser, socketRef, onDemoStart }) {
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={startDemo}
                 disabled={!selected}
                 style={{
