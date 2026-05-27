@@ -134,8 +134,10 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     fv = build_feature_vector(model_outputs, context_vector=context_vector)
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc = predict_with_meta_learner(META_LEARNER, fv)
 
-    # Context correction — boost/suppress emotions based on EMA valence + CDM state
-    corrected_scores, ctx_correction_weight = apply_context_correction(final_scores, context_vector)
+    # Context correction — additive blend toward valence-consistent emotions
+    corrected_scores, ctx_correction_weight = apply_context_correction(
+        final_scores, context_vector, prev_emotion=prev_emotion
+    )
     if ctx_correction_weight > 0:
         final_scores     = corrected_scores
         dominant_emotion = max(final_scores, key=final_scores.get)
