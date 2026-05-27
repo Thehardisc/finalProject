@@ -12,7 +12,8 @@ from meta_learner import (
     load_meta_learner,
     build_feature_vector,
     predict_with_meta_learner,
-    calculate_feature_impacts
+    calculate_feature_impacts,
+    apply_context_correction,
 )
 
 # import background trainer
@@ -133,6 +134,13 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     fv = build_feature_vector(model_outputs, context_vector=context_vector)
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc = predict_with_meta_learner(META_LEARNER, fv)
 
+    # Context correction — boost/suppress emotions based on EMA valence + CDM state
+    corrected_scores, ctx_correction_weight = apply_context_correction(final_scores, context_vector)
+    if ctx_correction_weight > 0:
+        final_scores     = corrected_scores
+        dominant_emotion = max(final_scores, key=final_scores.get)
+        meta_confidence  = final_scores[dominant_emotion]
+
     # E2E Latency
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
@@ -190,15 +198,16 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     cdm_state_idx = cdm_probs.index(max(cdm_probs)) if ce_available else None
 
     pipeline_log = {
-        "models":            model_outputs,
-        "aggregated":        final_scores,
-        "dominant_selected": dominant_emotion,
-        "decision_mode":     "meta-learner",
-        "meta_confidence":   meta_confidence,
-        "logic_map":         logic_map,
-        "sarcasm_score":     float(sarcasm_score),
-        "conflict":          conflict_desc,
-        "trajectory":        trajectory,
+        "models":                model_outputs,
+        "aggregated":            final_scores,
+        "dominant_selected":     dominant_emotion,
+        "decision_mode":         "meta-learner",
+        "meta_confidence":       meta_confidence,
+        "logic_map":             logic_map,
+        "ctx_correction_weight": ctx_correction_weight,
+        "sarcasm_score":         float(sarcasm_score),
+        "conflict":              conflict_desc,
+        "trajectory":            trajectory,
         "context_snapshot":  {
             "prev_emotion":         prev_emotion,
             "cur_valence":          cur_val,

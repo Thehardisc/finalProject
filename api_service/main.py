@@ -683,9 +683,10 @@ async def admin_pipeline_detail(
             "dominant":      pipeline_log.get("dominant_selected"),
             "confidence":    pipeline_log.get("meta_confidence"),
             "decision_mode": pipeline_log.get("decision_mode", "rule-based"),
-            "logic_map":     pipeline_log.get("logic_map", {}),
-            "sarcasm_score": pipeline_log.get("sarcasm_score", 0),
-            "conflict":      pipeline_log.get("conflict"),
+            "logic_map":             pipeline_log.get("logic_map", {}),
+            "ctx_correction_weight": pipeline_log.get("ctx_correction_weight", 0.0),
+            "sarcasm_score":         pipeline_log.get("sarcasm_score", 0),
+            "conflict":              pipeline_log.get("conflict"),
         },
         "context": {
             "reasoning":        reasoning,

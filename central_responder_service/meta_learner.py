@@ -21,6 +21,24 @@ logger = get_logger("meta_learner")
 
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM, ML_DIM
 
+# ── Context correction constants ───────────────────────────────────────────────
+
+_MAX_CTX_WEIGHT = float(os.environ.get("CONTEXT_WEIGHT", "0.45"))
+
+# CDM state index → baseline valence [-1, +1]
+# Order: NEUTRAL_EXPLORE, ASCENDING_POSITIVE, CONFLICT_RISE, TOPIC_ANCHOR,
+#        CONVERGENCE, EMOTIONAL_PEAK, DIVERGING
+_CDM_STATE_VALENCE = [0.0, 0.7, -0.8, 0.1, 0.3, -0.3, -0.7]
+
+_POSITIVE_EMOTIONS = frozenset({
+    'admiration', 'amusement', 'approval', 'caring', 'curiosity',
+    'desire', 'excitement', 'gratitude', 'joy', 'love', 'optimism', 'pride', 'relief',
+})
+_NEGATIVE_EMOTIONS = frozenset({
+    'anger', 'annoyance', 'disapproval', 'disgust', 'disappointment',
+    'embarrassment', 'fear', 'grief', 'nervousness', 'remorse', 'sadness',
+})
+
 
 # Default model path inside the container (mounted via Docker volume)
 # trainer.py writes to this exact location.
@@ -231,6 +249,66 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
     except Exception as e:
         logger.warning(f"Failed to calculate impacts: {e}")
         return {}
+
+
+def apply_context_correction(
+    scores: dict,
+    context_vector: list,
+) -> Tuple[dict, float]:
+    """
+    Post-prediction context correction.
+
+    Derives a valence polarity from the context vector (EMA valence, velocity,
+    CDM state) and scales each emotion's probability toward or away from that
+    polarity.  Renormalises to a valid probability distribution.
+
+    Returns (corrected_scores, effective_weight).
+    effective_weight == 0.0 means context signal was too weak — scores unchanged.
+    """
+    if not context_vector or len(context_vector) < 21:
+        return scores, 0.0
+
+    cv = context_vector
+    cur_valence = float(cv[20])   # EMA VADER compound, approximately [-1, 1]
+    velocity    = float(cv[15])   # Δvalence
+
+    cdm_probs = list(cv[0:7])
+    cdm_state = int(np.argmax(cdm_probs)) if any(p > 0 for p in cdm_probs) else 0
+    cdm_val   = _CDM_STATE_VALENCE[cdm_state] if cdm_state < len(_CDM_STATE_VALENCE) else 0.0
+
+    # Composite polarity in [-1, +1]
+    ctx_polarity = (
+        float(np.clip(cur_valence, -1.0, 1.0)) * 0.5 +
+        float(np.clip(velocity,    -1.0, 1.0)) * 0.2 +
+        cdm_val * 0.3
+    )
+
+    ctx_strength = abs(ctx_polarity)
+    if ctx_strength < 0.08:
+        return scores, 0.0
+
+    effective_weight = min(ctx_strength * _MAX_CTX_WEIGHT, _MAX_CTX_WEIGHT)
+
+    corrected = {}
+    for emotion, prob in scores.items():
+        if emotion in _POSITIVE_EMOTIONS:
+            alignment = 1.0
+        elif emotion in _NEGATIVE_EMOTIONS:
+            alignment = -1.0
+        else:
+            alignment = 0.0
+
+        # agreement > 0 → boost, agreement < 0 → suppress
+        scale = 1.0 + effective_weight * (ctx_polarity * alignment)
+        corrected[emotion] = max(0.0, float(prob) * scale)
+
+    total = sum(corrected.values())
+    if total > 1e-9:
+        corrected = {k: v / total for k, v in corrected.items()}
+    else:
+        corrected = dict(scores)
+
+    return corrected, round(effective_weight, 4)
 
 
 # helpers
