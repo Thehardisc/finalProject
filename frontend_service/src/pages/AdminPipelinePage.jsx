@@ -241,9 +241,9 @@ function ValenceBar({ value }) {
 
 function ContextCard({ decision, context }) {
   const { reasoning, raw_emotions, context_snapshot: cs } = context;
-  const { sarcasm_score, conflict, logic_map } = decision;
+  const { sarcasm_score, conflict, logic_map, ctx_correction_weight } = decision;
 
-  const contextPct   = logic_map?.Context ?? null;
+  const contextPct = Math.max(logic_map?.Context ?? 0, ctx_correction_weight ?? 0) || null;
   const contextShift = raw_emotions?.context_shift
     ? (typeof raw_emotions.context_shift === 'string'
         ? JSON.parse(raw_emotions.context_shift) : raw_emotions.context_shift)
