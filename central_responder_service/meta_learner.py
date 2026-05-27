@@ -23,12 +23,8 @@ from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DI
 
 # ── Context correction constants ───────────────────────────────────────────────
 
-_MAX_CTX_WEIGHT = float(os.environ.get("CONTEXT_WEIGHT", "0.45"))
-
-# CDM state index → baseline valence [-1, +1]
-# Order: NEUTRAL_EXPLORE, ASCENDING_POSITIVE, CONFLICT_RISE, TOPIC_ANCHOR,
-#        CONVERGENCE, EMOTIONAL_PEAK, DIVERGING
-_CDM_STATE_VALENCE = [0.0, 0.7, -0.8, 0.1, 0.3, -0.3, -0.7]
+_MAX_CTX_WEIGHT     = float(os.environ.get("CONTEXT_WEIGHT", "0.45"))
+_MISMATCH_CTX_CAP   = float(os.environ.get("CONTEXT_WEIGHT_MISMATCH", "0.65"))
 
 _POSITIVE_EMOTIONS = frozenset({
     'admiration', 'amusement', 'approval', 'caring', 'curiosity',
@@ -38,6 +34,18 @@ _NEGATIVE_EMOTIONS = frozenset({
     'anger', 'annoyance', 'disapproval', 'disgust', 'disappointment',
     'embarrassment', 'fear', 'grief', 'nervousness', 'remorse', 'sadness',
 })
+
+# Previous-emotion → valence used to amplify polarity when cur_valence is weak
+_PREV_EMOTION_VALENCE: dict = {
+    'anger': -0.8, 'annoyance': -0.6, 'disapproval': -0.7, 'disgust': -0.8,
+    'disappointment': -0.6, 'embarrassment': -0.5, 'fear': -0.7, 'grief': -0.9,
+    'nervousness': -0.5, 'remorse': -0.7, 'sadness': -0.7,
+    'admiration': 0.8,  'amusement': 0.6,  'approval': 0.6,  'caring': 0.7,
+    'curiosity': 0.3,   'desire': 0.5,     'excitement': 0.8, 'gratitude': 0.8,
+    'joy': 0.9,         'love': 0.9,       'optimism': 0.7,   'pride': 0.7,
+    'relief': 0.6,      'neutral': 0.0,    'confusion': -0.1, 'realization': 0.1,
+    'surprise': 0.2,
+}
 
 
 # Default model path inside the container (mounted via Docker volume)
@@ -254,53 +262,77 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
 def apply_context_correction(
     scores: dict,
     context_vector: list,
+    prev_emotion: str = "neutral",
 ) -> Tuple[dict, float]:
     """
-    Post-prediction context correction.
+    Post-prediction context correction via additive blending.
 
-    Derives a valence polarity from the context vector (EMA valence, velocity,
-    CDM state) and scales each emotion's probability toward or away from that
-    polarity.  Renormalises to a valid probability distribution.
+    Polarity is derived from EMA valence (cv[20]), velocity (cv[15]),
+    historical valence (cv[17]), and the previous-turn dominant emotion.
+    CDM state is intentionally excluded — it tracks conversation trajectory,
+    not valence, and can contradict EMA valence (e.g. velocity-driven
+    ASCENDING_POSITIVE in a deeply negative conversation).
+
+    When polarity opposes the dominant emotion (mismatch), blending is
+    amplified up to CONTEXT_WEIGHT_MISMATCH (default 0.65).
 
     Returns (corrected_scores, effective_weight).
-    effective_weight == 0.0 means context signal was too weak — scores unchanged.
+    effective_weight == 0.0 means signal was too weak — scores unchanged.
     """
     if not context_vector or len(context_vector) < 21:
         return scores, 0.0
 
     cv = context_vector
-    cur_valence = float(cv[20])   # EMA VADER compound, approximately [-1, 1]
-    velocity    = float(cv[15])   # Δvalence
+    cur_valence  = float(np.clip(cv[20], -1.0, 1.0))  # EMA VADER compound
+    velocity     = float(np.clip(cv[15], -1.0, 1.0))  # Δvalence
+    hist_valence = float(np.clip(cv[17], -1.0, 1.0))  # Qdrant episodic baseline
+    prev_val     = _PREV_EMOTION_VALENCE.get(prev_emotion, 0.0)
 
-    cdm_probs = list(cv[0:7])
-    cdm_state = int(np.argmax(cdm_probs)) if any(p > 0 for p in cdm_probs) else 0
-    cdm_val   = _CDM_STATE_VALENCE[cdm_state] if cdm_state < len(_CDM_STATE_VALENCE) else 0.0
-
-    # Composite polarity in [-1, +1]
+    # Valence-only polarity — no CDM state
     ctx_polarity = (
-        float(np.clip(cur_valence, -1.0, 1.0)) * 0.5 +
-        float(np.clip(velocity,    -1.0, 1.0)) * 0.2 +
-        cdm_val * 0.3
+        cur_valence  * 0.40 +
+        velocity     * 0.15 +
+        hist_valence * 0.15 +
+        prev_val     * 0.30
     )
 
     ctx_strength = abs(ctx_polarity)
     if ctx_strength < 0.08:
         return scores, 0.0
 
-    effective_weight = min(ctx_strength * _MAX_CTX_WEIGHT, _MAX_CTX_WEIGHT)
+    # Target distribution: all mass on the correct-polarity emotion pool,
+    # weighted by existing ML scores within that pool.
+    if ctx_polarity < 0:
+        pool = {e: float(v) for e, v in scores.items() if e in _NEGATIVE_EMOTIONS}
+    else:
+        pool = {e: float(v) for e, v in scores.items() if e in _POSITIVE_EMOTIONS}
 
-    corrected = {}
-    for emotion, prob in scores.items():
-        if emotion in _POSITIVE_EMOTIONS:
-            alignment = 1.0
-        elif emotion in _NEGATIVE_EMOTIONS:
-            alignment = -1.0
-        else:
-            alignment = 0.0
+    pool_total = sum(pool.values())
+    if pool_total < 1e-9:
+        # No existing mass in target pool — uniform fallback
+        target_set = _NEGATIVE_EMOTIONS if ctx_polarity < 0 else _POSITIVE_EMOTIONS
+        pool = {e: 1.0 for e in target_set if e in scores}
+        pool_total = float(len(pool)) or 1.0
 
-        # agreement > 0 → boost, agreement < 0 → suppress
-        scale = 1.0 + effective_weight * (ctx_polarity * alignment)
-        corrected[emotion] = max(0.0, float(prob) * scale)
+    target = {e: 0.0 for e in scores}
+    for e, v in pool.items():
+        target[e] = v / pool_total
+
+    # Mismatch: dominant opposes context polarity → amplify correction
+    dominant = max(scores, key=scores.get)
+    mismatch = (
+        (dominant in _POSITIVE_EMOTIONS and ctx_polarity < 0) or
+        (dominant in _NEGATIVE_EMOTIONS and ctx_polarity > 0)
+    )
+
+    base_weight      = min(float(ctx_strength ** 0.5) * _MAX_CTX_WEIGHT, _MAX_CTX_WEIGHT)
+    effective_weight = min(base_weight * 1.5, _MISMATCH_CTX_CAP) if mismatch else base_weight
+
+    # Additive blend: (1 - w) * ml + w * target
+    corrected = {
+        e: (1.0 - effective_weight) * float(v) + effective_weight * target.get(e, 0.0)
+        for e, v in scores.items()
+    }
 
     total = sum(corrected.values())
     if total > 1e-9:
