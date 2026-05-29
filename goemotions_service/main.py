@@ -84,22 +84,32 @@ async def main():
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
+                        mid  = data.get("message_id", "")
+                        cid  = data.get("conversation_id", "")
+                        uid  = data.get("user_id", "")
+                        mlog = logger.bind(message_id=mid, conversation_id=cid, user_id=uid, model=MODEL_NAME)
                         try:
                             text_to_analyze = data.get("processed_text_demojized", "") or data.get("processed_text", "")
                             original_text   = data.get("original_text", "") or data.get("text", "")
                             start_time = time.time()
-                            logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
+                            mlog.debug("goemotions_start", extra={"event": "model_start"})
 
                             scores       = analyzer.analyze(text_to_analyze)
                             emoji_scores = analyzer.analyze_emojis(original_text)
                             elapsed      = (time.time() - start_time) * 1000
 
                             top_3 = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:3]
-                            logger.log_stats(f"{MODEL_NAME.upper()} Inference", {
-                                "Message ID":     data.get("message_id", "N/A"),
-                                "Top Emotions":   ", ".join([f"{e} ({s:.2%})" for e, s in top_3]),
-                                "Inference Time": f"{elapsed:.2f}ms"
-                            })
+                            mlog.info(
+                                "goemotions_done",
+                                extra={
+                                    "event":        "model_done",
+                                    "latency_ms":   round(elapsed, 2),
+                                    "top1":         top_3[0][0] if top_3 else "neutral",
+                                    "top1_score":   round(top_3[0][1], 4) if top_3 else 0.0,
+                                    "emoji_n":      len(emoji_scores or {}),
+                                    "text_len":     len(text_to_analyze),
+                                },
+                            )
 
                             output_event = {
                                 "message_id":   data.get("message_id", message_id),
@@ -113,11 +123,18 @@ async def main():
                             await r.xack(STREAM_KEY, GROUP_NAME, message_id)
 
                         except Exception as msg_err:
-                            logger.error(f"[GOEMOTIONS] Failed on {message_id}: {msg_err}. ACKing to prevent requeue.")
+                            mlog.error(
+                                "goemotions_failed",
+                                extra={
+                                    "event":       "model_failed",
+                                    "error_class": type(msg_err).__name__,
+                                    "error":       str(msg_err),
+                                },
+                            )
                             try:
                                 await r.xack(STREAM_KEY, GROUP_NAME, message_id)
-                            except Exception:
-                                pass
+                            except Exception as ack_err:
+                                mlog.warning("xack_failed", extra={"event": "xack_failed", "error": str(ack_err)})
 
         except Exception as e:
             logger.log_exception(f"{MODEL_NAME.upper()} WORKER — Redis error, retrying in 1s", e)

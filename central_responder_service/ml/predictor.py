@@ -1,7 +1,6 @@
 """
 ml/predictor.py — Feature vector construction and meta-learner inference.
 """
-import math
 import numpy as np
 from typing import Tuple, Optional
 
@@ -9,32 +8,9 @@ from shared.utils.logger import get_logger
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS
 
 from .conflict_detector import detect_emotional_conflicts
+from .features import build_derived_block
 
 logger = get_logger("meta_learner")
-
-# Shared emotion labels between BERT and GoEmotions (used for agreement feature)
-_SHARED_LABELS = [l for l in BERT_LABELS if l in EMOTION_LABELS]
-_EPS = 1e-9
-
-
-def _entropy(scores: dict, keys: list) -> float:
-    probs = [max(scores.get(k, 0.0), 0.0) for k in keys]
-    total = sum(probs) + _EPS
-    probs = [p / total for p in probs]
-    return float(-sum(p * math.log(p + _EPS) for p in probs))
-
-
-def _margin(scores: dict, keys: list) -> float:
-    vals = sorted([scores.get(k, 0.0) for k in keys], reverse=True)
-    return float(vals[0] - vals[1]) if len(vals) >= 2 else (float(vals[0]) if vals else 0.0)
-
-
-def _agreement(bert: dict, goe: dict) -> float:
-    if not _SHARED_LABELS:
-        return 0.0
-    bert_top = max(_SHARED_LABELS, key=lambda k: bert.get(k, 0.0))
-    goe_top  = max(_SHARED_LABELS, key=lambda k: goe.get(k, 0.0))
-    return 1.0 if bert_top == goe_top else 0.0
 
 
 def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarray:
@@ -84,14 +60,8 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     for label in EMOTION_LABELS:
         vec.append(1.0 if label == prev_emo else 0.0)
 
-    # Block 6: Derived features (7) — MUST match trainer/preprocessor.py exactly
-    vec.append(_entropy(bert_scores,       BERT_LABELS))    # bert_entropy
-    vec.append(_entropy(goemotions_scores, EMOTION_LABELS)) # goe_entropy
-    vec.append(_margin(bert_scores,        BERT_LABELS))    # bert_margin
-    vec.append(_margin(goemotions_scores,  EMOTION_LABELS)) # goe_margin
-    vec.append(_agreement(bert_scores, goemotions_scores))  # bert_goe_agreement
-    vec.append(abs(float(vader_scores.get("vader_compound", 0.0))))  # vader_abs_compound
-    vec.append(max((goemotions_scores.get(k, 0.0) for k in EMOTION_LABELS), default=0.0))  # max_goe
+    # Block 6: Derived features (7) — shared implementation in ml/features.py
+    vec.extend(build_derived_block(bert_scores, goemotions_scores, vader_scores))
 
     arr = np.array(vec, dtype=np.float32)
     return arr.reshape(1, -1)

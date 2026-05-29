@@ -20,6 +20,7 @@ from shared.utils.logger import get_logger
 logger = get_logger("meta_learner")
 
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM
+from ml.features import build_derived_block
 
 
 # Default model path inside the container (mounted via Docker volume)
@@ -89,26 +90,10 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
       [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
                         goe_margin, bert_goe_agreement,
                         vader_abs_compound, max_goe_score
+
+    Block 6 (derived) is built by shared `ml.features.build_derived_block`
+    so the trainer (`trainer/preprocessor.py`) cannot silently desync.
     """
-    import math
-    _EPS = 1e-9
-
-    def _entropy(scores, keys):
-        probs = [max(scores.get(k, 0.0), 0.0) for k in keys]
-        total = sum(probs) + _EPS
-        probs = [p / total for p in probs]
-        return float(-sum(p * math.log(p + _EPS) for p in probs))
-
-    def _margin(scores, keys):
-        vals = sorted([scores.get(k, 0.0) for k in keys], reverse=True)
-        return float(vals[0] - vals[1]) if len(vals) >= 2 else (float(vals[0]) if vals else 0.0)
-
-    def _agreement(bert, goe):
-        shared = [l for l in BERT_LABELS if l in EMOTION_LABELS]
-        if not shared:
-            return 0.0
-        return 1.0 if max(shared, key=lambda k: bert.get(k, 0.0)) == max(shared, key=lambda k: goe.get(k, 0.0)) else 0.0
-
     context = context or {}
     vader_scores      = model_outputs.get("vader", {})
     bert_scores       = model_outputs.get("basic_bert", {})
@@ -139,14 +124,8 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     for label in EMOTION_LABELS:
         vec.append(1.0 if label == prev_emo else 0.0)
 
-    # Block 6: Derived (7)
-    vec.append(_entropy(bert_scores,       BERT_LABELS))
-    vec.append(_entropy(goemotions_scores, EMOTION_LABELS))
-    vec.append(_margin(bert_scores,        BERT_LABELS))
-    vec.append(_margin(goemotions_scores,  EMOTION_LABELS))
-    vec.append(_agreement(bert_scores, goemotions_scores))
-    vec.append(abs(float(vader_scores.get("vader_compound", 0.0))))
-    vec.append(max((goemotions_scores.get(k, 0.0) for k in EMOTION_LABELS), default=0.0))
+    # Block 6: Derived (7) — shared implementation
+    vec.extend(build_derived_block(bert_scores, goemotions_scores, vader_scores))
 
     arr = np.array(vec, dtype=np.float32)
     return arr.reshape(1, -1)

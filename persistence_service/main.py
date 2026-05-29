@@ -91,12 +91,23 @@ async def main():
             if messages:
                 start_time = time.time()
                 session    = SessionLocal()
-                to_ack: list = []
-                to_dlq: list = []  # R2: events that fail processing
+                # R2/replay: track (stream, record_id, business_message_id) per event so DLQ
+                # entries carry enough context to be replayable by message_id, not just record id.
+                to_ack: list = []     # [(stream, record_id), ...]
+                to_meta: list = []    # parallel list of business message_ids
                 try:
                     for stream, msgs in messages:
-                        for message_id, data in msgs:
-                            logger.debug(f"Persisting data from stream: {stream}")
+                        for record_id, data in msgs:
+                            biz_mid = data.get("message_id", "")
+                            cid     = data.get("conversation_id", "")
+                            uid     = data.get("user_id", "")
+                            mlog = logger.bind(
+                                message_id=biz_mid,
+                                conversation_id=cid,
+                                user_id=uid,
+                                stream=stream,
+                            )
+                            mlog.debug("persist_dispatch", extra={"event": "persist_dispatch"})
 
                             if stream == "message_stream":
                                 # Pv2: strip null bytes that corrupt PostgreSQL text columns
@@ -110,7 +121,8 @@ async def main():
                             elif stream == "feedback_stream":
                                 await process_feedback_event(session, data)
 
-                            to_ack.append((stream, message_id))
+                            to_ack.append((stream, record_id))
+                            to_meta.append(biz_mid)
 
                     session.commit()
 
@@ -119,27 +131,55 @@ async def main():
 
                     elapsed = (time.time() - start_time) * 1000
                     logger.info(
-                        f"Successfully persisted batch of {len(to_ack)} events "
-                        f"in {elapsed:.2f}ms"
+                        "persist_batch_done",
+                        extra={
+                            "event":      "persist_batch_done",
+                            "batch_size": len(to_ack),
+                            "latency_ms": round(elapsed, 2),
+                        },
                     )
 
                 except Exception as e:
                     session.rollback()
-                    logger.log_exception(
-                        "SQL TRANSACTION ROLLBACK — routing to DLQ", e
+                    # Structured failure log so an operator can find the affected message_ids
+                    # without parsing free-form text.
+                    streams_in_batch = sorted({s for s, _ in to_ack})
+                    logger.error(
+                        "persistence_failed",
+                        extra={
+                            "event":       "persistence_failed",
+                            "error_class": type(e).__name__,
+                            "error":       str(e)[:500],
+                            "batch_size":  len(to_ack),
+                            "streams":     streams_in_batch,
+                            "message_ids": [m for m in to_meta if m][:50],  # cap to avoid huge lines
+                        },
+                        exc_info=True,
                     )
-                    # R2: send failed events to DLQ instead of silently dropping
-                    to_dlq = list(to_ack)
-                    for dlq_stream, dlq_id in to_dlq:
+                    # R2: send failed events to DLQ — now WITH the business message_id so they
+                    # can actually be replayed (record_id alone is opaque once the stream rotates).
+                    for (dlq_stream, dlq_id), biz_mid in zip(to_ack, to_meta):
                         try:
                             await r.xadd(DLQ_STREAM, {
                                 "original_stream": dlq_stream,
                                 "original_id":     dlq_id,
+                                "message_id":      biz_mid or "",
+                                "error_class":     type(e).__name__,
                                 "error":           str(e)[:500],
-                                "timestamp":       time.time()
+                                "batch_size":      len(to_ack),
+                                "timestamp":       time.time(),
                             }, maxlen=5000, approximate=True)
-                        except Exception:
-                            pass
+                        except Exception as dlq_err:
+                            logger.warning(
+                                "dlq_write_failed",
+                                extra={
+                                    "event":       "dlq_write_failed",
+                                    "stream":      dlq_stream,
+                                    "record_id":   dlq_id,
+                                    "message_id":  biz_mid,
+                                    "error":       str(dlq_err),
+                                },
+                            )
                 finally:
                     session.close()
 

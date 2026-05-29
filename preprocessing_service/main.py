@@ -40,8 +40,12 @@ async def main():
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
+                        mid  = data.get("message_id", "")
+                        cid  = data.get("conversation_id", "")
+                        uid  = data.get("user_id", "")
+                        mlog = logger.bind(message_id=mid, conversation_id=cid, user_id=uid)
                         try:
-                            logger.debug(f"Processing message {message_id}")
+                            mlog.debug("preprocess_start", extra={"event": "preprocess_start"})
 
                             original_text = data.get("text", "")
                             processed_text = clean_text(original_text)
@@ -54,21 +58,30 @@ async def main():
 
                             await redis_client.publish_event(OUTPUT_STREAM, output_event)
 
-                            stats = {
-                                "Message ID": data.get("message_id", "N/A"),
-                                "Original": (original_text[:40] + '...') if len(original_text) > 40 else original_text,
-                                "Demojized": (processed_text_demojized[:40] + '...') if len(processed_text_demojized) > 40 else processed_text_demojized
-                            }
-                            logger.log_stats("PREPROCESSING COMPLETE", stats)
+                            mlog.info(
+                                "preprocess_done",
+                                extra={
+                                    "event":              "preprocess_done",
+                                    "original_len":       len(original_text),
+                                    "demojized_len":      len(processed_text_demojized),
+                                },
+                            )
 
                             await r.xack(STREAM_KEY, GROUP_NAME, message_id)
 
                         except Exception as msg_err:
-                            logger.error(f"[PREPROCESSING] Failed on {message_id}: {msg_err}. ACKing to prevent requeue.")
+                            mlog.error(
+                                "preprocess_failed",
+                                extra={
+                                    "event":       "preprocess_failed",
+                                    "error_class": type(msg_err).__name__,
+                                    "error":       str(msg_err),
+                                },
+                            )
                             try:
                                 await r.xack(STREAM_KEY, GROUP_NAME, message_id)
-                            except Exception:
-                                pass
+                            except Exception as ack_err:
+                                mlog.warning("xack_failed", extra={"event": "xack_failed", "error": str(ack_err)})
 
         except Exception as e:
             logger.log_exception("PREPROCESSING WORKER — Redis error, retrying in 1s", e)

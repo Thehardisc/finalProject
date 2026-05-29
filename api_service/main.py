@@ -14,7 +14,7 @@ from typing import List, Optional
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
-from shared.utils.logger import get_logger
+from shared.utils.logger import get_logger, sanitize_email
 from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
 from shared.constants import EMOTION_LABELS
 from api_service.auth_utils import hash_password, verify_password, create_jwt, decode_jwt, get_current_user, require_admin, JWT_EXPIRY_HOURS
@@ -30,9 +30,16 @@ app = FastAPI(title="Emotion API", version="1.0.0")
 app.include_router(conv_router)
 app.include_router(msg_router)
 
+# Comma-separated list — matches the ingestion_service convention.
+# Default keeps local dev working; production sets ALLOWED_ORIGINS=https://your.host
+_DEFAULT_ORIGINS = "http://localhost:5173,http://localhost,http://127.0.0.1,http://127.0.0.1:5173"
+_allowed_origins = [
+    o.strip() for o in os.environ.get("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost", "http://127.0.0.1", "http://127.0.0.1:5173"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -145,8 +152,17 @@ async def _handle_conversation_update(message_id, data):
     ems          = json.loads(data.get("emotions", "{}"))
     convo_id     = data.get("conversation_id")
 
+    mlog = logger.bind(
+        message_id=data.get("message_id"),
+        conversation_id=convo_id,
+        user_id=data.get("user_id"),
+    )
+
     if not convo_id:
-        logger.warning("Received conversation update with no conversation_id — skipping broadcast.")
+        mlog.warning(
+            "broadcast_skipped_no_convo_id",
+            extra={"event": "broadcast_skipped", "reason": "no_conversation_id"},
+        )
         return
 
     bert_list = [
@@ -184,6 +200,10 @@ async def _handle_conversation_update(message_id, data):
         )
         for r in rows:
             await manager.broadcast_to_user(r["user_id"], payload)
+    mlog.debug(
+        "ws_broadcast_done",
+        extra={"event": "ws_broadcast", "recipients": len(rows), "dominant": dom_emo},
+    )
 
 
 async def _handle_reasoning_update(message_id, data):
@@ -237,18 +257,35 @@ async def redis_listener():
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    audit = logger.bind(user_id=user_id)
     token = websocket.cookies.get("_req_sid")
     if not token:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        logger.warning(f"WebSocket auth failed: missing cookie for {user_id}")
+        audit.warning(
+            "ws_auth_failed",
+            extra={"event": "ws_auth_failed", "reason": "missing_cookie"},
+        )
         return
     try:
         user_data = decode_jwt(token)
         if user_data["sub"] != user_id:
-            raise Exception("User ID mismatch")
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            audit.warning(
+                "ws_auth_failed",
+                extra={"event": "ws_auth_failed", "reason": "user_mismatch",
+                       "token_sub": user_data.get("sub")},
+            )
+            return
     except Exception as e:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-        logger.warning(f"WebSocket auth failed for {user_id}: {e}")
+        audit.warning(
+            "ws_auth_failed",
+            extra={
+                "event":       "ws_auth_failed",
+                "reason":      "decode_error",
+                "error_class": type(e).__name__,
+            },
+        )
         return
 
     await manager.connect(websocket, user_id)
@@ -259,6 +296,10 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
             if rate_limiter and not await rate_limiter.is_allowed(user_id):
                 await websocket.send_json({"type": "error", "message": "Rate limit exceeded"})
+                logger.bind(user_id=user_id).warning(
+                    "ws_rate_limited",
+                    extra={"event": "ws_rate_limited"},
+                )
                 continue
 
             try:
@@ -280,8 +321,16 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                         "metadata":        {"source": "websocket"},
                     }
                     await redis_client.publish_event("message_stream", event)
+                    logger.bind(
+                        message_id=event["message_id"],
+                        conversation_id=conversation_id,
+                        user_id=sender,
+                    ).info(
+                        "ws_message_received",
+                        extra={"event": "ws_message_received", "text_len": len(text)},
+                    )
             except Exception as e:
-                logger.log_exception("FAILED TO PROCESS CLIENT WEBSOCKET MESSAGE", e)
+                logger.bind(user_id=user_id).log_exception("ws_message_processing_failed", e)
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, user_id)
@@ -358,7 +407,10 @@ async def register(req: RegisterRequest, response: Response):
                VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8)""",
             user_id, req.email, req.first_name, req.last_name, display_name, pw_hash, role, time.time()
         )
-        logger.info(f"New user registered: {req.email} (role={role})")
+        logger.bind(user_id=user_id, email_hash=sanitize_email(req.email), role=role).info(
+            "user_registered",
+            extra={"event": "user_registered"},
+        )
         token = create_jwt(user_id, display_name, role)
         response.set_cookie(
             key="_req_sid", value=token,
@@ -377,18 +429,28 @@ async def auth_login(req: LoginRequest, response: Response):
             req.email
         )
 
+    audit = logger.bind(email_hash=sanitize_email(req.email))
     if not user:
+        audit.warning("login_failed", extra={"event": "login_failed", "reason": "user_not_found"})
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     if not user["is_active"]:
+        audit.bind(user_id=user["user_id"]).warning(
+            "login_failed", extra={"event": "login_failed", "reason": "account_inactive"},
+        )
         raise HTTPException(status_code=403, detail="Account has been deactivated. Contact an admin.")
     if not user["password_hash"] or not verify_password(req.password, user["password_hash"]):
+        audit.bind(user_id=user["user_id"]).warning(
+            "login_failed", extra={"event": "login_failed", "reason": "password_mismatch"},
+        )
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE users SET last_login = $1 WHERE user_id = $2", time.time(), user["user_id"])
 
     token = create_jwt(user["user_id"], user["display_name"], user["role"])
-    logger.info(f"User logged in: {user['email']}")
+    audit.bind(user_id=user["user_id"], role=user["role"]).info(
+        "user_login", extra={"event": "user_login"},
+    )
     response.set_cookie(
         key="_req_sid", value=token,
         httponly=True, samesite="lax",
@@ -460,7 +522,12 @@ async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = 
         )
     if result == "UPDATE 0":
         raise HTTPException(status_code=404, detail="User not found.")
-    logger.info(f"Admin {admin['display_name']} updated user {user_id}: {req.dict(exclude_none=True)}")
+    logger.bind(
+        actor=admin["sub"], target=user_id, action="update_user",
+    ).info(
+        "admin_action",
+        extra={"event": "admin_action", "changes": req.dict(exclude_none=True)},
+    )
     return {"status": "updated", "user_id": user_id}
 
 
@@ -473,7 +540,12 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
         result = await conn.execute("DELETE FROM users WHERE user_id = $1", user_id)
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="User not found.")
-    logger.info(f"Admin {admin['display_name']} deleted user {user_id}")
+    logger.bind(
+        actor=admin["sub"], target=user_id, action="delete_user",
+    ).info(
+        "admin_action",
+        extra={"event": "admin_action"},
+    )
     return
 
 

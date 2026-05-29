@@ -22,26 +22,25 @@ Environment:
 
 import argparse
 import json
-import logging
 import os
 import sys
 import time
 from pathlib import Path
 from typing import List, Optional
 
-# Allow running from the project root as well
-sys.path.insert(0, str(Path(__file__).parent))
+# Allow running from the project root or from this directory.
+_HERE         = Path(__file__).parent
+_PROJECT_ROOT = _HERE.parent
+sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from data.trajectories import TRAJECTORIES, TRAJECTORY_TYPES, TOTAL_CONVERSATIONS
 from data.generator import ConversationGenerator
 from data.runner import PipelineRunner
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    datefmt="%H:%M:%S",
-)
-logger = logging.getLogger("collect")
+from shared.utils.logger import get_logger
+
+logger = get_logger("collect")
 
 RAW_DIR      = Path(__file__).parent / "raw_conversations"
 TRAINING_DIR = Path(__file__).parent / "training_data"
