@@ -273,7 +273,8 @@ export default function App() {
       ws.onclose = (event) => {
         if (!mountedRef.current) return;
         setStatus('Offline');
-        if (event.code === 1000 || event.code === 1008) return;
+        if (event.code === 1000) return;
+        if (event.code === 1008) { handleLogout(); return; }
         if (retryCountRef.current < MAX_RETRIES) {
           const delay = Math.min(BASE_DELAY * 2 ** retryCountRef.current, 30_000);
           retryCountRef.current++;
