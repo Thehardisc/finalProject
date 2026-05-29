@@ -14,13 +14,13 @@ from shared.utils.logger import get_logger
 logger = get_logger("meta_learner")
 
 # Feature block offsets — must match build_feature_vector() in predictor.py
-# VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), Context(67-95)
+# VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), CDM Context(67-110), Derived(111-117)
 BLOCK_SLICES = {
-    "VADER":      slice(0,  4),
-    "BERT":       slice(4,  11),
-    "GoEmotions": slice(11, 39),
-    "EmojiNet":   slice(39, 67),
-    "Context":    slice(67, 96),
+    "VADER":      slice(0,   4),
+    "BERT":       slice(4,   11),
+    "GoEmotions": slice(11,  39),
+    "EmojiNet":   slice(39,  67),
+    "Context":    slice(67,  111),
 }
 
 

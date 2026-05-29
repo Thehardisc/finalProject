@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EmotionPalette } from './EmotionPalette';
+import CDMStateGraph from './CDMStateGraph';
 
 const ENGINES = [
   { key: 'vader',      label: 'VADER Lexical',   color: '234,179,8',  sub: '4-dim · lexical sentiment' },
   { key: 'bert',       label: 'BERT Basic',       color: '59,130,246', sub: '7 Ekman classes · transformer' },
   { key: 'goemotions', label: 'GoEmotions',       color: '168,85,247', sub: '28-dim fine-grained + emoji semantics' },
-  { key: 'meta',       label: 'Meta-Learner',     color: '16,185,129', sub: '103-dim → 28 classes' },
+  { key: 'meta',       label: 'Meta-Learner',     color: '16,185,129', sub: '118-dim → 28 classes · CDM belief context' },
 ];
 
 const TIMING = {
@@ -161,6 +162,15 @@ export default function TelemetryPanel({ processing, lastAnalysis }) {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* ── CDM Parallel Belief State Machine ── */}
+      {d?.context_snapshot && (
+        <div style={{
+          marginTop: 14, paddingTop: 14, borderTop: '1px solid rgba(0,0,0,.07)',
+        }}>
+          <CDMStateGraph snapshot={d.context_snapshot} />
         </div>
       )}
 

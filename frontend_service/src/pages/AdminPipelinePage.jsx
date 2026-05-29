@@ -292,6 +292,43 @@ function ContextCard({ decision, context }) {
               </span>
             </div>
 
+            {/* CDM Parallel Belief State Machine — top-3 simultaneous states */}
+            {cs.cdm_available && Array.isArray(cs.cdm_top3_states) && (
+              <>
+                <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '8px 0' }} />
+                <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.35)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                  CDM Belief — Top 3 Active States
+                  {cs.cdm_catalyst && (
+                    <span style={{ marginLeft: 8, color: 'rgb(255,200,80)', textTransform: 'none', letterSpacing: 0 }}>
+                      ⚡ {cs.cdm_catalyst}
+                    </span>
+                  )}
+                </div>
+                {[
+                  [cs.cdm_top1_name, cs.cdm_top3_probs?.[0]],
+                  [cs.cdm_top2_name, cs.cdm_top3_probs?.[1]],
+                  [cs.cdm_top3_name, cs.cdm_top3_probs?.[2]],
+                ].filter(([name]) => name).map(([name, prob], k) => (
+                  <div key={k} style={S.contextRow}>
+                    <span style={{ ...S.ctxLabel, color: `rgb(${rgb(name)})`, textTransform: 'capitalize', fontWeight: k === 0 ? 700 : 500 }}>
+                      {k + 1}. {name}
+                    </span>
+                    <div style={{ flex: 1, height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.07)', margin: '0 12px' }}>
+                      <div style={{
+                        height: '100%', width: `${Math.min((prob || 0) * 100, 100)}%`,
+                        borderRadius: 3, background: `rgb(${rgb(name)})`,
+                      }} />
+                    </div>
+                    <span style={{ ...S.ctxValue, color: `rgb(${rgb(name)})` }}>
+                      {((prob || 0) * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                ))}
+                {cs.cdm_momentum != null && row('State momentum (inertia)',
+                  `${(cs.cdm_momentum * 100).toFixed(0)}%`, 'rgba(255,255,255,0.55)')}
+              </>
+            )}
+
             {cs.ce_available && (
               <>
                 <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '8px 0' }} />

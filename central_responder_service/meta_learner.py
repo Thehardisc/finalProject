@@ -20,7 +20,7 @@ from shared.utils.logger import get_logger
 logger = get_logger("meta_learner")
 
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM
-from ml.features import build_derived_block
+from ml.features import build_derived_block, build_cdm_context_block
 
 
 # Default model path inside the container (mounted via Docker volume)
@@ -52,7 +52,7 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             logger.warning("Loaded object is not a valid sklearn Pipeline. Fallback mode.")
             return None
 
-        # Dimension sanity check — ensure it matches our current 103D feature vector
+        # Dimension sanity check — ensure it matches our current 118D feature vector
         try:
             dummy_x = np.zeros((1, FEATURE_DIM))
             model.predict(dummy_x)
@@ -79,20 +79,21 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     Build a fixed-length float32 numpy feature vector from 4 model output dicts
     PLUS conversation context (previous mood/valence).
 
-    Returns np.ndarray of shape (1, 103).
+    Returns np.ndarray of shape (1, 118).
 
     Blocks:
-      [0:4]    VADER (4)
-      [4:11]   BERT Ekman (7)
-      [11:39]  GoEmotions (28)
-      [39:67]  EmojiNet (28)
-      [67:96]  Context: valence(1) + one-hot prev emotion(28)
-      [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
-                        goe_margin, bert_goe_agreement,
-                        vader_abs_compound, max_goe_score
+      [0:4]     VADER (4)
+      [4:11]    BERT Ekman (7)
+      [11:39]   GoEmotions (28)
+      [39:67]   EmojiNet (28)
+      [67:111]  CDM Context (44): 28-dim PBSM belief + 16 CDM scalars
+      [111:118] Derived: bert_entropy, goe_entropy, bert_margin,
+                         goe_margin, bert_goe_agreement,
+                         vader_abs_compound, max_goe_score
 
-    Block 6 (derived) is built by shared `ml.features.build_derived_block`
-    so the trainer (`trainer/preprocessor.py`) cannot silently desync.
+    Blocks 5 (CDM context) and 6 (derived) are built by shared
+    `ml.features` helpers so the trainer (`trainer/preprocessor.py`)
+    cannot silently desync.
     """
     context = context or {}
     vader_scores      = model_outputs.get("vader", {})
@@ -118,11 +119,8 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     for k in EMOTION_LABELS:
         vec.append(float(emoji_scores.get(k, 0.0)))
 
-    # Block 5: Context (29) — valence + one-hot prev emotion
-    vec.append(float(context.get("avg_valence", 0.0)))
-    prev_emo = context.get("prev_emotion", "neutral").lower()
-    for label in EMOTION_LABELS:
-        vec.append(1.0 if label == prev_emo else 0.0)
+    # Block 5: CDM Context (44) — PBSM belief + scalars (uniform-belief fallback)
+    vec.extend(build_cdm_context_block(context))
 
     # Block 6: Derived (7) — shared implementation
     vec.extend(build_derived_block(bert_scores, goemotions_scores, vader_scores))
@@ -140,7 +138,7 @@ def predict_with_meta_learner(
 
     Args:
         model: Loaded sklearn Pipeline (from load_meta_learner).
-        feature_vector: np.ndarray of shape (1, 96) from build_feature_vector().
+        feature_vector: np.ndarray of shape (1, 118) from build_feature_vector().
 
     Returns:
         (dominant_emotion: str, confidence: float, all_scores: dict)
@@ -243,14 +241,14 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
         contributions = X_scaled * weights
         
         # 6. Group by block (matching build_feature_vector offsets)
-        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), EmojiNet(39-66), Context(67-95), Derived(96-102)
+        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), EmojiNet(39-66), CDM Context(67-110), Derived(111-117)
         impacts = {
             "VADER":       float(np.sum(contributions[0:4])),
             "BERT":        float(np.sum(contributions[4:11])),
             "GoEmotions":  float(np.sum(contributions[11:39])),
             "EmojiNet":    float(np.sum(contributions[39:67])),
-            "Context":     float(np.sum(contributions[67:96])),
-            "Derived":     float(np.sum(contributions[96:103])),
+            "Context":     float(np.sum(contributions[67:111])),
+            "Derived":     float(np.sum(contributions[111:118])),
         }
         
         # Normalize for visualization (Relative Importance)

@@ -8,7 +8,7 @@ from shared.utils.logger import get_logger
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS
 
 from .conflict_detector import detect_emotional_conflicts
-from .features import build_derived_block
+from .features import build_derived_block, build_cdm_context_block
 
 logger = get_logger("meta_learner")
 
@@ -18,17 +18,17 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     Build a fixed-length float32 numpy feature vector from 4 model output dicts
     plus conversation context.
 
-    Returns np.ndarray of shape (1, 103).
+    Returns np.ndarray of shape (1, 118).
 
     Blocks:
-      [0:4]    VADER (4)
-      [4:11]   BERT Ekman (7)
-      [11:39]  GoEmotions (28)
-      [39:67]  EmojiNet (28)
-      [67:96]  Context: valence(1) + one-hot prev emotion(28)
-      [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
-                        goe_margin, bert_goe_agreement,
-                        vader_abs_compound, max_goe_score
+      [0:4]     VADER (4)
+      [4:11]    BERT Ekman (7)
+      [11:39]   GoEmotions (28)
+      [39:67]   EmojiNet (28)
+      [67:111]  CDM Context (44): 28-dim PBSM belief + 16 CDM scalars
+      [111:118] Derived: bert_entropy, goe_entropy, bert_margin,
+                         goe_margin, bert_goe_agreement,
+                         vader_abs_compound, max_goe_score
     """
     context = context or {}
     vader_scores      = model_outputs.get("vader", {})
@@ -54,11 +54,8 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     for k in EMOTION_LABELS:
         vec.append(float(emoji_scores.get(k, 0.0)))
 
-    # Block 5: Context (29)
-    vec.append(float(context.get("avg_valence", 0.0)))
-    prev_emo = context.get("prev_emotion", "neutral").lower()
-    for label in EMOTION_LABELS:
-        vec.append(1.0 if label == prev_emo else 0.0)
+    # Block 5: CDM Context (44) — PBSM belief + scalars (uniform-belief fallback)
+    vec.extend(build_cdm_context_block(context))
 
     # Block 6: Derived features (7) — shared implementation in ml/features.py
     vec.extend(build_derived_block(bert_scores, goemotions_scores, vader_scores))

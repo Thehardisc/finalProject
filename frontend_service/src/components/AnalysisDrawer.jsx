@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 import { EmotionPalette } from './EmotionPalette';
+import CDMStateGraph from './CDMStateGraph';
 
 const API_BASE = 'http://localhost:8001';
 
@@ -277,6 +278,13 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                   </div>
                 ))}
               </div>
+
+              {/* CDM Parallel Belief State Machine — top-3 simultaneous states */}
+              {data.context_snapshot.cdm_available && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid rgba(0,119,255,0.12)' }}>
+                  <CDMStateGraph snapshot={data.context_snapshot} />
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -1,12 +1,12 @@
 """
 trainer/preprocessor.py — Feature vector construction and dataset filters.
 
-FEATURE_DIM: 96 base + 7 derived = 103 total
+FEATURE_DIM: 111 base + 7 derived = 118 total
   Block 1: VADER         (4)
   Block 2: BERT Ekman    (7)
   Block 3: GoEmotions    (28)
   Block 4: EmojiNet      (28)
-  Block 5: Context       (29)  valence(1) + one-hot prev emotion(28)
+  Block 5: CDM Context   (44)  synthetic Dirichlet belief + valence scalars
   Block 6: Derived       (7)   entropy×2, margin×2, agreement, |compound|, max_goe
 """
 import statistics
@@ -14,9 +14,9 @@ import numpy as np
 from collections import Counter
 
 from shared.utils.logger import get_logger
-from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS
+from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, CONTEXT_DIM
 
-from ml.features import build_derived_block
+from ml.features import build_derived_block, synthesize_cdm_context_block
 
 logger = get_logger("trainer")
 
@@ -26,17 +26,21 @@ logger = get_logger("trainer")
 def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict,
              context: dict = None) -> np.ndarray:
     """
-    Assemble the 103-dimensional feature vector from 4 model score dicts + context.
+    Assemble the 118-dimensional feature vector from 4 model score dicts + context.
 
     Blocks:
-      [0:4]    VADER (4)
-      [4:11]   BERT Ekman (7)
-      [11:39]  GoEmotions (28)
-      [39:67]  EmojiNet (28)
-      [67:96]  Context: valence(1) + one-hot prev emotion(28)
-      [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
-                        goe_margin, bert_goe_agreement,
-                        vader_abs_compound, max_goe_score
+      [0:4]     VADER (4)
+      [4:11]    BERT Ekman (7)
+      [11:39]   GoEmotions (28)
+      [39:67]   EmojiNet (28)
+      [67:111]  CDM Context (44): synthetic Dirichlet belief + valence scalars
+      [111:118] Derived: bert_entropy, goe_entropy, bert_margin,
+                         goe_margin, bert_goe_agreement,
+                         vader_abs_compound, max_goe_score
+
+    Block 5 mirrors the live PBSM output shape via a soft Dirichlet belief
+    peaked at prev_emotion (see synthesize_cdm_context_block) to avoid
+    train/serve skew. An explicit context["cdm_context"] (44 floats) overrides.
     """
     context = context or {}
     vec = []
@@ -47,11 +51,15 @@ def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict,
     for k in EMOTION_LABELS: vec.append(float(goe.get(k,   0.0)))
     for k in EMOTION_LABELS: vec.append(float(emoji.get(k, 0.0)))
 
-    # Block 5: context
-    vec.append(float(context.get("avg_valence", 0.0)))
-    prev_emo = context.get("prev_emotion", "neutral").lower()
-    for label in EMOTION_LABELS:
-        vec.append(1.0 if label == prev_emo else 0.0)
+    # Block 5: CDM context (44) — explicit override, else synthetic soft belief
+    cdm = context.get("cdm_context")
+    if isinstance(cdm, (list, tuple)) and len(cdm) == CONTEXT_DIM:
+        vec.extend(float(x) for x in cdm)
+    else:
+        vec.extend(synthesize_cdm_context_block(
+            context.get("prev_emotion"),
+            float(context.get("avg_valence", 0.0)),
+        ))
 
     # Block 6: derived features (7) — shared implementation in ml/features.py
     vec.extend(build_derived_block(bert, goe, vader))

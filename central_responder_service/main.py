@@ -25,8 +25,14 @@ from trajectory.inference import load_trajectory_model, run_trajectory_step
 import metrics as METRICS
 from prometheus_client import start_http_server as _start_metrics_server
 
+import numpy as np
+
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
+from shared.constants import (
+    EMOTION_LABELS, CDM_N_STATES,
+    FV_CONTEXT_START, FV_DERIVED_START, CTX_CURR_VALENCE,
+)
 
 logger = get_logger("central_responder")
 
@@ -38,6 +44,48 @@ OUTPUT_STREAM = "emotion_stream"
 PENDING_KEY_PREFIX = "pending_aggregation:"
 
 AGGREGATION_TIMEOUT_MS = 5000
+
+# context_engine is optional but slower (SentenceTransformer + Qdrant). Once the
+# 3 required NLP models arrive, give the CDM context this long to show up before
+# aggregating without it (uniform-belief fallback). Tuned for embedding latency.
+OPTIONAL_TIMEOUT_MS = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "200"))
+
+
+def _build_context_snapshot(context, hist_val, resonance, ce_volatility,
+                            ce_available, cdm_diag):
+    """
+    Assemble the context_snapshot forwarded to the frontend.
+
+    Surfaces the PBSM's top-3 simultaneously-active emotion states. When the
+    context engine missed the window (no cdm_diag), the snapshot still reports a
+    derived top-3 from the conversation's previous dominant emotion so the
+    State Machine panel degrades gracefully instead of going blank.
+    """
+    snap = {
+        "prev_emotion":       context["prev_emotion"],
+        "avg_valence":        round(context["avg_valence"], 4),
+        "historical_valence": round(hist_val, 4),
+        "topic_resonance":    round(resonance, 4),
+        "volatility":         round(ce_volatility, 4),
+        "ce_available":       ce_available,
+        "cdm_available":      cdm_diag is not None,
+    }
+
+    if cdm_diag:
+        snap.update({
+            "cdm_state_probs": cdm_diag.get("belief"),
+            "cdm_top3_states": cdm_diag.get("top3_states"),
+            "cdm_top3_probs":  cdm_diag.get("top3_probs"),
+            "cdm_top1_name":   cdm_diag.get("top1_name"),
+            "cdm_top2_name":   cdm_diag.get("top2_name"),
+            "cdm_top3_name":   cdm_diag.get("top3_name"),
+            "cdm_momentum":    cdm_diag.get("momentum"),
+            "cdm_residency":   cdm_diag.get("residency"),
+            "cdm_catalyst":    cdm_diag.get("catalyst"),
+        })
+
+    return snap
+
 
 # load weights
 # requires the pkl file
@@ -121,10 +169,25 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
 
     # format model outputs — separate context_engine from ML models
     model_outputs = {}
+    cdm_context_vector = None    # 44-dim CDM context block from context_engine
+    cdm_diag           = None    # rich PBSM diagnostics for the frontend
     for res in partial_results:
         model_name = res.get("model_name")
         scores = res.get("scores", {})
         model_outputs[model_name] = scores
+        if model_name == "context_engine":
+            raw_cv = res.get("context_vector")
+            if raw_cv:
+                try:
+                    cdm_context_vector = json.loads(raw_cv) if isinstance(raw_cv, str) else raw_cv
+                except (json.JSONDecodeError, TypeError):
+                    cdm_context_vector = None
+            raw_diag = res.get("cdm_diag")
+            if raw_diag:
+                try:
+                    cdm_diag = json.loads(raw_diag) if isinstance(raw_diag, str) else raw_diag
+                except (json.JSONDecodeError, TypeError):
+                    cdm_diag = None
 
     # Extract emoji scores from go_emotions packet (scored at inference time via GoEmotions model)
     model_outputs["emojinet"] = {}
@@ -188,6 +251,12 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             },
         )
 
+    # Inject the 44-dim CDM context block produced by the PBSM. When it didn't
+    # arrive in time, build_feature_vector falls back to a uniform belief — the
+    # block is never silently zeroed (that was the old 0%-context bug).
+    if cdm_context_vector is not None:
+        context["cdm_context"] = cdm_context_vector
+
     mlog.debug(
         "context_injected",
         extra={
@@ -195,11 +264,18 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             "avg_valence":  round(context["avg_valence"], 4),
             "prev_emotion": context["prev_emotion"],
             "ce_available": ce_available,
+            "cdm_available": cdm_context_vector is not None,
         },
     )
 
     # predict logic
     fv = build_feature_vector(model_outputs, context=context)
+    mlog.warning(
+        "[DIAG-2-CTX-RECV] "
+        f"ce_available={ce_available} cdm_available={cdm_context_vector is not None} "
+        f"ctx_block_L2={float(np.linalg.norm(fv[0, FV_CONTEXT_START:FV_DERIVED_START])):.4f} "
+        f"meta_loaded={META_LEARNER is not None}"
+    )
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc = predict_with_meta_learner(META_LEARNER, fv)
     METRICS.meta_predictions_total.labels(
         outcome="fallback" if dominant_emotion == "neutral" and meta_confidence == 0.0 else "success"
@@ -289,14 +365,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "sarcasm_score":     float(sarcasm_score),
         "conflict":          conflict_desc,
         "trajectory":        trajectory,
-        "context_snapshot":  {
-            "prev_emotion":       context["prev_emotion"],
-            "avg_valence":        round(context["avg_valence"], 4),
-            "historical_valence": round(hist_val, 4),
-            "topic_resonance":    round(resonance, 4),
-            "volatility":         round(ce_volatility, 4),
-            "ce_available":       ce_available,
-        },
+        "context_snapshot":  _build_context_snapshot(
+            context, hist_val, resonance, ce_volatility, ce_available, cdm_diag
+        ),
     }
     
     # Inject VADER scores into the final payload for the Aggregation/Frontend service
@@ -383,7 +454,11 @@ async def main():
                             "model_name": model_name,
                             "scores": scores,
                             "original_data": data.get("original_data"), # This might be doubly nested string
-                            "emoji_scores": data.get("emoji_scores", "{}")
+                            "emoji_scores": data.get("emoji_scores", "{}"),
+                            # CDM context block + diagnostics from context_engine.
+                            # Preserved here so they survive to aggregate_and_publish.
+                            "context_vector": data.get("context_vector"),
+                            "cdm_diag": data.get("cdm_diag"),
                         }
 
                         # Handle original_data if it's a string
@@ -412,7 +487,24 @@ async def main():
                         current_results = await r.hgetall(pending_key)
                         received_models = [k for k in current_results.keys() if k != "arrival_timestamp"]
 
-                        if all(m in received_models for m in expected_models):
+                        required_ready = all(m in received_models for m in expected_models)
+
+                        # Once the required models are in, give the slower
+                        # context_engine (SentenceTransformer + Qdrant) a bounded
+                        # inline grace window so CDM context isn't perpetually lost
+                        # to the race. The wait is capped and always falls through to
+                        # aggregation, so a message never gets stranded if context
+                        # never arrives (build_feature_vector uses uniform fallback).
+                        if required_ready and "context_engine" not in received_models:
+                            deadline = time.time() + OPTIONAL_TIMEOUT_MS / 1000.0
+                            while time.time() < deadline:
+                                await asyncio.sleep(0.025)
+                                current_results = await r.hgetall(pending_key)
+                                if "context_engine" in current_results:
+                                    break
+                            received_models = [k for k in current_results.keys() if k != "arrival_timestamp"]
+
+                        if required_ready:
                             logger.debug(f"All models received for {msg_id}. Aggregating.")
 
                             all_packets = []

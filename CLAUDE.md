@@ -43,9 +43,9 @@ message_stream
 
 ---
 
-## Feature Vector (103 dimensions)
+## Feature Vector (118 dimensions)
 
-**Both** `central_responder_service/ml/predictor.py:build_feature_vector` (inference) and `central_responder_service/trainer/preprocessor.py:build_fv` (training) MUST produce the same layout. Any change to one must be mirrored in the other.
+**Three** builders MUST produce the same layout: `central_responder_service/meta_learner.py:build_feature_vector` (live path, called by `main.py`), `central_responder_service/ml/predictor.py:build_feature_vector` (modular path), and `central_responder_service/trainer/preprocessor.py:build_fv` (training). Any change to one must be mirrored in the others. The CDM context + derived blocks are built by shared helpers in `ml/features.py` so they cannot silently desync.
 
 | Block | Indices | Source | Size |
 |---|---|---|---|
@@ -53,8 +53,10 @@ message_stream
 | BERT Ekman | [4:11] | 7 Ekman labels from `BERT_LABELS` | 7 |
 | GoEmotions | [11:39] | 28 labels from `EMOTION_LABELS` | 28 |
 | EmojiNet | [39:67] | 28 emoji-derived scores (same label order as GoEmotions) | 28 |
-| Context | [67:96] | `avg_valence` (1) + one-hot previous emotion (28) | 29 |
-| Derived | [96:103] | bert_entropy, goe_entropy, bert_margin, goe_margin, bert_goe_agreement, vader_abs_compound, max_goe_score | 7 |
+| CDM Context | [67:111] | 28-dim PBSM belief + 16 CDM scalars (see below) | 44 |
+| Derived | [111:118] | bert_entropy, goe_entropy, bert_margin, goe_margin, bert_goe_agreement, vader_abs_compound, max_goe_score | 7 |
+
+The **CDM Context block (44)** is produced by `context_engine_service`'s Parallel Belief State Machine (`context_engine_service/cdm.py`) and published on `partial_analysis_stream` as `context_vector`. `central_responder_service/main.py` injects it as `context["cdm_context"]`. Its internal layout (relative to the block) is defined by the `CTX_*` constants in `shared/constants.py`: `[0:28]` belief distribution, `[28]` residency, `[29:32]` transition trace, `[32:44]` scalars (abruptness, coherence, entropy, speaker-divergence, velocity, acceleration, historical/current valence, resonance, volatility, msg-length, latency). When the context engine misses the aggregation window, the block falls back to a **uniform belief** (1/28 each, scalars zeroed) — never silently zeroed. The trainer synthesises a soft **Dirichlet** belief peaked at the previous emotion to mirror the live distribution's shape (avoids train/serve skew).
 
 Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` (7), `VADER_KEYS` (4).
 
@@ -145,7 +147,7 @@ docker compose ps
 
 ## Key Invariants & Gotchas
 
-- **Feature vector parity**: `ml/predictor.py` and `trainer/preprocessor.py` must produce the same 103-dim vector. Whenever you change one, update the other.
+- **Feature vector parity**: `meta_learner.py`, `ml/predictor.py`, and `trainer/preprocessor.py` must produce the same 118-dim vector. Whenever you change one, update the others (the shared `ml/features.py` helpers cover the CDM-context and derived blocks). Run `pytest central_responder_service/training/test_feature_parity.py`.
 - **Trajectory input**: always 67-dim (GoE+BERT+VADER+Emoji). The trajectory model was trained with this layout — changing it requires retraining the LSTM.
 - **Emoji scores flow**: `goemotions_service` computes emoji scores and attaches them to its result. `central_responder_service/main.py` reads `emoji_scores` from the go_emotions result and puts it into `model_outputs["emojinet"]` before calling `build_feature_vector`.
 - **CSS import**: `main.jsx` imports `index-v2.css`, not `index.css`. Edits to `index.css` have no effect on the running app.

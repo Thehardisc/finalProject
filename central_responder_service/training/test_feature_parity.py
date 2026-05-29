@@ -1,7 +1,13 @@
 """
 Parity test: the live inference path (meta_learner.build_feature_vector) and
-the training path (trainer.preprocessor.build_fv) MUST produce identical 103-dim
+the training path (trainer.preprocessor.build_fv) MUST produce identical 118-dim
 feature vectors for the same input.
+
+NOTE on the CDM context block ([67:111]): the two paths intentionally DIFFER
+when no explicit belief is supplied — inference falls back to a uniform belief,
+training synthesises a random Dirichlet belief. Parity is only required (and
+only meaningful) when both receive the SAME belief, so every case here pins an
+explicit `cdm_context` and the assertion then covers the full 118-dim vector.
 
 CLAUDE.md flags this as the #1 invariant of the system: a mismatch causes
 `X has N features but StandardScaler expecting M` errors at runtime.
@@ -156,9 +162,20 @@ def _trainer_inputs(model_outputs, context):
     )
 
 
+def _pin_cdm_context(context, seed):
+    """Attach a deterministic 44-dim CDM belief so both builders use the same
+    block (otherwise inference=uniform, training=Dirichlet by design)."""
+    rng = np.random.default_rng(seed)
+    belief = rng.dirichlet(np.full(len(EMOTION_LABELS), 0.5))
+    ctx = dict(context or {})
+    ctx["cdm_context"] = belief.tolist() + [0.0] * 16   # 28 belief + 16 scalars = 44
+    return ctx
+
+
 @pytest.mark.parametrize("model_outputs,context", CASES)
 def test_feature_vector_parity(model_outputs, context):
     """Live build_feature_vector and trainer build_fv must agree for every case."""
+    context = _pin_cdm_context(context, seed=len(str(context)))
     inference_fv = live_build_fv(model_outputs, context=context).flatten()
 
     vader, bert, goe, emoji, ctx = _trainer_inputs(model_outputs, context)
@@ -176,8 +193,8 @@ def test_feature_vector_parity(model_outputs, context):
 
 
 def test_block_offsets_match_documented_layout():
-    """Sanity-check that the layout matches CLAUDE.md: 4+7+28+28+29+7 = 103."""
-    assert FEATURE_DIM == 103
+    """Sanity-check that the layout matches CLAUDE.md: 4+7+28+28+44+7 = 118."""
+    assert FEATURE_DIM == 118
     assert len(VADER_KEYS)    == 4
     assert len(BERT_LABELS)   == 7
     assert len(EMOTION_LABELS) == 28
