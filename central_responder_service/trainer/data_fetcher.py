@@ -14,10 +14,14 @@ from .preprocessor import build_fv
 logger = get_logger("trainer")
 
 
-def fetch_live_data(vader, bert, goe):
+def fetch_live_data(vader, bert, goe, emoji_scorer):
     """
     Fetch verified samples from PostgreSQL (emotion_analysis joined with messages).
     Returns (X, y) lists of feature vectors and labels.
+
+    emoji_scorer fills the EmojiNet block from each row's text — passing {}
+    here would teach the meta-learner that the emoji features are zero for
+    live data (which then gets 3× weight), corrupting the block at runtime.
     """
     X, y = [], []
     try:
@@ -61,8 +65,9 @@ def fetch_live_data(vader, bert, goe):
                 vs = {f"vader_{k}": v for k, v in _vader(vader, text_content).items()}
                 bs = _run(bert, text_content)
                 gs = _run(goe,  text_content)
+                es = emoji_scorer.analyze(text_content)
                 context = {"avg_valence": ema, "prev_emotion": prev_emo or "neutral"}
-                fv = build_fv(vs, bs, gs, {}, context=context)
+                fv = build_fv(vs, bs, gs, es, context=context)
                 X.append(fv)
                 y.append(label)
                 # Update EMA for next sample (matches inference-time aggregation_service)
