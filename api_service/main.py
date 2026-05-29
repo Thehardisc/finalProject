@@ -709,11 +709,11 @@ async def get_online_users():
 
 
 DEMO_USERS = [
-    {"email": "alice@demo.innerlink",   "first_name": "Alice",   "last_name": "Chen",  "role": "admin"},
-    {"email": "bob@demo.innerlink",     "first_name": "Bob",     "last_name": "Kim"},
-    {"email": "charlie@demo.innerlink", "first_name": "Charlie", "last_name": "Park"},
-    {"email": "diana@demo.innerlink",   "first_name": "Diana",   "last_name": "Lee"},
-    {"email": "eve@demo.innerlink",     "first_name": "Eve",     "last_name": "Zhao"},
+    {"user_id": "531c7f56-e5c4-4557-9b2d-e7e8ed7c942f", "email": "alice@demo.innerlink",   "first_name": "Alice",   "last_name": "Chen",  "role": "admin"},
+    {"user_id": "90b04411-2879-4e2d-adb9-cf254793d1d2", "email": "bob@demo.innerlink",     "first_name": "Bob",     "last_name": "Kim"},
+    {"user_id": "b3c15d22-3f4a-4b8e-a1c9-df365804e3a1", "email": "charlie@demo.innerlink", "first_name": "Charlie", "last_name": "Park"},
+    {"user_id": "c4d26e33-4f5b-4c9f-b2da-ef476915f4b2", "email": "diana@demo.innerlink",   "first_name": "Diana",   "last_name": "Lee"},
+    {"user_id": "d5e37f44-5f6c-4d0f-c3eb-f0587a26f5c3", "email": "eve@demo.innerlink",     "first_name": "Eve",     "last_name": "Zhao"},
 ]
 _DEMO_PW = os.environ.get("DEMO_PASSWORD", "demo-innerlink-2026")
 
@@ -739,7 +739,7 @@ async def demo_login(slot: int, response: Response):
                 )
                 role = desired_role
         else:
-            user_id      = str(uuid.uuid4())
+            user_id      = demo.get("user_id") or str(uuid.uuid4())
             display_name = f"{demo['first_name']} {demo['last_name']}"
             pw_hash      = hash_password(_DEMO_PW)
             role         = desired_role
