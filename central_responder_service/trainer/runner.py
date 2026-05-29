@@ -24,7 +24,7 @@ from shared.constants import EMOTION_LABELS
 
 from .config import (RETRAIN_INTERVAL, ACCURACY_GATE, MAX_SAMPLES,
                      MODEL_PATH, META_PATH)
-from .analyzers   import _get_analyzers, _vader, _run, _emojinet
+from .analyzers   import _get_analyzers, _vader, _run
 from .preprocessor import build_fv, filter_outliers, filter_balance
 from .data_fetcher import fetch_live_data
 from .reporter     import print_report
@@ -66,7 +66,7 @@ def run_one_cycle(reload_callback):
     # ── Load AI analyzers ─────────────────────────────────────────────────────
     import torch
     device = 0 if torch.cuda.is_available() else -1
-    vader, bert, goe = _get_analyzers(device)
+    vader, bert, goe, emoji_scorer = _get_analyzers(device)
 
     rng = random.Random(42)
 
@@ -86,7 +86,7 @@ def run_one_cycle(reload_callback):
             vs = {f"vader_{k}": v for k, v in _vader(vader, text).items()}
             bs = _run(bert, text)
             gs = _run(goe,  text)
-            es = _emojinet(goe, text)
+            es = emoji_scorer.analyze(text)
             gs_list.append(gs)
 
             # Layer 3: pick the label GoEmotions is most confident about
@@ -107,7 +107,7 @@ def run_one_cycle(reload_callback):
     X_te, y_te, _     = process(test_raw,  "test ")
 
     # ── Augment with live verified data ───────────────────────────────────────
-    X_live, y_live = fetch_live_data(vader, bert, goe)
+    X_live, y_live = fetch_live_data(vader, bert, goe, emoji_scorer)
     if X_live:
         weight = 3
         X_tr.extend(X_live * weight)
@@ -116,7 +116,7 @@ def run_one_cycle(reload_callback):
         logger.info(f"  [Trainer] Augmented with {len(X_live)} live verified samples (weight={weight})")
 
     # ── Free analyzers from RAM ───────────────────────────────────────────────
-    del vader, bert, goe
+    del vader, bert, goe, emoji_scorer
     gc.collect()
     logger.info("Aggressively purged transient analyzers from RAM.")
 

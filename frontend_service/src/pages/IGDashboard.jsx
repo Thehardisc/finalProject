@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import EmojiPicker from 'emoji-picker-react';
 import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
 import TelemetryPanel  from '../components/TelemetryPanel';
 import AnalysisDrawer  from '../components/AnalysisDrawer';
@@ -213,14 +214,16 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
       }}
     >
       <div style={{
-        maxWidth: '70%',
+        maxWidth: 'min(70vw, 520px)',
+        width: 'fit-content',
         padding: '10px 14px',
         borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
         background: isOwn ? ownBg : '#f0f0f0',
         border: `1.5px solid ${borderClr}`,
         fontSize: '0.94rem', lineHeight: 1.5,
         color: '#1c1c2e',
-        wordBreak: 'break-word',
+        overflowWrap: 'break-word',
+        whiteSpace: 'pre-wrap',
         boxShadow: domRgb && isOwn
           ? `0 2px 12px rgba(${domRgb},.14), inset 0 1px 0 rgba(255,255,255,.75)`
           : isOwn
@@ -428,8 +431,10 @@ export default function IGDashboard({
   const [selectedMsg, setSelectedMsg]         = useState(null);
   const [memberPanelOpen, setMemberPanelOpen] = useState(false);
   const [memberError, setMemberError]         = useState('');
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const messagesContainerRef = useRef(null);
   const inputRef             = useRef(null);
+  const emojiPickerRef       = useRef(null);
 
   useEffect(() => {
     const el = messagesContainerRef.current;
@@ -441,6 +446,17 @@ export default function IGDashboard({
   }, [activeConversationId]);
 
   useEffect(() => { setSelectedMsg(null); setMemberPanelOpen(false); setMemberError(''); }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!showEmojiPicker) return;
+    const handler = (e) => {
+      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target)) {
+        setShowEmojiPicker(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showEmojiPicker]);
 
   // Conversation filtering — works for both direct (other_display_name) and group (name)
   const filteredConvs = conversations.filter(c => {
@@ -931,7 +947,22 @@ export default function IGDashboard({
             </div>
 
             {/* Input bar */}
-            <div style={{ padding: '12px 20px', borderTop: '1px solid #efefef', background: '#ffffff' }}>
+            <div style={{ padding: '12px 20px', borderTop: '1px solid #efefef', background: '#ffffff', position: 'relative' }}>
+              {showEmojiPicker && (
+                <div ref={emojiPickerRef} style={{ position: 'absolute', bottom: '100%', left: 20, zIndex: 100, marginBottom: 8 }}>
+                  <EmojiPicker
+                    onEmojiClick={(emojiData) => {
+                      setInputValue(prev => prev + emojiData.emoji);
+                      inputRef.current?.focus();
+                    }}
+                    height={380}
+                    width={320}
+                    searchDisabled={false}
+                    skinTonesDisabled
+                    previewConfig={{ showPreview: false }}
+                  />
+                </div>
+              )}
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 border: `1.5px solid ${dominantRgb ? `rgba(${dominantRgb},.35)` : 'rgba(0,0,0,.14)'}`,
@@ -939,7 +970,10 @@ export default function IGDashboard({
                 transition: 'border-color .4s',
                 background: dominantRgb ? `rgba(${dominantRgb},.04)` : 'transparent',
               }}>
-                <button style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 0, flexShrink: 0 }}>😊</button>
+                <button
+                  onClick={() => setShowEmojiPicker(p => !p)}
+                  style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 0, flexShrink: 0, opacity: showEmojiPicker ? 1 : 0.6, transition: 'opacity .15s' }}
+                >😊</button>
                 <textarea
                   ref={inputRef} rows={1}
                   placeholder="Message…"

@@ -144,6 +144,23 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     fv = build_feature_vector(model_outputs, context=context)
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc = predict_with_meta_learner(META_LEARNER, fv)
 
+    # Emoji override: when the meta-learner is uncertain but emoji signal is strong,
+    # blend emoji scores in (the model was trained mostly on text without emojis
+    # so it under-weights the emoji block until it retrains on emoji-rich data).
+    emoji_s = model_outputs.get("emojinet", {})
+    if emoji_s and meta_confidence < 0.55:
+        top_emoji_label = max(emoji_s, key=emoji_s.get)
+        top_emoji_score = emoji_s.get(top_emoji_label, 0.0)
+        if top_emoji_score > 0.30:
+            blended = {k: final_scores.get(k, 0.0) * 0.5 + emoji_s.get(k, 0.0) * 0.5
+                       for k in set(list(final_scores.keys()) + list(emoji_s.keys()))}
+            total = sum(blended.values())
+            if total > 0:
+                final_scores = {k: v / total for k, v in blended.items()}
+            dominant_emotion = max(final_scores, key=final_scores.get)
+            meta_confidence = final_scores[dominant_emotion]
+            logger.debug(f"Emoji override applied: dominant={dominant_emotion} ({meta_confidence:.2%})")
+
     # calculate latency
     # E2E Latency (from ingestion)
     original_ts = original_data.get("timestamp")

@@ -4,16 +4,14 @@ import { EmotionPalette } from './EmotionPalette';
 const ENGINES = [
   { key: 'vader',      label: 'VADER Lexical',   color: '234,179,8',  sub: '4-dim · lexical sentiment' },
   { key: 'bert',       label: 'BERT Basic',       color: '59,130,246', sub: '7 Ekman classes · transformer' },
-  { key: 'goemotions', label: 'GoEmotions',       color: '168,85,247', sub: '28-dim fine-grained' },
-  { key: 'emojinet',   label: 'EmojiNet',         color: '236,72,153', sub: 'emoji semantic layer' },
-  { key: 'meta',       label: 'Meta-Learner',     color: '16,185,129', sub: '67-dim → 28 classes' },
+  { key: 'goemotions', label: 'GoEmotions',       color: '168,85,247', sub: '28-dim fine-grained + emoji semantics' },
+  { key: 'meta',       label: 'Meta-Learner',     color: '16,185,129', sub: '103-dim → 28 classes' },
 ];
 
 const TIMING = {
   vader:      { start: 15,  dur: 90  },
   bert:       { start: 75,  dur: 190 },
   goemotions: { start: 75,  dur: 215 },
-  emojinet:   { start: 75,  dur: 160 },
   meta:       { start: 310, dur: 70  },
 };
 
@@ -79,7 +77,7 @@ export default function TelemetryPanel({ processing, lastAnalysis }) {
             </span>
           </div>
         </div>
-        <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 3 }}>5-model multimodal NLP</div>
+        <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 3 }}>4-model multimodal NLP</div>
       </div>
 
       {/* ── Engine cards ── */}

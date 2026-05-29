@@ -75,19 +75,20 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
 
 def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarray:
     """
-    Build a fixed-length float32 numpy feature vector from 3 model output dicts
+    Build a fixed-length float32 numpy feature vector from 4 model output dicts
     PLUS conversation context (previous mood/valence).
 
-    Returns np.ndarray of shape (1, 75).
+    Returns np.ndarray of shape (1, 103).
 
     Blocks:
-      [0:4]   VADER (4)
-      [4:11]  BERT Ekman (7)
-      [11:39] GoEmotions (28)
-      [39:68] Context: valence(1) + one-hot prev emotion(28)
-      [68:75] Derived: bert_entropy, goe_entropy, bert_margin,
-                       goe_margin, bert_goe_agreement,
-                       vader_abs_compound, max_goe_score
+      [0:4]    VADER (4)
+      [4:11]   BERT Ekman (7)
+      [11:39]  GoEmotions (28)
+      [39:67]  EmojiNet (28)
+      [67:96]  Context: valence(1) + one-hot prev emotion(28)
+      [96:103] Derived: bert_entropy, goe_entropy, bert_margin,
+                        goe_margin, bert_goe_agreement,
+                        vader_abs_compound, max_goe_score
     """
     import math
     _EPS = 1e-9
@@ -112,6 +113,7 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     vader_scores      = model_outputs.get("vader", {})
     bert_scores       = model_outputs.get("basic_bert", {})
     goemotions_scores = model_outputs.get("go_emotions", {})
+    emoji_scores      = model_outputs.get("emojinet", {})
 
     vec = []
 
@@ -127,13 +129,17 @@ def build_feature_vector(model_outputs: dict, context: dict = None) -> np.ndarra
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    # Block 4: Context (29) — valence + one-hot prev emotion
+    # Block 4: EmojiNet (28)
+    for k in EMOTION_LABELS:
+        vec.append(float(emoji_scores.get(k, 0.0)))
+
+    # Block 5: Context (29) — valence + one-hot prev emotion
     vec.append(float(context.get("avg_valence", 0.0)))
     prev_emo = context.get("prev_emotion", "neutral").lower()
     for label in EMOTION_LABELS:
         vec.append(1.0 if label == prev_emo else 0.0)
 
-    # Block 5: Derived (7)
+    # Block 6: Derived (7)
     vec.append(_entropy(bert_scores,       BERT_LABELS))
     vec.append(_entropy(goemotions_scores, EMOTION_LABELS))
     vec.append(_margin(bert_scores,        BERT_LABELS))
@@ -231,31 +237,41 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray, predicted_emoti
         # 1. Access components from sklearn Pipeline
         scaler = model.named_steps['scaler']
         clf    = model.named_steps['clf']
-        
+
         # 2. Scale features (to match clf's expected input)
         X_scaled = scaler.transform(feature_vector)[0]
-        
-        # 3. Find index of the predicted class
-        classes = list(clf.classes_)
+
+        # 3. Resolve a linear estimator we can attribute against.
+        # The trainer ships a VotingClassifier (LR + HGB + RF). Only the LR
+        # sub-estimator exposes .coef_, so the impact map reflects the linear
+        # component of the ensemble — the tree members can't be attributed
+        # this way. Fall back to a plain estimator's .coef_ if present.
+        lin = getattr(clf, 'named_estimators_', {}).get('lr', clf)
+        if not hasattr(lin, 'coef_'):
+            return {}
+
+        # 4. Find index of the predicted class on the linear estimator's
+        # own classes_ (matches the VotingClassifier's after a shared fit).
+        classes = list(lin.classes_)
         if predicted_emotion not in classes:
             return {}
         class_idx = classes.index(predicted_emotion)
-        
-        # 4. Get coefficients for this specific class (num_features,)
-        # For binary case clf.coef_ is (1, d), for multi (c, d)
-        weights = clf.coef_[class_idx]
+
+        # 5. Get coefficients for this specific class (num_features,)
+        weights = lin.coef_[class_idx]
         
         # 5. Calculate raw contributions
         contributions = X_scaled * weights
         
         # 6. Group by block (matching build_feature_vector offsets)
-        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), Context(39-67), Derived(68-74)
+        # Offsets: VADER(0-3), BERT(4-10), GoE(11-38), EmojiNet(39-66), Context(67-95), Derived(96-102)
         impacts = {
             "VADER":       float(np.sum(contributions[0:4])),
             "BERT":        float(np.sum(contributions[4:11])),
             "GoEmotions":  float(np.sum(contributions[11:39])),
-            "Context":     float(np.sum(contributions[39:68])),
-            "Derived":     float(np.sum(contributions[68:75])),
+            "EmojiNet":    float(np.sum(contributions[39:67])),
+            "Context":     float(np.sum(contributions[67:96])),
+            "Derived":     float(np.sum(contributions[96:103])),
         }
         
         # Normalize for visualization (Relative Importance)

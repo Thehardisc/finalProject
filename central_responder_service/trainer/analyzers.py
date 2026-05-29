@@ -5,12 +5,19 @@ These are loaded into RAM once per training cycle, used to build feature vectors
 then explicitly deleted and garbage-collected to free memory.
 """
 from shared.utils.logger import get_logger
+from shared.emoji_scoring import EmojiSemanticScorer
 
 logger = get_logger("trainer")
 
 
 def _get_analyzers(device):
-    """Load VADER, BERT, and GoEmotions pipelines into RAM."""
+    """
+    Load VADER, BERT, GoEmotions, and the emoji scorer into RAM.
+
+    Returns (vader, bert, goe, emoji_scorer). The emoji scorer reuses the
+    GoEmotions pipeline's encoder, so this adds only the 28 anchor-phrase
+    pre-compute (a few hundred ms) on top of model loading.
+    """
     logger.info("Loading analyzers transiently into RAM...")
     import torch
     torch.set_num_threads(1)
@@ -35,8 +42,11 @@ def _get_analyzers(device):
                        return_all_scores=True,
                        device=device)
 
+    logger.info("  Pre-computing emoji anchor embeddings...")
+    emoji_scorer = EmojiSemanticScorer(goe)
+
     logger.info("✅ All AI Analyzers fully loaded into memory.")
-    return vader, bert, goe
+    return vader, bert, goe, emoji_scorer
 
 
 def _vader(v, text: str) -> dict:
@@ -47,29 +57,5 @@ def _vader(v, text: str) -> dict:
 def _run(model, text: str) -> dict:
     try:
         return {r['label']: r['score'] for r in model(text[:512])[0]}
-    except Exception:
-        return {}
-
-
-def _emojinet(goe_model, text: str) -> dict:
-    try:
-        from collections import Counter
-        import emoji as emoji_lib
-        from shared.constants import EMOTION_LABELS
-        occurrences = emoji_lib.emoji_list(text)
-        if not occurrences:
-            return {}
-        counts = Counter(e["emoji"] for e in occurrences)
-        total = sum(counts.values())
-        weighted = {}
-        for ch, cnt in counts.items():
-            desc = emoji_lib.demojize(ch).strip(":").replace("_", " ")
-            if not desc:
-                continue
-            result = _run(goe_model, desc)
-            w = cnt / total
-            for emo, sc in result.items():
-                weighted[emo] = weighted.get(emo, 0.0) + sc * w
-        return weighted
     except Exception:
         return {}
