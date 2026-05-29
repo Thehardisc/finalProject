@@ -9,7 +9,6 @@ FEATURE_DIM: 96 base + 7 derived = 103 total
   Block 5: Context       (29)  valence(1) + one-hot prev emotion(28)
   Block 6: Derived       (7)   entropy×2, margin×2, agreement, |compound|, max_goe
 """
-import math
 import statistics
 import numpy as np
 from collections import Counter
@@ -17,38 +16,9 @@ from collections import Counter
 from shared.utils.logger import get_logger
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS
 
+from ml.features import build_derived_block
+
 logger = get_logger("trainer")
-
-# Shared emotion labels between BERT and GoEmotions (used for agreement feature)
-_SHARED_LABELS = [l for l in BERT_LABELS if l in EMOTION_LABELS]
-_EPS = 1e-9
-
-
-# ── Derived-feature helpers ───────────────────────────────────────────────────
-
-def _entropy(scores: dict, keys: list) -> float:
-    """Shannon entropy of a probability dict over given keys (normalized)."""
-    probs = [max(scores.get(k, 0.0), 0.0) for k in keys]
-    total = sum(probs) + _EPS
-    probs = [p / total for p in probs]
-    return float(-sum(p * math.log(p + _EPS) for p in probs))
-
-
-def _margin(scores: dict, keys: list) -> float:
-    """Top-1 minus Top-2 confidence (decisiveness)."""
-    vals = sorted([scores.get(k, 0.0) for k in keys], reverse=True)
-    if len(vals) >= 2:
-        return float(vals[0] - vals[1])
-    return float(vals[0]) if vals else 0.0
-
-
-def _agreement(bert: dict, goe: dict) -> float:
-    """1.0 if BERT and GoEmotions agree on the top shared-label class, else 0.0."""
-    if not _SHARED_LABELS:
-        return 0.0
-    bert_top = max(_SHARED_LABELS, key=lambda k: bert.get(k, 0.0))
-    goe_top  = max(_SHARED_LABELS, key=lambda k: goe.get(k, 0.0))
-    return 1.0 if bert_top == goe_top else 0.0
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -83,14 +53,8 @@ def build_fv(vader: dict, bert: dict, goe: dict, emoji: dict,
     for label in EMOTION_LABELS:
         vec.append(1.0 if label == prev_emo else 0.0)
 
-    # Block 6: derived features (7)
-    vec.append(_entropy(bert,  BERT_LABELS))           # how uncertain is BERT?
-    vec.append(_entropy(goe,   EMOTION_LABELS))        # how uncertain is GoEmotions?
-    vec.append(_margin(bert,   BERT_LABELS))           # how decisive is BERT?
-    vec.append(_margin(goe,    EMOTION_LABELS))        # how decisive is GoEmotions?
-    vec.append(_agreement(bert, goe))                  # do both transformers agree?
-    vec.append(abs(float(vader.get("vader_compound", 0.0))))  # sentiment magnitude
-    vec.append(max((goe.get(k, 0.0) for k in EMOTION_LABELS), default=0.0))  # GoE peak
+    # Block 6: derived features (7) — shared implementation in ml/features.py
+    vec.extend(build_derived_block(bert, goe, vader))
 
     return np.array(vec, dtype=np.float32)
 

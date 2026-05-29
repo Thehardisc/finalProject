@@ -152,3 +152,72 @@ docker compose ps
 - **Model files on host**: `central_responder_service/models/` is bind-mounted into the container. Model files saved by the trainer are immediately visible to the running service without a rebuild.
 - **Frontend rebuild required**: CSS and JSX changes require `docker compose up --build frontend_service -d` — the container serves a static Vite build.
 - **`trainer/` package**: `central_responder_service/trainer/__init__.py` must exist so Python picks the `trainer/` package over the legacy `trainer.py` monolith file.
+
+---
+
+## Logging
+
+All services log via `shared/utils/logger.py:get_logger(name)`. Two env vars control format:
+
+- **`LOG_LEVEL`**: `DEBUG | INFO | WARNING | ERROR | CRITICAL` — default `INFO`.
+- **`LOG_FORMAT`**: `TEXT | JSON` — default `TEXT`. Invalid values fall back to `TEXT` with a stderr warning.
+
+Both are set on every service via `docker-compose.yml` and can be overridden per-service in `.env`.
+
+### Correlation IDs
+
+Every per-message handler binds `message_id`, `conversation_id`, and `user_id` once at the top of its loop, so every subsequent log line carries those fields. Follow a single message across the stack with:
+
+```bash
+docker compose logs | grep <message_id>
+```
+
+In **TEXT** mode the fields render as a trailing `[message_id=... conversation_id=... user_id=...]` suffix. In **JSON** mode they're top-level keys (parseable with `jq`).
+
+The bind helper is composable — add per-block fields without losing the base context:
+
+```python
+mlog = logger.bind(message_id=mid, conversation_id=cid)
+mlog.info("done", extra={"event": "model_done", "latency_ms": elapsed})
+```
+
+### Log level contract
+
+| Level | Use for |
+|---|---|
+| `DEBUG` | Dev-only verbosity (per-message dispatch lines, intermediate computations). Off in prod. |
+| `INFO` | Normal traffic + structured audit events (`user_login`, `meta_inference`, etc). |
+| `WARNING` | Recoverable degradation (parse failures, fallback paths, rate limits, NOGROUP recovery). |
+| `ERROR` | Data loss, repeated retry exhaustion, transaction rollback, unhandled exceptions. |
+| `CRITICAL` | Pageable — service can no longer make forward progress. |
+
+### Standard `event=` field values
+
+These are the structured event names used across the stack. Grep one to find every occurrence:
+
+| Event | Emitter | Meaning |
+|---|---|---|
+| `ingest_accepted` | ingestion | Message written to `message_stream` |
+| `preprocess_done` | preprocessing | Text normalized and republished |
+| `model_done` (with `model=`) | vader/bert/goemotions | Per-model inference complete |
+| `model_failed` | vader/bert/goemotions | Per-model inference threw |
+| `aggregate_start` / `meta_inference` | central_responder | Per-message aggregation + prediction |
+| `aggregation_done` | aggregation_service | Conversation state updated |
+| `ws_message_received` | api_service | Client sent a message over WebSocket |
+| `ws_broadcast` | api_service | Emotion event broadcast to N recipients |
+| `persist_batch_done` / `persistence_failed` | persistence_service | DB batch outcome (failed includes `message_ids` for replay) |
+| `dlq_write_failed` | persistence_service | A DLQ entry itself couldn't be written |
+| `user_registered` / `user_login` | api_service auth | Audit success events; `email_hash` only, never raw email |
+| `login_failed` (`reason=user_not_found\|account_inactive\|password_mismatch`) | api_service auth | Audit failure events |
+| `ws_auth_failed` (`reason=missing_cookie\|user_mismatch\|decode_error`) | api_service WS | Audit failure events |
+| `admin_action` (`action=update_user\|delete_user`) | api_service admin | Records `actor` + `target` |
+| `trainer_phase` (`phase=data_load\|feature_extract_*\|live_aug\|filter\|train\|eval`) | trainer | Each phase end with `duration_ms` |
+| `trainer_gate_decision` | trainer | `test_acc`, `threshold`, `delta`, `deployed` |
+| `trainer_cycle_complete` | trainer | Total duration + deployed bool |
+| `trainer_heartbeat` | trainer | Once per minute between cycles — proves the loop is alive |
+| `model_hot_reload` | central_responder | Logs the prev_acc → new_acc transition |
+| `emoji_scores_parse_failed` | central_responder | Structured fields only — raw bytes never logged |
+
+### Log rotation
+
+Every service in `docker-compose.yml` uses the `x-log-rotation` YAML anchor: `json-file` driver, `max-size: 10m`, `max-file: 3`. Bounded ~30 MB per container in any long-running deploy.

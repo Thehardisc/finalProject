@@ -12,10 +12,9 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
 from sentence_transformers import SentenceTransformer
 
-import logging
+from shared.utils.logger import get_logger
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("ContextEngineService")
+logger = get_logger("context_engine")
 
 app = FastAPI()
 
@@ -206,9 +205,9 @@ async def redis_listener():
         await context_engine.redis.xgroup_create(stream_name, group_name, mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            logger.error(f"Group creation error: {e}")
+            logger.error("xgroup_create failed", extra={"stream": stream_name, "error": str(e)})
 
-    logger.info(f"Context Engine listening on {stream_name}...")
+    logger.info("context_engine_listening", extra={"event": "stream_listen_start", "stream": stream_name, "group": group_name})
 
     while True:
         try:
@@ -218,11 +217,12 @@ async def redis_listener():
             if messages:
                 for stream, msgs in messages:
                     for msg_id, msg_data in msgs:
+                        text            = msg_data.get("text", "")
+                        user_id         = msg_data.get("user_id", "anonymous")
+                        conversation_id = msg_data.get("conversation_id", "")
+                        raw_msg_id      = msg_data.get("message_id", "")
+                        mlog = logger.bind(message_id=raw_msg_id, conversation_id=conversation_id, user_id=user_id)
                         try:
-                            text            = msg_data.get("text", "")
-                            user_id         = msg_data.get("user_id", "anonymous")
-                            conversation_id = msg_data.get("conversation_id", "")
-                            raw_msg_id      = msg_data.get("message_id", "")
 
                             # Read REAL conversation state written by aggregation_service
                             # for the previous message in this conversation.
@@ -265,14 +265,20 @@ async def redis_listener():
                             await context_engine.redis.xack(stream_name, group_name, msg_id)
 
                         except Exception as msg_err:
-                            logger.error(f"Context engine failed on {msg_id}: {msg_err}")
+                            mlog.error(
+                                "context_engine_message_failed",
+                                extra={"event": "ce_message_failed", "error_class": type(msg_err).__name__, "error": str(msg_err)},
+                            )
                             try:
                                 await context_engine.redis.xack(stream_name, group_name, msg_id)
-                            except Exception:
-                                pass
+                            except Exception as ack_err:
+                                mlog.warning(
+                                    "xack_failed_after_error",
+                                    extra={"event": "xack_failed", "error": str(ack_err)},
+                                )
 
         except Exception as e:
-            logger.error(f"Redis listener error: {e}")
+            logger.error("redis_listener_loop_error", extra={"event": "ce_listener_error", "error": str(e)})
             await asyncio.sleep(1)
 
 @app.get("/health")

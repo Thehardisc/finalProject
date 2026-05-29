@@ -9,7 +9,7 @@ import uuid
 from fastapi import APIRouter, HTTPException, Depends, Response
 from pydantic import BaseModel, Field
 
-from shared.utils.logger import get_logger
+from shared.utils.logger import get_logger, sanitize_email
 from api_service.db.pool import get_pool
 from api_service.auth_utils import (
     hash_password, verify_password, create_jwt, get_current_user, JWT_EXPIRY_HOURS
@@ -60,7 +60,10 @@ async def register(req: RegisterRequest, response: Response):
             user_id, req.email, req.first_name, req.last_name,
             display_name, pw_hash, role, time.time()
         )
-        logger.info(f"New user registered: {req.email} (role={role})")
+        logger.bind(user_id=user_id, email_hash=sanitize_email(req.email), role=role).info(
+            "user_registered",
+            extra={"event": "user_registered"},
+        )
         token = create_jwt(user_id, display_name, role)
         response.set_cookie(
             key="_req_sid", value=token, httponly=True,
@@ -81,12 +84,20 @@ async def auth_login(req: LoginRequest, response: Response):
             req.email
         )
 
+    audit = logger.bind(email_hash=sanitize_email(req.email))
     if not user:
+        audit.warning("login_failed", extra={"event": "login_failed", "reason": "user_not_found"})
         raise HTTPException(status_code=401, detail="Invalid email or password.")
     if not user["is_active"]:
+        audit.bind(user_id=user["user_id"]).warning(
+            "login_failed", extra={"event": "login_failed", "reason": "account_inactive"},
+        )
         raise HTTPException(status_code=403,
                             detail="Account has been deactivated. Contact an admin.")
     if not user["password_hash"] or not verify_password(req.password, user["password_hash"]):
+        audit.bind(user_id=user["user_id"]).warning(
+            "login_failed", extra={"event": "login_failed", "reason": "password_mismatch"},
+        )
         raise HTTPException(status_code=401, detail="Invalid email or password.")
 
     async with pool.acquire() as conn:
@@ -96,7 +107,9 @@ async def auth_login(req: LoginRequest, response: Response):
         )
 
     token = create_jwt(user["user_id"], user["display_name"], user["role"])
-    logger.info(f"User logged in: {user['email']}")
+    audit.bind(user_id=user["user_id"], role=user["role"]).info(
+        "user_login", extra={"event": "user_login"},
+    )
     response.set_cookie(
         key="_req_sid", value=token, httponly=True,
         samesite="lax", max_age=JWT_EXPIRY_HOURS * 3600

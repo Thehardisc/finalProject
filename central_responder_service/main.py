@@ -21,6 +21,10 @@ from trainer import start_trainer_thread
 # import trajectory LSTM
 from trajectory.inference import load_trajectory_model, run_trajectory_step
 
+# Prometheus metrics — /metrics scraped on port 9090
+import metrics as METRICS
+from prometheus_client import start_http_server as _start_metrics_server
+
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 
@@ -46,8 +50,36 @@ else:
 # update model when retrained
 def on_model_reload(new_model):
     global META_LEARNER
+
+    # Best-effort: pull the new and previous model metadata from the meta JSON
+    # the trainer just wrote so the operator can see the transition delta.
+    prev_acc = None
+    new_acc  = None
+    improvement = None
+    try:
+        meta_path = os.path.join(os.path.dirname(__file__), "..", "models", "meta_weights_meta.json")
+        if os.path.exists(meta_path):
+            with open(meta_path) as f:
+                meta = json.load(f)
+            new_acc     = meta.get("test_accuracy")
+            prev_acc    = meta.get("previous_accuracy")
+            improvement = meta.get("improvement")
+    except Exception as e:
+        logger.warning(
+            f"hot_reload_meta_read_failed error={type(e).__name__}",
+            extra={"extra_data": {"event": "hot_reload_meta_read_failed", "error": str(e)}},
+        )
+
     META_LEARNER = new_model
-    logger.info("Meta-learner hot-reloaded in memory.")
+    logger.info(
+        f"model_hot_reload prev_acc={prev_acc} new_acc={new_acc} improvement={improvement}",
+        extra={"extra_data": {
+            "event":       "model_hot_reload",
+            "prev_acc":    prev_acc,
+            "new_acc":     new_acc,
+            "improvement": improvement,
+        }},
+    )
 
 # check model status for gate
 ready_marker = os.path.join(os.path.dirname(__file__), "..", "models", ".ready")
@@ -80,10 +112,13 @@ if TRAJECTORY_MODEL is not None:
 
 
 async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
-    logger.debug(f"Aggregating results for {message_id}...")
-    
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
-    
+    conv_id_early = original_data.get("conversation_id", "conv-1")
+    user_id_early = original_data.get("user_id", "")
+    mlog = logger.bind(message_id=message_id, conversation_id=conv_id_early, user_id=user_id_early)
+
+    mlog.debug("aggregate_start", extra={"event": "aggregate_start"})
+
     # format model outputs — separate context_engine from ML models
     model_outputs = {}
     for res in partial_results:
@@ -98,8 +133,19 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             emoji_scores_raw = res.get("emoji_scores", "{}")
             try:
                 model_outputs["emojinet"] = json.loads(emoji_scores_raw) if isinstance(emoji_scores_raw, str) else (emoji_scores_raw or {})
-            except (json.JSONDecodeError, TypeError):
-                pass
+            except (json.JSONDecodeError, TypeError) as e:
+                # Silently zeroed emojinet corrupts training samples (one msg has the
+                # block, the next doesn't) — surface the parse failure WITHOUT logging
+                # raw payload bytes (they can include user-message tokens via emoji shortcodes).
+                mlog.warning(
+                    "emoji_scores_parse_failed",
+                    extra={
+                        "event":       "emoji_scores_parse_failed",
+                        "error_class": type(e).__name__,
+                        "raw_type":    type(emoji_scores_raw).__name__,
+                        "raw_len":     len(emoji_scores_raw) if hasattr(emoji_scores_raw, "__len__") else None,
+                    },
+                )
             break
 
     # Extract context_engine enrichment (optional — may not arrive before the 3 ML models)
@@ -119,7 +165,10 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             context["avg_valence"]  = float(state.get("average_valence", 0.0))
             context["prev_emotion"] = state.get("dominant_emotion", "neutral")
     except Exception as e:
-        logger.warning(f"Failed to fetch context for {conv_id}: {e}")
+        mlog.warning(
+            "conversation_state_fetch_failed",
+            extra={"event": "conv_state_fetch_failed", "error": str(e)},
+        )
 
     # Blend EMA valence with user's historical valence for this topic.
     # When topic_resonance is high the user has strong historical feelings about
@@ -129,20 +178,32 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             (1.0 - 0.3 * resonance) * context["avg_valence"]
             + 0.3 * resonance * hist_val
         )
-        logger.debug(
-            f"Context enriched by episodic memory: resonance={resonance:.2f}, "
-            f"hist_val={hist_val:.3f} → effective_val={context['avg_valence']:.3f}"
+        mlog.debug(
+            "context_enriched",
+            extra={
+                "event":          "context_enriched",
+                "resonance":      round(resonance, 4),
+                "hist_val":       round(hist_val, 4),
+                "effective_val":  round(context["avg_valence"], 4),
+            },
         )
 
-    logger.debug(
-        f"Context injected for {conv_id}: "
-        f"val={context['avg_valence']:.3f}, mood={context['prev_emotion']}, "
-        f"ce={'yes' if ce_available else 'no'}"
+    mlog.debug(
+        "context_injected",
+        extra={
+            "event":        "context_injected",
+            "avg_valence":  round(context["avg_valence"], 4),
+            "prev_emotion": context["prev_emotion"],
+            "ce_available": ce_available,
+        },
     )
 
     # predict logic
     fv = build_feature_vector(model_outputs, context=context)
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc = predict_with_meta_learner(META_LEARNER, fv)
+    METRICS.meta_predictions_total.labels(
+        outcome="fallback" if dominant_emotion == "neutral" and meta_confidence == 0.0 else "success"
+    ).inc()
 
     # Emoji override: when the meta-learner is uncertain but emoji signal is strong,
     # blend emoji scores in (the model was trained mostly on text without emojis
@@ -159,27 +220,32 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
                 final_scores = {k: v / total for k, v in blended.items()}
             dominant_emotion = max(final_scores, key=final_scores.get)
             meta_confidence = final_scores[dominant_emotion]
-            logger.debug(f"Emoji override applied: dominant={dominant_emotion} ({meta_confidence:.2%})")
+            mlog.debug(
+                "emoji_override_applied",
+                extra={"event": "emoji_override", "dominant": dominant_emotion, "confidence": round(meta_confidence, 4)},
+            )
 
     # calculate latency
     # E2E Latency (from ingestion)
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
 
-    # Log Stats Block
+    # Log structured inference result (carries bound message_id, conversation_id, user_id).
     top_3 = sorted(final_scores.items(), key=lambda x: x[1], reverse=True)[:3]
-    stats = {
-        "Message ID": message_id,
-        "Dominant Emotion": f"'{dominant_emotion}' ({meta_confidence:.2%})",
-        "Context Injected": f"Val:{context['avg_valence']:.2f}, Mood:{context['prev_emotion']}",
-        "Top 3 Probabilities": ", ".join([f"{e}:{s:.2%}" for e, s in top_3]),
-        "E2E Latency": f"{e2e_lat:.2f}ms",
-        "Agg Latency": f"{agg_lat:.2f}ms"
-    }
-    if conflict_desc:
-        stats["Conflict"] = conflict_desc
-
-    logger.log_stats(f"Meta-Inference: {message_id}", stats)
+    mlog.info(
+        "meta_inference",
+        extra={
+            "event":          "meta_inference",
+            "dominant":       dominant_emotion,
+            "confidence":     round(meta_confidence, 4),
+            "top3":           [{"emotion": e, "score": round(s, 4)} for e, s in top_3],
+            "avg_valence":    round(context["avg_valence"], 4),
+            "prev_emotion":   context["prev_emotion"],
+            "e2e_latency_ms": round(e2e_lat, 2),
+            "agg_latency_ms": round(agg_lat, 2),
+            "conflict":       conflict_desc,
+        },
+    )
 
     # evaluate sarcasm
     reasoning = None
@@ -203,9 +269,13 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         redis=r,
     )
     if trajectory:
-        logger.debug(
-            f"Trajectory: next predicted='{trajectory.get('top_predicted')}' "
-            f"| top-5={list(trajectory.get('predicted_next', {}).keys())}"
+        mlog.debug(
+            "trajectory_step",
+            extra={
+                "event":         "trajectory_step",
+                "top_predicted": trajectory.get("top_predicted"),
+                "top5":          list(trajectory.get("predicted_next", {}).keys()),
+            },
         )
 
     # format output
@@ -253,14 +323,25 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         output_event["context_shift"] = json.dumps(divergence)
 
     await redis_client.publish_event(OUTPUT_STREAM, output_event)
-    
+
+    METRICS.messages_processed_total.inc()
+    METRICS.aggregation_latency_ms.observe(agg_lat)
+
     # Cleanup
     await r.delete(f"{PENDING_KEY_PREFIX}{message_id}")
 
 async def main():
+    # Start Prometheus /metrics server BEFORE connecting to Redis so it's
+    # scrapeable even during a slow startup (e.g., model retraining cycle).
+    try:
+        _start_metrics_server(9090)
+        logger.info("Prometheus metrics server listening on :9090/metrics")
+    except OSError as e:
+        logger.warning(f"Could not start metrics server on :9090: {e}")
+
     await redis_client.connect()
     r = redis_client.redis
-    
+
     try:
         await r.xgroup_create(INPUT_STREAM, GROUP_NAME, mkstream=True)
     except Exception as e:
@@ -281,32 +362,39 @@ async def main():
                         msg_id = data.get("message_id")
                         model_name = data.get("model_name")
                         scores_raw = data.get("scores")
-                        
+                        rlog = logger.bind(message_id=msg_id, model=model_name)
+
                         scores = scores_raw
                         if isinstance(scores_raw, str):
                             try:
                                 scores = json.loads(scores_raw)
                             except (json.JSONDecodeError, TypeError) as e:
-                                logger.warning(f"Cannot parse scores for model '{model_name}' (msg {msg_id}): {e}")
-                        
+                                rlog.warning(
+                                    "scores_parse_failed",
+                                    extra={"event": "scores_parse_failed", "error_class": type(e).__name__},
+                                )
+
                         # Store in Pending Hash
                         # Key: pending_aggregation:<msg_id>
                         # Field: model_name
                         # Value: JSON(full_data_packet)
-                        
+
                         full_packet = {
                             "model_name": model_name,
                             "scores": scores,
                             "original_data": data.get("original_data"), # This might be doubly nested string
                             "emoji_scores": data.get("emoji_scores", "{}")
                         }
-                        
+
                         # Handle original_data if it's a string
                         if isinstance(full_packet["original_data"], str):
                              try:
                                  full_packet["original_data"] = json.loads(full_packet["original_data"])
-                             except:
-                                 pass
+                             except (json.JSONDecodeError, TypeError) as e:
+                                 rlog.warning(
+                                     "original_data_parse_failed",
+                                     extra={"event": "original_data_parse_failed", "error_class": type(e).__name__},
+                                 )
 
                         pending_key = f"{PENDING_KEY_PREFIX}{msg_id}"
 

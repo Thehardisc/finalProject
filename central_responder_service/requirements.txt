@@ -9,3 +9,4 @@ datasets
 vaderSentiment
 sqlalchemy
 psycopg2-binary
+prometheus-client

@@ -59,6 +59,11 @@ def fetch_live_data(vader, bert, goe, emoji_scorer):
 
             logger.info(f"  [SQL] Found {len(rows)} verified live samples with context tracking.")
 
+            # SQL ORDER BY DESC fetches newest-first to cap at MAX_SAMPLES,
+            # but EMA must accumulate oldest→newest to match inference behavior
+            # (where each new message updates the running average going forward).
+            rows = list(reversed(rows))
+
             ema = 0.0
             alpha = 0.35
             for text_content, label, prev_emo in rows:
