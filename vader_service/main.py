@@ -9,6 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
+from shared.module_registry import register_module
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 logger = get_logger("vader_service")
@@ -46,8 +47,9 @@ async def main():
         if "BUSYGROUP" not in str(e):
             logger.error(f"Error creating group: {e}")
 
+    await register_module(r, MODEL_NAME, required=True, schema="scores", logger=logger)
     logger.info(f"{MODEL_NAME} Analysis worker started.")
-    
+
     while True:
         try:
             streams = {STREAM_KEY: ">"}
