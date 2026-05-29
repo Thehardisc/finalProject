@@ -9,6 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
+from shared.module_registry import register_module
 from transformers import pipeline
 
 logger = get_logger("bert_service")
@@ -75,8 +76,9 @@ async def main():
         "Status": "READY",
         "Stream": STREAM_KEY
     })
+    await register_module(r, MODEL_NAME, required=True, schema="scores", logger=logger)
     logger.info(f"{MODEL_NAME} Analysis worker started.")
-    
+
     while True:
         try:
             streams = {STREAM_KEY: ">"}
