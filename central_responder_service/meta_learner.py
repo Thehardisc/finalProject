@@ -30,7 +30,7 @@ from sklearn.preprocessing import StandardScaler
 from shared.utils.logger import get_logger
 from shared.constants import (
     EMOTION_LABELS, VADER_KEYS, BERT_LABELS,
-    FEATURE_DIM, CONTEXT_DIM, ML_DIM,
+    FEATURE_DIM, CONTEXT_DIM, ML_DIM, CTX_HMM_CONF,
 )
 
 logger = get_logger("meta_learner")
@@ -71,23 +71,19 @@ DEFAULT_META_PATH  = DEFAULT_MODEL_PATH.replace(".pkl", "_meta.json")
 
 class GatingEnsembleNet(nn.Module):
     """
-    Attention-based Mixture of Experts for 28-class emotion classification.
+    Bayesian Context-First architecture for 28-class emotion classification.
 
-    Forward pass summary:
-        e_k = Encoder_k(x_k)                         for k ∈ {vader, bert, goe}
-        c_h = ContextEncoder(c)                       [B, d]
-        α   = softmax(Gate(c_h))                      [B, 3], Σ=1
-        m   = Σ_k α_k · e_k                           [B, d]  — gated mixture
-        f   = m + 0.5 · Proj(c_h)                     [B, d]  — context residual
-        out = Head(f)                                  [B, n_classes]
+    Forward pass:
+        ctx_weight = sigmoid(ctx_alpha * hmm_conf - ctx_bias)   per-sample [0,1]
+        ctx_logits = CtxPriorHead(enc_ctx_expert(x_c))          P(emotion | history)
+        nlp_logits = NLPHead(Σ_k α_k · enc_k(x_k))             P(emotion | text)
+        logits     = ctx_weight * ctx_logits + (1-ctx_weight) * nlp_logits / nlp_temp
 
-    The 0.5 residual coefficient is a deliberate inductive bias: context
-    contributes at half strength even when gate weights are near-uniform
-    (e.g. first message in a conversation).
+    When hmm_conf → 1.0 (HMM certain):  ctx_weight → high  → context dominates
+    When hmm_conf → 0.0 (cold start):   ctx_weight → ~0.12 → NLP dominates
 
-    Extra dropout on ContextEncoder (p = DROPOUT + 0.15) discourages the
-    network from memorising label-correlated patterns in the synthetic training
-    context, while still allowing it to use genuine context signal.
+    ctx_alpha, ctx_bias, nlp_temp are learnable — the network adapts the
+    confidence curve to the actual quality of the HMM signal in the training data.
     """
 
     def __init__(
@@ -98,12 +94,13 @@ class GatingEnsembleNet(nn.Module):
     ):
         super().__init__()
 
-        # Independent modality encoders → shared d-dim space
-        self.enc_vader   = self._make_encoder(4,          d)
-        self.enc_bert    = self._make_encoder(7,          d)
-        self.enc_goe     = self._make_encoder(28,         d)
+        # NLP modality encoders
+        self.enc_vader = self._make_encoder(4,  d)
+        self.enc_bert  = self._make_encoder(7,  d)
+        self.enc_goe   = self._make_encoder(28, d)
 
-        # Context encoder: extra dropout to resist leakage from noisy synthetic context
+        # Context routing encoder: heavy dropout resists synthetic-data leakage.
+        # Used to route the NLP gate and provide the context residual.
         self.enc_context = nn.Sequential(
             nn.Linear(CONTEXT_DIM, d * 2),
             nn.LayerNorm(d * 2),
@@ -113,25 +110,40 @@ class GatingEnsembleNet(nn.Module):
             nn.GELU(),
         )
 
-        # Gate: context embedding → soft routing weights over 3 experts
-        # Two-layer MLP is expressive enough without being an overfit risk
-        self.gate = nn.Sequential(
+        # Context expert encoder: lighter, learns emotion-predictive representation.
+        self.enc_ctx_expert = self._make_encoder(CONTEXT_DIM, d)
+
+        # Context prior head: enc_ctx_expert → emotion prior logits
+        self.ctx_prior_head = nn.Sequential(
+            nn.LayerNorm(d),
+            nn.Linear(d, n_classes),
+        )
+
+        # NLP gate: routes attention over 3 NLP experts [vader, bert, goe]
+        self.gate_nlp = nn.Sequential(
             nn.Linear(d, 32),
             nn.GELU(),
             nn.Linear(32, 3),
         )
 
-        # Context residual projection (beyond-routing context contribution)
-        self.ctx_residual = nn.Linear(d, d)
-
-        # Classifier head
-        self.head = nn.Sequential(
+        # NLP likelihood head
+        self.nlp_head = nn.Sequential(
             nn.LayerNorm(d),
             nn.Linear(d, d * 2),
             nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d * 2, n_classes),
         )
+
+        # Context residual: contributes to NLP repr for smoother convergence
+        self.ctx_residual = nn.Linear(d, d)
+
+        # Bayesian combination parameters (all learnable)
+        # ctx_weight = sigmoid(ctx_alpha * hmm_conf - ctx_bias)
+        # defaults: hmm_conf=0 → sigmoid(-2)≈0.12, hmm_conf=1 → sigmoid(1)≈0.73
+        self.ctx_alpha = nn.Parameter(torch.tensor(3.0))
+        self.ctx_bias  = nn.Parameter(torch.tensor(2.0))
+        self.nlp_temp  = nn.Parameter(torch.tensor(1.5))
 
     @staticmethod
     def _make_encoder(in_dim: int, out_dim: int) -> nn.Sequential:
@@ -147,33 +159,53 @@ class GatingEnsembleNet(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            x: [B, 62] full feature vector
-               x[:,  0:4]  — VADER
-               x[:,  4:11] — BERT
-               x[:, 11:39] — GoEmotions
-               x[:, 39:62] — Context Engine
+            x: [B, FEATURE_DIM]
+               x[:,  0:4]       — VADER
+               x[:,  4:11]      — BERT
+               x[:, 11:ML_DIM]  — GoEmotions
+               x[:, ML_DIM:]    — Context (CONTEXT_DIM dims)
 
         Returns:
             logits:       [B, n_classes]
-            gate_weights: [B, 3]  α values (sum to 1) — for interpretability
+            gate_weights: [B, 4]  [vader, bert, goe, context] — sum to 1 per sample
         """
         x_v = x[:, 0:4]
         x_b = x[:, 4:11]
-        x_g = x[:, 11:39]
-        x_c = x[:, 39:62]
+        x_g = x[:, 11:ML_DIM]
+        x_c = x[:, ML_DIM:FEATURE_DIM]
 
-        e_v = self.enc_vader(x_v)
-        e_b = self.enc_bert(x_b)
-        e_g = self.enc_goe(x_g)
-        c_h = self.enc_context(x_c)
+        # HMM confidence — drives context vs NLP balance
+        hmm_conf   = x_c[:, CTX_HMM_CONF].unsqueeze(1).clamp(0.0, 1.0)  # [B, 1]
+        ctx_weight = torch.sigmoid(
+            self.ctx_alpha.clamp(0.5, 6.0) * hmm_conf
+            - self.ctx_bias.clamp(0.5, 4.0)
+        )  # [B, 1]
 
-        alpha   = F.softmax(self.gate(c_h), dim=-1)           # [B, 3]
-        experts = torch.stack([e_v, e_b, e_g], dim=1)         # [B, 3, d]
-        mixed   = (alpha.unsqueeze(-1) * experts).sum(dim=1)  # [B, d]
+        # Context path
+        c_h              = self.enc_context(x_c)
+        e_c              = self.enc_ctx_expert(x_c)
+        ctx_prior_logits = self.ctx_prior_head(e_c)           # [B, n_classes]
 
-        fused  = mixed + 0.5 * self.ctx_residual(c_h)
-        logits = self.head(fused)
-        return logits, alpha
+        # NLP path
+        e_v       = self.enc_vader(x_v)
+        e_b       = self.enc_bert(x_b)
+        e_g       = self.enc_goe(x_g)
+        alpha_nlp = F.softmax(self.gate_nlp(c_h), dim=-1)    # [B, 3]
+        nlp_mix   = (alpha_nlp.unsqueeze(-1) * torch.stack([e_v, e_b, e_g], dim=1)).sum(dim=1)
+        nlp_repr  = nlp_mix + 0.3 * self.ctx_residual(c_h)
+        nlp_logits = self.nlp_head(nlp_repr) / self.nlp_temp.clamp(0.5, 3.0)  # [B, n_classes]
+
+        # Bayesian logit averaging — equivalent to geometric mean of distributions
+        logits = ctx_weight * ctx_prior_logits + (1.0 - ctx_weight) * nlp_logits
+
+        # Gate weights for logging: NLP experts share (1-ctx_weight), context gets ctx_weight
+        nlp_w     = 1.0 - ctx_weight                          # [B, 1]
+        alpha_out = torch.cat([
+            alpha_nlp * nlp_w,  # [B, 3]: vader, bert, goe weighted by NLP fraction
+            ctx_weight,         # [B, 1]: context weight
+        ], dim=1)               # [B, 4]
+
+        return logits, alpha_out
 
 
 class GatingNetworkWrapper:
@@ -208,7 +240,9 @@ class GatingNetworkWrapper:
         self.model_.eval()
         with torch.no_grad():
             logits, _ = self.model_(t)
-            proba = F.softmax(logits, dim=-1).cpu().numpy()
+            # Apply calibration temperature if stored
+            T = getattr(self, '_temperature', 1.0)
+            proba = F.softmax(logits / T, dim=-1).cpu().numpy()
         return proba  # [n, n_classes]
 
     def predict(self, X: np.ndarray) -> np.ndarray:
@@ -217,7 +251,7 @@ class GatingNetworkWrapper:
     # ── Extended API ───────────────────────────────────────────────────────────
 
     def get_gate_weights(self, X: np.ndarray) -> np.ndarray:
-        """Return α routing weights [n, 3] — order: [vader, bert, goe]."""
+        """Return α routing weights [n, 4] — order: [vader, bert, goe, context]."""
         X_s = self.scaler_.transform(X.reshape(-1, FEATURE_DIM))
         t   = torch.tensor(X_s, dtype=torch.float32, device=self._device)
         self.model_.eval()
@@ -260,8 +294,18 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
 
         _log_metadata()
 
+        # Load calibration temperature from meta.json if available
         if isinstance(model, GatingNetworkWrapper):
-            logger.info("Meta-learner v2 (GatingEnsembleNet) loaded.")
+            try:
+                meta_path = model_path.replace(".pkl", "_meta.json") if isinstance(model_path, str) else str(model_path).replace(".pkl", "_meta.json")
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                T = float(meta.get("calibration_temperature", 1.0))
+                model._temperature = T
+                logger.info(f"   Calibration T   : {T:.4f}")
+            except Exception:
+                model._temperature = 1.0
+            logger.info("Meta-learner v2 (GatingEnsembleNet + Bayesian ctx-first) loaded.")
         else:
             logger.info("Meta-learner v1 (sklearn Pipeline) loaded — retrain to upgrade.")
 
@@ -323,6 +367,14 @@ def predict_with_meta_learner(
         gate_alpha is [vader_w, bert_w, goe_w] for v2, None for v1/fallback.
         On any error returns ("neutral", 0.0, {}, 0.0, None, None).
     """
+    if model is None:
+        goe = feature_vector[0, 11:ML_DIM]
+        if goe.max() > 0:
+            idx    = int(goe.argmax())
+            scores = {e: float(goe[i]) for i, e in enumerate(EMOTION_LABELS)}
+            return EMOTION_LABELS[idx], float(goe[idx]), scores, 0.0, None, None
+        return "neutral", 1.0, {"neutral": 1.0}, 0.0, None, None
+
     try:
         pred_label = model.predict(feature_vector)[0]
         proba      = model.predict_proba(feature_vector)[0]
@@ -337,17 +389,17 @@ def predict_with_meta_learner(
         if isinstance(model, GatingNetworkWrapper):
             alpha      = model.get_gate_weights(feature_vector)[0]
             gate_alpha = [round(float(a), 4) for a in alpha]
-            ctx_vec    = feature_vector[0, 39:]  # context block [39:62]
+            ctx_vec    = feature_vector[0, ML_DIM:]  # context block [ML_DIM:FEATURE_DIM]
             ctx_L2     = float(np.linalg.norm(ctx_vec))
             ctx_mean   = float(np.mean(ctx_vec))
             ctx_max    = float(np.max(np.abs(ctx_vec)))
-            logger.warning(
+            logger.debug(
                 f"[DIAG-3] Gate α — vader:{alpha[0]:.3f}  bert:{alpha[1]:.3f}  "
-                f"goe:{alpha[2]:.3f}  (sum={sum(alpha):.3f})  "
+                f"goe:{alpha[2]:.3f}  ctx:{alpha[3]:.3f}  (sum={sum(alpha):.3f})  "
                 f"ctx_L2={ctx_L2:.4f}  ctx_mean={ctx_mean:.4f}  ctx_max={ctx_max:.4f}"
             )
         else:
-            logger.warning(
+            logger.debug(
                 f"[DIAG-3] Model type={type(model).__name__} — NOT GatingNetworkWrapper; "
                 f"no gate α available (stale pkl?)"
             )
