@@ -289,7 +289,11 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             dummy = np.zeros((1, FEATURE_DIM))
             model.predict(dummy)
         except Exception as e:
-            logger.warning(f"Model incompatible with {FEATURE_DIM}-dim probe: {e}. Fallback mode.")
+            logger.warning(f"Model incompatible with {FEATURE_DIM}-dim probe: {e}. Deleting stale pkl.")
+            try:
+                os.remove(model_path)
+            except OSError:
+                pass
             return None
 
         _log_metadata()
