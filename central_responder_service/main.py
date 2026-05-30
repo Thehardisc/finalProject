@@ -218,9 +218,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     is_anomaly = False
     anomaly_reason = []
 
-    if bert_max_prob < 0.35 and "bert" in model_outputs:
+    if bert_max_prob < 0.35 and "basic_bert" in model_outputs:
         anomaly_reason.append(f"Low BERT Confidence ({bert_max_prob:.2f})")
-    if goe_max_prob < 0.20 and "goemotions" in model_outputs:
+    if goe_max_prob < 0.20 and "go_emotions" in model_outputs:
         anomaly_reason.append(f"Low GoEmotions Confidence ({goe_max_prob:.2f})")
     if meta_confidence < 0.45:
         anomaly_reason.append(f"Low Meta-Learner Confidence ({meta_confidence:.2f})")
