@@ -21,14 +21,14 @@ from meta_learner import (
 # import background trainer
 from trainer import start_trainer_thread
 
-# import trajectory LSTM
 from trajectory.inference import load_trajectory_model, run_trajectory_step
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.constants import (
-    CONTEXT_DIM,
+    CONTEXT_DIM, N_CDM_STATES,
     CTX_HIST_VALENCE, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
+    CTX_RESIDENCY, CTX_ABRUPTNESS,
 )
 from shared.module_registry import ModuleRegistry
 
@@ -43,7 +43,7 @@ OUTPUT_STREAM = "emotion_stream"
 AGGREGATION_TIMEOUT_MS = 5000
 # How long to wait for optional modules after all required have arrived.
 # Tunable via env: set higher (e.g. 100 ms) if context_engine latency is >50 ms p50.
-OPTIONAL_TIMEOUT_MS = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "200"))
+OPTIONAL_TIMEOUT_MS = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "1000"))
 
 # ── Module registry — populated in main() after Redis connects ──────────────────
 REGISTRY: Optional[ModuleRegistry] = None
@@ -107,7 +107,7 @@ async def _do_aggregation(msg_id: str, info: dict, r) -> None:
     try:
         await aggregate_and_publish(msg_id, packets, r, agg_lat=agg_lat)
     except Exception as e:
-        logger.error(f"[AGGREGATION FAILED] {msg_id}: {e}")
+        logger.error(f"[AGGREGATION FAILED] {msg_id}: {e}", exc_info=True)
     pending_aggregations.pop(msg_id, None)
     _mark_completed(msg_id)
 
@@ -208,6 +208,41 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         dominant_emotion = max(final_scores, key=final_scores.get)
         meta_confidence  = final_scores[dominant_emotion]
 
+    # ── AI Confidence & Anomaly Validation Gatekeeper ───────────────────────────
+    bert_scores = model_outputs.get("basic_bert", {})
+    bert_max_prob = max([float(v) for v in bert_scores.values()]) if bert_scores else 0.0
+
+    goe_scores = model_outputs.get("go_emotions", {})
+    goe_max_prob = max([float(v) for v in goe_scores.values()]) if goe_scores else 0.0
+
+    is_anomaly = False
+    anomaly_reason = []
+
+    if bert_max_prob < 0.35 and "bert" in model_outputs:
+        anomaly_reason.append(f"Low BERT Confidence ({bert_max_prob:.2f})")
+    if goe_max_prob < 0.20 and "goemotions" in model_outputs:
+        anomaly_reason.append(f"Low GoEmotions Confidence ({goe_max_prob:.2f})")
+    if meta_confidence < 0.45:
+        anomaly_reason.append(f"Low Meta-Learner Confidence ({meta_confidence:.2f})")
+    if conflict_desc:
+        anomaly_reason.append(f"Model Divergence: {conflict_desc}")
+
+    if (bert_max_prob < 0.35 and goe_max_prob < 0.20) or (meta_confidence < 0.45 and conflict_desc):
+        is_anomaly = True
+        logger.warning(f"[ANOMALY DETECTED] {message_id}: {', '.join(anomaly_reason)}")
+
+        # Fallback to the most confident NLP model to preserve information
+        conflict_desc = "Anomaly Fallback: Dynamic Recovery"
+        if goe_max_prob >= bert_max_prob and goe_scores:
+            final_scores = goe_scores
+        elif bert_scores:
+            final_scores = bert_scores
+        else:
+            final_scores = {"neutral": 1.0}
+
+        dominant_emotion = max(final_scores, key=final_scores.get) if final_scores else "neutral"
+        meta_confidence = final_scores.get(dominant_emotion, 0.0)
+
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
 
@@ -260,9 +295,10 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         model_outputs=model_outputs,
         conv_id=conv_id,
         redis=r,
+        context_vector=context_vector,
     )
 
-    cdm_probs     = context_vector[0:7] if ce_available else [0.0] * 7
+    cdm_probs     = context_vector[0:N_CDM_STATES] if ce_available else [0.0] * N_CDM_STATES
     cdm_state_idx = cdm_probs.index(max(cdm_probs)) if ce_available else None
 
     pipeline_log = {
@@ -287,8 +323,8 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             "ce_available":         ce_available,
             "cdm_state_probs":      [round(float(p), 4) for p in cdm_probs],
             "cdm_current_state":    cdm_state_idx,
-            "cdm_residency":        round(float(context_vector[7]), 3) if ce_available else 0.0,
-            "cdm_entry_abruptness": round(float(context_vector[11]), 3) if ce_available else 0.0,
+            "cdm_residency":        round(float(context_vector[CTX_RESIDENCY]), 3) if ce_available else 0.0,
+            "cdm_entry_abruptness": round(float(context_vector[CTX_ABRUPTNESS]), 3) if ce_available else 0.0,
             "cdm_available":        ce_available,
         },
     }
@@ -311,6 +347,17 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             "to":           dominant_emotion,
             "significance": "High" if meta_confidence > 0.7 else "Moderate",
         })
+
+    if is_anomaly:
+        anomaly_payload = {
+            "message_id": message_id,
+            "original_text": original_data.get("original_text", ""),
+            "conversation_id": conv_id,
+            "anomaly_reason": ", ".join(anomaly_reason),
+            "raw_model_outputs": json.dumps(model_outputs),
+            "timestamp": str(time.time())
+        }
+        await redis_client.publish_event("ai_anomaly_stream", anomaly_payload)
 
     await redis_client.publish_event(OUTPUT_STREAM, output_event)
 
