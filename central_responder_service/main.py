@@ -169,12 +169,10 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             model_outputs[model_name] = res.get("scores", {})
 
     ce_available = context_vector is not None and len(context_vector) == CONTEXT_DIM
-    # ── DIAG-2: prove CE vector arrived and parsed correctly ──────────────────
-    _raw_cv_type = type(next((r.get("context_vector") for r in partial_results if r.get("model_name") == "context_engine"), None)).__name__
     _nz2 = sum(1 for v in context_vector if v != 0.0) if context_vector else 0
-    logger.warning(
+    logger.debug(
         f"[DIAG-2] CE parse msg={message_id} "
-        f"ce_available={ce_available} raw_type={_raw_cv_type} "
+        f"ce_available={ce_available} "
         f"dim={len(context_vector) if context_vector else 0} nonzero={_nz2}"
     )
     if not ce_available:
@@ -232,6 +230,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         logger.warning(f"[ANOMALY DETECTED] {message_id}: {', '.join(anomaly_reason)}")
 
         # Fallback to the most confident NLP model to preserve information
+        original_conflict_desc = conflict_desc
         conflict_desc = "Anomaly Fallback: Dynamic Recovery"
         if goe_max_prob >= bert_max_prob and goe_scores:
             final_scores = goe_scores
@@ -246,7 +245,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
 
-    _ce_packet = next((r for r in partial_results if r.get("model_name") == "context_engine"), {})
+    _ce_packet = next((p for p in partial_results if p.get("model_name") == "context_engine"), {})
     def _named(key, idx):
         v = _ce_packet.get(key)
         return round(float(v), 4) if v is not None else round(float(context_vector[idx]), 4)
@@ -271,22 +270,20 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     logger.log_stats(f"Meta-Inference: {message_id}", stats)
 
     reasoning = None
-    if conflict_desc or sarcasm_score > 0.3:
+    _reason_desc = original_conflict_desc if is_anomaly else conflict_desc
+    if _reason_desc or sarcasm_score > 0.3:
         reasoning = {
-            "type":          "Contextual Dissonance" if conflict_desc else "Sarcastic Intent",
-            "details":       conflict_desc or "Emotional signal flip detected.",
+            "type":          "Anomaly Recovery" if is_anomaly else ("Contextual Dissonance" if _reason_desc else "Sarcastic Intent"),
+            "details":       _reason_desc or "Emotional signal flip detected.",
             "sarcasm_score": float(sarcasm_score),
             "action":        "Meta-Learner nuance override applied.",
         }
 
     logic_map  = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion)
 
-    # ── DIAG-4: pre-assembly snapshot ─────────────────────────────────────────
-    _ctx_sum = sum(context_vector)
-    logger.warning(
+    logger.debug(
         f"[DIAG-4] pre-log msg={message_id} "
-        f"ce_available={ce_available} ctx_sum={_ctx_sum:.4f} "
-        f"ctx_correction_weight={ctx_correction_weight} "
+        f"ce_available={ce_available} ctx_sum={sum(context_vector):.4f} "
         f"logic_map={logic_map}"
     )
 
@@ -329,12 +326,10 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         },
     }
 
-    if "vader" in model_outputs:
-        for k, v in model_outputs["vader"].items():
-            final_scores[k] = v
+    vader_scalars = {k: v for k, v in model_outputs.get("vader", {}).items()}
 
     output_event                     = original_data.copy()
-    output_event["emotions"]         = json.dumps(final_scores)
+    output_event["emotions"]         = json.dumps({**final_scores, **vader_scalars})
     output_event["dominant_emotion"] = dominant_emotion
     output_event["pipeline_log"]     = json.dumps(pipeline_log)
     if reasoning:
