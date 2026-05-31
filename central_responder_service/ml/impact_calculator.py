@@ -14,13 +14,14 @@ from shared.utils.logger import get_logger
 logger = get_logger("meta_learner")
 
 # Feature block offsets — must match build_feature_vector() in predictor.py
-# VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), Context(67-95)
+# VADER(0-3), BERT(4-10), GoE(11-38), Emoji(39-66), Context(67-95), Derived(96-102)
 BLOCK_SLICES = {
     "VADER":      slice(0,  4),
     "BERT":       slice(4,  11),
     "GoEmotions": slice(11, 39),
     "EmojiNet":   slice(39, 67),
     "Context":    slice(67, 96),
+    "Derived":    slice(96, 103),
 }
 
 
@@ -38,15 +39,22 @@ def calculate_feature_impacts(model, feature_vector: np.ndarray,
 
         X_scaled = scaler.transform(feature_vector)[0]
 
-        # ── Weight source: LR uses per-class coef_, RF uses global importances ──
-        if hasattr(clf, 'feature_importances_'):
-            weights = clf.feature_importances_
-        else:
-            classes = list(clf.classes_)
+        # The trainer ships a VotingClassifier (LR + HGB + RF) which exposes neither
+        # coef_ nor feature_importances_ directly — reach into a sub-estimator. Prefer
+        # the LR member's per-class coef_ (linear, attributable); fall back to any
+        # estimator that does expose importances; else attribute the bare clf.
+        sub = getattr(clf, 'named_estimators_', {}) or {}
+        est = sub.get('lr') or sub.get('rf') or clf
+
+        if hasattr(est, 'coef_'):
+            classes = list(est.classes_)
             if predicted_emotion not in classes:
                 return {}
-            class_idx = classes.index(predicted_emotion)
-            weights = clf.coef_[class_idx]
+            weights = est.coef_[classes.index(predicted_emotion)]
+        elif hasattr(est, 'feature_importances_'):
+            weights = est.feature_importances_      # global (not per-class)
+        else:
+            return {}
 
         contributions = X_scaled * weights
 

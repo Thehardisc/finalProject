@@ -35,6 +35,25 @@ echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
 echo "──────────────────────────────────────────────────────────"
 echo ""
 
+# Feature-vector parity is the #1 invariant (CLAUDE.md): the inference builder and
+# the training builder must produce identical 103-dim vectors. Catch drift here —
+# before spending minutes on a build — but degrade gracefully if the host lacks the
+# Python test deps (the test only needs numpy + pytest, no ML runtime).
+echo "[Invariant] Checking feature-vector parity (inference vs trainer)..."
+if command -v python3 &> /dev/null && python3 -c "import pytest, numpy" &> /dev/null; then
+    if python3 -m pytest central_responder_service/training/test_feature_parity.py -q &> /tmp/parity_check.log; then
+        echo "   [OK] Feature-vector parity holds."
+    else
+        echo "   [FAIL] Feature-vector parity VIOLATION — inference and trainer disagree."
+        echo "          Launch aborted; fix build_feature_vector / build_fv before starting."
+        echo "          Details:"; tail -20 /tmp/parity_check.log | sed 's/^/          /'
+        exit 1
+    fi
+else
+    echo "   [SKIP] python3 + pytest/numpy not on host — parity not checked (runs in CI)."
+fi
+echo ""
+
 echo "[Search] Detecting host environment..."
 
 if command -v nvidia-smi &> /dev/null; then

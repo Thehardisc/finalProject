@@ -1,6 +1,6 @@
 """
-Parity test: the live inference path (meta_learner.build_feature_vector) and
-the training path (trainer.preprocessor.build_fv) MUST produce identical 103-dim
+Parity test: the live inference path (ml/predictor.py:build_feature_vector) and
+the training path (trainer/preprocessor.py:build_fv) MUST produce identical 103-dim
 feature vectors for the same input.
 
 CLAUDE.md flags this as the #1 invariant of the system: a mismatch causes
@@ -26,7 +26,7 @@ for p in (_PROJECT_ROOT, _SVC_ROOT):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from meta_learner       import build_feature_vector as live_build_fv
+from ml.predictor       import build_feature_vector as live_build_fv
 from shared.constants   import EMOTION_LABELS, BERT_LABELS, VADER_KEYS, FEATURE_DIM
 
 

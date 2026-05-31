@@ -16,8 +16,9 @@ def detect_emotional_conflicts(vec: np.ndarray) -> Tuple[float, Optional[str]]:
     """
     Heuristic layer to detect 'Sentiment Flipping' (Sarcasm / Slang).
 
-    Feature vector offsets (must match shared/constants.py):
-      VADER: 0-3 | BERT: 4-10 | GoE: 11-38 | Context: 39-67 | Derived: 68-74
+    Feature vector offsets (must match build_feature_vector / shared/constants.py):
+      VADER: 0-3 | BERT: 4-10 | GoE: 11-38 | EmojiNet: 39-66 | Context: 67-95 | Derived: 96-102
+    (only the VADER[0-3] and BERT[4-10] indices are read below.)
 
     Returns:
         (sarcasm_score [0.0-1.0], conflict_description [str or None])

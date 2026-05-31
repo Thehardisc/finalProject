@@ -9,7 +9,6 @@ import gc
 import json
 import time
 import pickle
-import random
 import datetime
 import threading
 import traceback
@@ -97,8 +96,6 @@ def run_one_cycle(reload_callback):
     device = 0 if torch.cuda.is_available() else -1
     vader, bert, goe, emoji_scorer = _get_analyzers(device)
 
-    rng = random.Random(42)
-
     def process(split, name):
         X, y, gs_list = [], [], []
         for i, s in enumerate(split):
@@ -121,11 +118,14 @@ def run_one_cycle(reload_callback):
             # Layer 3: pick the label GoEmotions is most confident about
             # (not blindly labels[0]) — improves label quality for multi-label samples
             best_lid = max(valid_lids, key=lambda lid: gs.get(EMOTION_LABELS[lid], 0.0))
-            synthetic_context = {
-                "avg_valence":  rng.uniform(-1.0, 1.0),
-                "prev_emotion": rng.choice(EMOTION_LABELS)
-            }
-            X.append(build_fv(vs, bs, gs, es, context=synthetic_context))
+            # GoEmotions samples are independent single utterances with no conversation
+            # history, so train them on NEUTRAL context (matches the cold-start inference
+            # case). Previously this was randomized (rng.uniform valence + rng.choice
+            # prev_emotion), which taught the 29-dim context block pure noise while
+            # inference feeds it real EMA context — a train/serve distribution mismatch.
+            # Real sequential context still comes from the live-augmented samples below.
+            neutral_context = {"avg_valence": 0.0, "prev_emotion": "neutral"}
+            X.append(build_fv(vs, bs, gs, es, context=neutral_context))
             y.append(EMOTION_LABELS[best_lid])
         pt = (time.time() - t0) / len(X) if X else 0
         logger.info(f"  [Trainer] {name}: {len(X)} samples. Avg {pt*1000:.2f}ms/sample.")

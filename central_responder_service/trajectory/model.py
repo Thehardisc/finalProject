@@ -77,7 +77,7 @@ class ConversationLSTM(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, Tuple]:
         """
         Single-step inference.
-        x: [1, 1, 39]
+        x: [1, 1, 67]
         Returns:
             next_emotions:     [28]        predicted next-message distribution
             trajectory_vector: [hidden_dim] conversation state embedding

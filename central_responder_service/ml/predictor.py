@@ -7,8 +7,10 @@ from typing import Tuple, Optional
 from shared.utils.logger import get_logger
 from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS
 
-from .conflict_detector import detect_emotional_conflicts
-from .features import build_derived_block
+# Absolute imports (rooted at the service dir, like trainer/preprocessor.py) so this
+# module is importable when main.py is run as a top-level script (python main.py).
+from ml.conflict_detector import detect_emotional_conflicts
+from ml.features import build_derived_block
 
 logger = get_logger("meta_learner")
 
@@ -101,5 +103,44 @@ def predict_with_meta_learner(
         return pred_label, confidence, all_scores, sarcasm_score, conflict_desc
 
     except Exception as e:
-        logger.warning(f"Predict error: {e}. Returning neutral.")
+        logger.warning(f"Predict error: {e}. Returning neutral sentinel (caller may rule-base).")
         return "neutral", 0.0, {}, 0.0, None
+
+
+def rule_based_predict(model_outputs: dict):
+    """
+    Deterministic fallback used when the meta-learner is unavailable (no .pkl yet,
+    or predict_proba raised). Picks the dominant emotion directly from the raw
+    analyzer outputs — GoEmotions first (28-class, richest), then BERT Ekman,
+    then a coarse VADER-compound mapping. This is what "Rule-Based Aggregation"
+    in the startup log actually refers to; previously the code just returned
+    neutral/0.0 for every message.
+
+    Returns the same 5-tuple shape as predict_with_meta_learner:
+        (dominant_emotion, confidence, all_scores, sarcasm_score, conflict_desc)
+    """
+    model_outputs = model_outputs or {}
+    goe   = model_outputs.get("go_emotions", {}) or {}
+    bert  = model_outputs.get("basic_bert",  {}) or {}
+    vader = model_outputs.get("vader",       {}) or {}
+
+    # 1. GoEmotions argmax (preferred — full 28-class distribution)
+    goe_scores = {k: float(goe.get(k, 0.0)) for k in EMOTION_LABELS}
+    if any(v > 0.0 for v in goe_scores.values()):
+        dominant = max(goe_scores, key=goe_scores.get)
+        return dominant, float(goe_scores[dominant]), goe_scores, 0.0, None
+
+    # 2. BERT Ekman argmax
+    bert_scores = {k: float(bert.get(k, 0.0)) for k in BERT_LABELS}
+    if any(v > 0.0 for v in bert_scores.values()):
+        dominant = max(bert_scores, key=bert_scores.get)
+        return dominant, float(bert_scores[dominant]), bert_scores, 0.0, None
+
+    # 3. Coarse VADER-compound mapping (last resort)
+    compound = float(vader.get("vader_compound", vader.get("compound", 0.0)))
+    if compound >= 0.5:
+        return "joy", abs(compound), {"joy": abs(compound)}, 0.0, None
+    if compound <= -0.5:
+        return "sadness", abs(compound), {"sadness": abs(compound)}, 0.0, None
+
+    return "neutral", 0.0, {"neutral": 0.0}, 0.0, None
