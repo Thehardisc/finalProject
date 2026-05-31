@@ -226,10 +226,9 @@ async def admin_pipeline_detail(
             "conversation_id": d["conversation_id"],
         },
         "stages": {
-            "vader":       models.get("vader", {}),
-            "bert":        models.get("basic_bert", {}),
-            "goemotions":  models.get("go_emotions", {}),
-            "emojinet":    models.get("emojinet", {}),
+            "vader":      models.get("vader", {}),
+            "bert":       models.get("basic_bert", {}),
+            "goemotions": models.get("go_emotions", {}),
         },
         "decision": {
             "aggregated":    pipeline_log.get("aggregated", {}),

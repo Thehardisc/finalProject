@@ -2,7 +2,7 @@
  * AdminPipelinePage — Step-by-step ML pipeline inspector for admins.
  *
  * Shows every stage of the analysis pipeline for any message:
- *   Input → VADER → BERT → GoEmotions → EmojiNet → Meta-Learner → Context Impact
+ *   Input → VADER → BERT → GoEmotions → Context Engine → Meta-Learner → Context Impact
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../api/client';
@@ -12,23 +12,31 @@ import { EmotionPalette } from '../components/EmotionPalette';
 
 const rgb = (emo) => EmotionPalette[emo?.toLowerCase()] || EmotionPalette.neutral || '150,150,150';
 
+const CDM_STATES = [
+  { id: 0, short: 'NEUTRAL',   color: '107,114,128' },
+  { id: 1, short: 'ASCENDING', color: '34,197,94'   },
+  { id: 2, short: 'CONFLICT',  color: '239,68,68'   },
+  { id: 3, short: 'ANCHOR',    color: '59,130,246'  },
+  { id: 4, short: 'CONVERGE',  color: '20,184,166'  },
+  { id: 5, short: 'PEAK',      color: '168,85,247'  },
+  { id: 6, short: 'DIVERG',    color: '249,115,22'  },
+];
+
 const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '—';
 const pct = (v)  => v != null ? `${(v * 100).toFixed(1)}%` : '—';
 
-const STAGE_ORDER = ['vader', 'bert', 'goemotions', 'emojinet'];
+const STAGE_ORDER = ['vader', 'bert', 'goemotions'];
 
 const STAGE_META = {
-  vader:      { label: 'VADER',       icon: '📊', color: '255,180,0',   desc: 'Lexicon-based sentiment' },
-  bert:       { label: 'BERT',        icon: '🤖', color: '0,119,255',   desc: 'Ekman 7-emotion classifier' },
-  goemotions: { label: 'GoEmotions',  icon: '🧠', color: '162,67,220',  desc: '28-class emotion model' },
-  emojinet:   { label: 'EmojiNet',    icon: '😀', color: '0,210,150',   desc: 'Emoji semantic mapping' },
+  vader:      { label: 'VADER',      icon: '📊', color: '255,180,0',  desc: 'Lexicon-based sentiment' },
+  bert:       { label: 'BERT',       icon: '🤖', color: '0,119,255',  desc: 'Ekman 7-emotion classifier' },
+  goemotions: { label: 'GoEmotions', icon: '🧠', color: '162,67,220', desc: '28-class emotion model' },
 };
 
 const MODEL_LABEL_MAP = {
   VADER:      'vader',
   BERT:       'bert',
   GoEmotions: 'goemotions',
-  EmojiNet:   'emojinet',
   Context:    'context',
 };
 
@@ -171,8 +179,7 @@ function LogicMapCard({ logicMap, dominant }) {
     VADER:      '255,180,0',
     BERT:       '0,119,255',
     GoEmotions: '162,67,220',
-    EmojiNet:   '0,210,150',
-    Context:    '255,100,150',
+    Context:    '20,184,166',
   };
 
   return (
@@ -234,9 +241,9 @@ function ValenceBar({ value }) {
 
 function ContextCard({ decision, context }) {
   const { reasoning, raw_emotions, context_snapshot: cs } = context;
-  const { sarcasm_score, conflict, logic_map } = decision;
+  const { sarcasm_score, conflict, logic_map, ctx_correction_weight } = decision;
 
-  const contextPct   = logic_map?.Context ?? null;
+  const contextPct = Math.max(logic_map?.Context ?? 0, ctx_correction_weight ?? 0) || null;
   const contextShift = raw_emotions?.context_shift
     ? (typeof raw_emotions.context_shift === 'string'
         ? JSON.parse(raw_emotions.context_shift) : raw_emotions.context_shift)
@@ -286,9 +293,9 @@ function ContextCard({ decision, context }) {
               `rgb(${rgb(cs.prev_emotion || 'neutral')})`)}
             <div style={S.contextRow}>
               <span style={S.ctxLabel}>EMA valence</span>
-              <div style={{ flex: 1, margin: '0 12px' }}><ValenceBar value={cs.avg_valence} /></div>
-              <span style={{ ...S.ctxValue, color: cs.avg_valence >= 0 ? 'rgb(0,210,120)' : 'rgb(255,82,82)' }}>
-                {cs.avg_valence >= 0 ? '+' : ''}{(cs.avg_valence * 100).toFixed(1)}%
+              <div style={{ flex: 1, margin: '0 12px' }}><ValenceBar value={cs.cur_valence} /></div>
+              <span style={{ ...S.ctxValue, color: (cs.cur_valence ?? 0) >= 0 ? 'rgb(0,210,120)' : 'rgb(255,82,82)' }}>
+                {(cs.cur_valence ?? 0) >= 0 ? '+' : ''}{((cs.cur_valence ?? 0) * 100).toFixed(1)}%
               </span>
             </div>
 
@@ -317,6 +324,58 @@ function ContextCard({ decision, context }) {
                   cs.volatility > 0.1 ? 'rgb(255,150,50)' : 'rgba(255,255,255,0.45)')}
               </>
             )}
+
+            {/* CDM State Machine */}
+            {cs.cdm_available && cs.cdm_state_probs && (
+              <>
+                <div style={{ height: 1, background: 'rgba(255,255,255,0.07)', margin: '8px 0' }} />
+                <div style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.35)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+                  CDM State Machine
+                </div>
+                {CDM_STATES.map(({ id, short, color }) => {
+                  const prob = cs.cdm_state_probs[id] ?? 0;
+                  const isCurrent = cs.cdm_current_state === id;
+                  return (
+                    <div key={id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{
+                        width: 58, fontSize: '0.62rem', fontWeight: isCurrent ? 700 : 400,
+                        color: isCurrent ? `rgb(${color})` : 'rgba(255,255,255,0.35)',
+                        flexShrink: 0,
+                      }}>
+                        {isCurrent ? '▶ ' : ''}{short}
+                      </span>
+                      <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.07)' }}>
+                        <div style={{
+                          height: '100%', borderRadius: 2,
+                          width: `${Math.min(prob * 100, 100)}%`,
+                          background: isCurrent ? `rgb(${color})` : `rgba(${color},0.4)`,
+                          transition: 'width .3s ease',
+                        }} />
+                      </div>
+                      <span style={{ fontSize: '0.62rem', color: isCurrent ? `rgb(${color})` : 'rgba(255,255,255,0.3)', width: 30, textAlign: 'right' }}>
+                        {(prob * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  );
+                })}
+                {cs.cdm_residency > 0 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                    <span style={{ width: 58, fontSize: '0.62rem', color: 'rgba(255,255,255,0.35)', flexShrink: 0 }}>residency</span>
+                    <div style={{ flex: 1, height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.07)' }}>
+                      <div style={{
+                        height: '100%', borderRadius: 2,
+                        width: `${Math.min(cs.cdm_residency * 100, 100)}%`,
+                        background: `rgba(${CDM_STATES[cs.cdm_current_state]?.color ?? '150,150,150'},0.6)`,
+                      }} />
+                    </div>
+                    <span style={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.3)', width: 30, textAlign: 'right' }}>
+                      {(cs.cdm_residency * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+
             {!cs.ce_available && (
               <div style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.3)', fontStyle: 'italic', marginTop: 4 }}>
                 Episodic memory arrived after aggregation window — base EMA context used.
@@ -767,24 +826,19 @@ export default function AdminPipelinePage({ currentUser, onBack }) {
                   <StageCard stageKey="goemotions" data={detail.stages.goemotions} />
                 </PipelineStep>
 
-                {/* Step 4 — EmojiNet */}
-                <PipelineStep num={4} label="EmojiNet">
-                  <StageCard stageKey="emojinet" data={detail.stages.emojinet} />
-                </PipelineStep>
-
-                {/* Step 5 — Context */}
-                <PipelineStep num={5} label="Context Engine">
+                {/* Step 4 — Context */}
+                <PipelineStep num={4} label="Context Engine">
                   <ContextCard decision={detail.decision} context={detail.context} />
                 </PipelineStep>
 
-                {/* Step 6 — Meta-Learner */}
-                <PipelineStep num={6} label="Meta-Learner Decision">
+                {/* Step 5 — Meta-Learner */}
+                <PipelineStep num={5} label="Meta-Learner Decision">
                   <DecisionCard decision={detail.decision} />
                 </PipelineStep>
 
-                {/* Step 7 — Logic Map */}
+                {/* Step 6 — Logic Map */}
                 {detail.decision.logic_map && Object.keys(detail.decision.logic_map).length > 0 && (
-                  <PipelineStep num={7} label="Model Contributions">
+                  <PipelineStep num={6} label="Model Contributions">
                     <LogicMapCard logicMap={detail.decision.logic_map} dominant={detail.decision.dominant} />
                   </PipelineStep>
                 )}

@@ -5,7 +5,7 @@ Responsibilities:
   1. build_feature_vector()   — convert central_responder model_outputs → 67-dim tensor
                                  (GoEmotions 28 + BERT 7 + VADER 4 + EmojiNet 28)
   2. load_hidden_state()      — fetch (h, c) for a conversation from Redis
-  3. save_hidden_state()      — persist (h, c) back to Redis with 7-day TTL
+  3. save_hidden_state()      — persist (h, c) back to Redis with 2-hour inactivity TTL
   4. run_trajectory_step()    — full inference: load → forward → save → return dict
 
 The returned dict is merged into pipeline_log["trajectory"] by central_responder.
@@ -14,6 +14,7 @@ Falls back silently (returns empty dict) if model is None or any error occurs.
 
 import json
 import logging
+import secrets
 import numpy as np
 from typing import Optional, Dict, Tuple
 
@@ -35,28 +36,37 @@ BERT_LABELS_7  = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surp
 VADER_KEYS_4   = ['neg', 'neu', 'pos', 'compound']
 
 HIDDEN_KEY_PREFIX = "trajectory:"
-HIDDEN_TTL        = 86400 * 7   # 7 days
+HIDDEN_TTL        = 7200         # 2 hours of inactivity — beyond that, state is stale
+LOCK_PREFIX       = "trajectory:lock:"
+LOCK_TTL          = 5            # lock auto-expires if holder crashes
+
+# Atomic lock-release script: only deletes the key if the stored token matches ours
+_RELEASE_SCRIPT = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("DEL", KEYS[1])
+else
+    return 0
+end
+"""
 
 
 # ── Feature construction ──────────────────────────────────────────────────────
 
 def build_feature_vector(model_outputs: dict) -> torch.Tensor:
     """
-    Convert central_responder model_outputs dict → [1, 1, 67] float tensor.
-    model_outputs keys: go_emotions, basic_bert, vader, emojinet
+    Convert central_responder model_outputs dict → [1, 1, 39] float tensor.
+    model_outputs keys: go_emotions, basic_bert, vader
     """
     go    = model_outputs.get("go_emotions", {})
     bert  = model_outputs.get("basic_bert",  {})
     vader = model_outputs.get("vader",       {})
-    emoji = model_outputs.get("emojinet",    {})
 
     go_vec    = [float(go.get(e,    0.0)) for e in EMOTION_LABELS_28]   # 28
     bert_vec  = [float(bert.get(e,  0.0)) for e in BERT_LABELS_7]       # 7
     vader_vec = [float(vader.get(k, 0.0)) for k in VADER_KEYS_4]        # 4
-    emoji_vec = [float(emoji.get(e, 0.0)) for e in EMOTION_LABELS_28]   # 28
 
-    vec = go_vec + bert_vec + vader_vec + emoji_vec   # 67
-    return torch.tensor(vec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, 67]
+    vec = go_vec + bert_vec + vader_vec   # 39
+    return torch.tensor(vec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, 39]
 
 
 # ── Redis hidden state I/O ────────────────────────────────────────────────────
@@ -91,7 +101,7 @@ async def save_hidden_state(
     c_n: torch.Tensor,
     redis,
 ):
-    """Persist (h, c) to Redis with 7-day TTL."""
+    """Persist (h, c) to Redis with 2-hour inactivity TTL."""
     key = f"{HIDDEN_KEY_PREFIX}{conv_id}:hidden"
     try:
         data = {
@@ -101,6 +111,22 @@ async def save_hidden_state(
         await redis.set(key, json.dumps(data), ex=HIDDEN_TTL)
     except Exception as e:
         logger.warning(f"Failed to save hidden state for {conv_id}: {e}")
+
+
+# ── Distributed lock helpers ─────────────────────────────────────────────────
+
+async def _acquire_lock(redis, conv_id: str):
+    """Try to acquire a per-conversation lock. Returns token if acquired, None if busy."""
+    token = secrets.token_hex(8)
+    ok = await redis.set(f"{LOCK_PREFIX}{conv_id}", token, nx=True, ex=LOCK_TTL)
+    return token if ok else None
+
+async def _release_lock(redis, conv_id: str, token: str):
+    """Atomically release lock only if we still own it (prevents releasing another holder's lock)."""
+    try:
+        await redis.eval(_RELEASE_SCRIPT, 1, f"{LOCK_PREFIX}{conv_id}", token)
+    except Exception:
+        pass  # Lock expired naturally — that's fine
 
 
 # ── Main inference step ───────────────────────────────────────────────────────
@@ -127,24 +153,27 @@ async def run_trajectory_step(
     if model is None:
         return {}
 
+    # Acquire per-conversation distributed lock before touching hidden state.
+    # If the lock is busy (another message for this conv is mid-inference),
+    # skip trajectory for this message rather than corrupting the LSTM sequence.
+    token = await _acquire_lock(redis, conv_id)
+    if token is None:
+        logger.debug(f"Trajectory lock busy for {conv_id} — skipping step to preserve sequence integrity")
+        return {}
+
     try:
-        # 1. Build feature vector for this message
         x = build_feature_vector(model_outputs)
 
-        # 2. Load previous hidden state (None = first message → LSTM uses zeros)
         hidden = await load_hidden_state(
             conv_id, redis,
             hidden_dim=model.hidden_dim,
             num_layers=model.num_layers,
         )
 
-        # 3. Run one LSTM step
         next_emotions, traj_vec, (h_n, c_n) = model.predict_next(x, hidden=hidden)
 
-        # 4. Save updated hidden state
         await save_hidden_state(conv_id, h_n, c_n, redis)
 
-        # 5. Format output — top-5 predicted emotions for next message
         scores = next_emotions.cpu().tolist()
         emotion_scores = dict(zip(EMOTION_LABELS_28, scores))
         top5 = sorted(emotion_scores.items(), key=lambda kv: kv[1], reverse=True)[:5]
@@ -161,6 +190,9 @@ async def run_trajectory_step(
     except Exception as e:
         logger.warning(f"Trajectory inference failed for {conv_id}: {e}")
         return {}
+
+    finally:
+        await _release_lock(redis, conv_id, token)
 
 
 # ── Model loader ──────────────────────────────────────────────────────────────
@@ -187,9 +219,10 @@ def load_trajectory_model(model_path: str, config_path: str):
         hidden_dim = config.get("hidden_dim", 64)
         num_layers = config.get("num_layers", 1)
         dropout    = config.get("dropout",    0.1)
+        input_dim  = config.get("input_dim",  67)
 
         model = ConversationLSTM(
-            input_dim=67,
+            input_dim=input_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             output_dim=28,

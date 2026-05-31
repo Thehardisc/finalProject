@@ -16,7 +16,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from typing import Tuple, Optional
 
-MSG_DIM    = 67
+MSG_DIM    = 39
 N_EMOTIONS = 28
 
 

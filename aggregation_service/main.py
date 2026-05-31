@@ -65,6 +65,7 @@ async def main():
                         try:
                             conversation_id = data.get("conversation_id")
                             original_text   = data.get("original_text", "")
+                            user_id         = data.get("user_id", "")
 
                             emotions_map = {}
                             try:
@@ -79,21 +80,26 @@ async def main():
                             if dom_emo:
                                 emotions_map["dominant_emotion"] = dom_emo
 
-                            t0 = time.time()
-                            updated_state = await update_conversation_state(
-                                conversation_id, new_emotions=emotions_map,
-                                r=r, original_text=original_text
-                            )
-                            elapsed = (time.time() - t0) * 1000
-                            mlog.info(
-                                "aggregation_done",
-                                extra={
-                                    "event":      "aggregation_done",
-                                    "latency_ms": round(elapsed, 2),
-                                    "dominant":   dom_emo or "unknown",
-                                    "avg_val":    round(float(updated_state.get("average_valence", 0.0)), 4) if updated_state else 0.0,
-                                },
-                            )
+                            if conversation_id:
+                                t0 = time.time()
+                                updated_state = await update_conversation_state(
+                                    conversation_id, new_emotions=emotions_map,
+                                    r=r, original_text=original_text,
+                                    user_id=user_id,
+                                )
+                                elapsed = (time.time() - t0) * 1000
+                                mlog.info(
+                                    "aggregation_done",
+                                    extra={
+                                        "event":      "aggregation_done",
+                                        "latency_ms": round(elapsed, 2),
+                                        "dominant":   dom_emo or "unknown",
+                                        "avg_val":    round(float(updated_state.get("average_valence", 0.0)), 4) if updated_state else 0.0,
+                                    },
+                                )
+                            else:
+                                mlog.warning("no_conversation_id", extra={"event": "no_conversation_id"})
+                                updated_state = {}
 
                             output_event = data.copy()
                             output_event["conversation_state"] = json.dumps(updated_state)
