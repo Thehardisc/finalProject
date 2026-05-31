@@ -9,6 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
+from shared.module_registry import register_module
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 logger = get_logger("vader_service")
@@ -46,8 +47,9 @@ async def main():
         if "BUSYGROUP" not in str(e):
             logger.error(f"Error creating group: {e}")
 
+    await register_module(r, MODEL_NAME, required=True, schema="scores", logger=logger)
     logger.info(f"{MODEL_NAME} Analysis worker started.")
-    
+
     while True:
         try:
             streams = {STREAM_KEY: ">"}
@@ -57,7 +59,7 @@ async def main():
                 for stream, msgs in messages:
                     for message_id, data in msgs:
                         try:
-                            text_to_analyze = data.get("processed_text", "") or data.get("processed_text_demojized", "")
+                            text_to_analyze = data.get("text", "") or data.get("original_text", "")
                             start_time = time.time()
                             logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
 
@@ -92,7 +94,15 @@ async def main():
                                 pass
 
         except Exception as e:
-            logger.log_exception("VADER WORKER — Redis error, retrying in 1s", e)
+            if "NOGROUP" in str(e):
+                try:
+                    await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
+                    logger.info("Re-created consumer group after NOGROUP error.")
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error(f"Failed to re-create group: {cg_err}")
+            else:
+                logger.log_exception("VADER WORKER — Redis error, retrying in 1s", e)
             await asyncio.sleep(1)
 
 if __name__ == "__main__":

@@ -46,6 +46,10 @@ def calculate_sentiment_velocity(session, conversation_id: str, limit: int = 5) 
 
 async def process_state_event(session, data: dict) -> None:
     conversation_id = data.get("conversation_id")
+    if not conversation_id:
+        logger.warning("No conversation_id provided in state event, skipping.")
+        return
+
     state_json = data.get("conversation_state", "{}")
     try:
         state_obj = json.loads(state_json)

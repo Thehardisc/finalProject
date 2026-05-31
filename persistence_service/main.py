@@ -82,22 +82,33 @@ async def main():
 
     while True:
         try:
-            streams_dict = {stream: ">" for stream in STREAMS}
-            messages = await r.xreadgroup(
+            # PEL recovery: reclaim messages idle >30s per stream (handles crash-before-ACK)
+            stale_messages = []
+            for stream in STREAMS:
+                try:
+                    _, stale, _ = await r.xautoclaim(stream, "persistence_group", CONSUMER_NAME, min_idle_time=30_000, start_id='0-0', count=10)
+                    if stale:
+                        logger.info(f"[PEL] Reclaimed {len(stale)} stale message(s) from {stream}")
+                        stale_messages.append((stream, stale))
+                except Exception:
+                    pass
+
+            messages = stale_messages if stale_messages else await r.xreadgroup(
                 "persistence_group", CONSUMER_NAME,
-                streams_dict, count=10, block=2000
+                {stream: ">" for stream in STREAMS}, count=10, block=2000
             )
 
             if messages:
                 start_time = time.time()
-                session    = SessionLocal()
                 to_ack: list = []
-                to_dlq: list = []  # R2: events that fail processing
-                try:
-                    for stream, msgs in messages:
-                        for message_id, data in msgs:
-                            logger.debug(f"Persisting data from stream: {stream}")
+                success_count = 0
 
+                for stream, msgs in messages:
+                    for message_id, data in msgs:
+                        session = SessionLocal()
+                        logger.debug(f"Persisting data from stream: {stream}")
+                        
+                        try:
                             if stream == "message_stream":
                                 # Pv2: strip null bytes that corrupt PostgreSQL text columns
                                 if "text" in data:
@@ -109,38 +120,39 @@ async def main():
                                 await process_state_event(session, data)
                             elif stream == "feedback_stream":
                                 await process_feedback_event(session, data)
-
+                            
+                            session.commit()
                             to_ack.append((stream, message_id))
+                            success_count += 1
+                        except Exception as e:
+                            session.rollback()
+                            logger.log_exception(
+                                f"SQL TRANSACTION ROLLBACK for {message_id} — routing to DLQ", e
+                            )
+                            # R2: send failed events to DLQ instead of silently dropping
+                            try:
+                                await r.xadd(DLQ_STREAM, {
+                                    "original_stream": stream,
+                                    "original_id":     message_id,
+                                    "error":           str(e)[:500],
+                                    "timestamp":       time.time()
+                                }, maxlen=5000, approximate=True)
+                            except Exception:
+                                pass
+                            # Ensure we ACK the failed message so it doesn't cause a memory leak
+                            to_ack.append((stream, message_id))
+                        finally:
+                            session.close()
 
-                    session.commit()
+                for ack_stream, ack_id in to_ack:
+                    await r.xack(ack_stream, "persistence_group", ack_id)
 
-                    for ack_stream, ack_id in to_ack:
-                        await r.xack(ack_stream, "persistence_group", ack_id)
-
+                if success_count > 0:
                     elapsed = (time.time() - start_time) * 1000
                     logger.info(
-                        f"Successfully persisted batch of {len(to_ack)} events "
+                        f"Successfully persisted batch of {success_count} events "
                         f"in {elapsed:.2f}ms"
                     )
-
-                except Exception as e:
-                    session.rollback()
-                    logger.log_exception(
-                        "SQL TRANSACTION ROLLBACK — routing to DLQ", e
-                    )
-                    # R2: send failed events to DLQ instead of silently dropping
-                    for dlq_stream, dlq_id in to_dlq:
-                        try:
-                            await r.xadd(DLQ_STREAM, {
-                                "original_stream": dlq_stream,
-                                "original_id":     dlq_id,
-                                "error":           str(e)[:500],
-                                "timestamp":       time.time()
-                            }, maxlen=5000, approximate=True)
-                        except Exception:
-                            pass
-                finally:
-                    session.close()
 
         except Exception as e:
             logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)

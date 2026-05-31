@@ -1,6 +1,7 @@
 """
 api_service/routes/messages.py — Message feedback and delete endpoints.
 """
+import json
 import time
 
 from fastapi import APIRouter, HTTPException, Depends
@@ -68,3 +69,52 @@ async def delete_message(message_id: str,
 
     logger.info(f"Message {message_id} deleted by {current_user['sub']}")
     return {"status": "deleted", "message_id": message_id}
+
+
+@router.get("/message/{message_id}/explain",
+            dependencies=[Depends(get_current_user)])
+async def explain_message(message_id: str):
+    """
+    Returns feature-impact breakdown for a message prediction.
+    logic_map shows relative contribution of each ML model (sums to ±1).
+    Suitable for rendering a bar chart in the frontend.
+    """
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT m.text, m.timestamp, m.user_id,
+                   a.pipeline_log_json, a.emotions_json
+            FROM messages m
+            LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
+            WHERE m.message_id = $1
+            """,
+            message_id,
+        )
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found.")
+
+    def _json(s):
+        try:
+            return json.loads(s) if s else {}
+        except Exception:
+            return {}
+
+    pipeline_log = _json(row["pipeline_log_json"])
+    emotions     = _json(row["emotions_json"])
+
+    logic_map = pipeline_log.get("logic_map", {})
+    if not logic_map:
+        raise HTTPException(status_code=404, detail="Feature impact data not available for this message.")
+
+    return {
+        "message_id":    message_id,
+        "text":          row["text"],
+        "timestamp":     row["timestamp"],
+        "dominant":      pipeline_log.get("dominant_selected"),
+        "confidence":    pipeline_log.get("meta_confidence"),
+        "decision_mode": pipeline_log.get("decision_mode", "rule-based"),
+        "feature_impacts": logic_map,
+        "top_emotions":  emotions,
+    }

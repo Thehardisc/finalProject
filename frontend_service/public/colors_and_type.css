@@ -1,0 +1,246 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   InnerLink Design System — Colors & Type
+   Crystal Glass · Zero-Dark · White Canvas
+   ═══════════════════════════════════════════════════════════════════════ */
+
+/* ── Type stack ─────────────────────────────────────────────────────────
+   InnerLink ships no custom webfont. It relies on the system stack with
+   SF Pro / Segoe UI / Inter as the priority. The brand voice and
+   information density depend on the tight `letter-spacing: -0.02em`
+   characteristic of San Francisco. Mirror it on other platforms.
+   ─────────────────────────────────────────────────────────────────────── */
+
+:root {
+
+  /* ── Brand color · Crystal Glass palette ─────────────────────────── */
+  --il-blue:           #0077ff;   /* Primary action. Send button, links, focus */
+  --il-purple:         #7000ff;   /* Secondary accent. Gradient partner to blue */
+  --il-gradient:       linear-gradient(135deg, #0077ff 0%, #7000ff 100%);
+  --il-green:          #00b050;   /* Live/online status */
+  --il-success:        #22c55e;   /* Online presence dot (brighter green) */
+  --il-amber:          #f59e0b;   /* Training banner, warnings */
+  --il-amber-deep:     #d97706;
+  --il-red:            #ff2244;   /* Errors */
+  --il-red-soft:       #ef4444;   /* Destructive button text */
+
+  /* ── Canvas + surface ────────────────────────────────────────────── */
+  --il-canvas:         #ffffff;             /* App background */
+  --il-surface-tint-a: #eef3ff;             /* Cool tint, top-left corner */
+  --il-surface-tint-b: #fff5f0;             /* Warm tint, bottom-right */
+  --il-bg-radial:      radial-gradient(ellipse at 30% 20%, #eef4ff 0%, #ffffff 55%, #fff5f0 100%);
+  
+  /* ── Glass v2 · upgraded blur + saturation ─────────────────────── */
+  --il-glass-bg:       rgba(255, 255, 255, 0.62);  /* More transparent */
+  --il-glass-bg-deep:  rgba(255, 255, 255, 0.75);  /* Modal/overlay */
+  --il-glass-border:   rgba(255, 255, 255, 0.95);  /* Brighter edge */
+  --il-glass-glow:     0 0 24px rgba(255, 255, 255, 0.6);  /* Frosted glow */
+  --il-hairline:       rgba(0, 0, 0, 0.07);   /* dividers */
+  --il-hairline-soft:  rgba(0, 0, 0, 0.045);  /* sunken-tab fill */
+
+  /* ── Foreground ──────────────────────────────────────────────────── */
+  --il-fg-1:           #1c1c2e;   /* Primary text — near-black indigo */
+  --il-fg-2:           #374151;   /* Body, label inactive */
+  --il-fg-3:           #6b7280;   /* Muted, captions */
+  --il-fg-4:           #9ca3af;   /* Placeholders, timestamps */
+  --il-fg-5:           #d1d5db;   /* Inactive dot, disabled */
+
+  /* ── Effects · v2 upgraded ───────────────────────────────────────── */
+  --il-blur:           blur(40px) saturate(200%);     /* Stronger base */
+  --il-blur-strong:    blur(48px) saturate(220%);     /* Modal/gate */
+  --il-blur-emotion:   blur(36px) saturate(240%);     /* Emotion-tinted surfaces */
+  --il-shadow-sm:      0 2px 10px rgba(0, 0, 0, 0.06);
+  --il-shadow-md:      0 8px 32px rgba(0, 0, 0, 0.07);
+  --il-shadow-lg:      0 24px 64px rgba(0, 0, 0, 0.12);
+  --il-shadow-inset:   inset 0 1px 1px rgba(255, 255, 255, 1);
+  --il-shadow-action:  0 6px 20px rgba(0, 119, 255, 0.35);
+  --il-shadow-neon:    0 0 20px rgba(0, 119, 255, 0.15);
+  --il-glow-purple:    0 4px 16px rgba(112, 0, 255, 0.18);
+
+  /* ── Spacing scale ───────────────────────────────────────────────── */
+  --il-space-1:  4px;
+  --il-space-2:  8px;
+  --il-space-3:  12px;
+  --il-space-4:  16px;
+  --il-space-5:  20px;
+  --il-space-6:  24px;
+  --il-space-7:  28px;
+  --il-space-8:  32px;
+
+  /* ── Corner radius ───────────────────────────────────────────────── */
+  --il-radius-xs:  6px;    /* badges */
+  --il-radius-sm:  10px;   /* inputs, tab buttons */
+  --il-radius-md:  12px;   /* buttons, small cards */
+  --il-radius-lg:  18px;   /* conv cards */
+  --il-radius-xl:  20px;   /* glass panels */
+  --il-radius-2xl: 28px;   /* login card, input bar */
+  --il-radius-pill: 999px; /* status pills, capsules */
+  --il-bubble-own: 22px 22px 6px 22px;   /* outgoing chat bubble */
+  --il-bubble-other: 22px 22px 22px 6px; /* incoming chat bubble */
+
+  /* ── Motion ──────────────────────────────────────────────────────── */
+  --il-ease-spring:  cubic-bezier(0.34, 1.2, 0.64, 1);   /* iOS spring */
+  --il-ease-snap:    cubic-bezier(0.34, 1.56, 0.64, 1);  /* punchier overshoot */
+  --il-ease-out:     cubic-bezier(0.25, 1, 0.5, 1);
+  --il-dur-fast:     120ms;
+  --il-dur-base:     220ms;
+  --il-dur-slow:     360ms;
+  --il-dur-drop:     600ms;
+
+  /* ── Type · families ─────────────────────────────────────────────── */
+  --il-font-sans:    -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+                     'Segoe UI', 'Inter', sans-serif;
+  --il-font-display: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  --il-font-mono:    ui-monospace, SFMono-Regular, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /* ── Type · semantic scale ───────────────────────────────────────── */
+  --il-text-hero:        56px;
+  --il-text-hero-weight: 800;
+  --il-text-h1:          28px;
+  --il-text-h1-weight:   800;
+  --il-text-h2:          20px;
+  --il-text-h2-weight:   700;
+  --il-text-h3:          17px;
+  --il-text-h3-weight:   700;
+  --il-text-body:        15px;
+  --il-text-body-weight: 500;
+  --il-text-body-sm:     14px;
+  --il-text-caption:     13px;
+  --il-text-meta:        12px;
+  --il-text-micro:       11px;     /* emotion sublabel, presence text */
+  --il-text-eyebrow:     11px;     /* SECTION LABELS — uppercase */
+
+  /* ── Type · letter-spacing ───────────────────────────────────────── */
+  --il-tracking-tight:  -0.022em;   /* SF Pro default for headings */
+  --il-tracking-normal: 0;
+  --il-tracking-wide:    0.04em;
+  --il-tracking-eyebrow: 0.08em;    /* uppercase labels */
+
+  /* ── Emotion accents (canonical 14, RGB triplets) ────────────────── */
+  /* Use with rgba(var(--emo-joy), .x) for tints. */
+  --emo-joy:           52,  199, 89;
+  --emo-anger:         255, 45,  42;
+  --emo-sadness:       0,   122, 255;
+  --emo-fear:          162, 67,  220;
+  --emo-surprise:      255, 196, 0;
+  --emo-love:          255, 20,  130;
+  --emo-admiration:    255, 85,  165;
+  --emo-curiosity:     255, 210, 0;
+  --emo-optimism:      255, 207, 0;
+  --emo-excitement:    255, 126, 0;
+  --emo-disgust:       120, 60,  14;
+  --emo-confusion:     88,  86,  214;
+  --emo-pride:         124, 32,  226;
+  --emo-neutral:       88,  86,  214;   /* indigo — never gray */
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Semantic element styles
+   Apply with classnames or extend in your stylesheet.
+   ═══════════════════════════════════════════════════════════════════════ */
+
+body, .il-body {
+  font-family: var(--il-font-sans);
+  font-size: var(--il-text-body);
+  line-height: 1.5;
+  color: var(--il-fg-1);
+  background: var(--il-canvas);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Hero — gigantic numbers / dominant emotion */
+.il-hero {
+  font-family: var(--il-font-display);
+  font-size: var(--il-text-hero);
+  font-weight: var(--il-text-hero-weight);
+  letter-spacing: var(--il-tracking-tight);
+  line-height: 1.0;
+  background: var(--il-gradient);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.il-h1 {
+  font-family: var(--il-font-sans);
+  font-size: var(--il-text-h1);
+  font-weight: var(--il-text-h1-weight);
+  letter-spacing: -0.5px;
+  line-height: 1.15;
+  color: var(--il-fg-1);
+}
+
+.il-h2 {
+  font-size: var(--il-text-h2);
+  font-weight: var(--il-text-h2-weight);
+  letter-spacing: var(--il-tracking-tight);
+  line-height: 1.25;
+  color: var(--il-fg-1);
+}
+
+.il-h3 {
+  font-size: var(--il-text-h3);
+  font-weight: var(--il-text-h3-weight);
+  letter-spacing: var(--il-tracking-tight);
+  line-height: 1.3;
+  color: var(--il-fg-1);
+}
+
+.il-body-text {
+  font-size: var(--il-text-body);
+  font-weight: var(--il-text-body-weight);
+  line-height: 1.5;
+  color: var(--il-fg-1);
+}
+
+.il-caption {
+  font-size: var(--il-text-caption);
+  font-weight: 500;
+  color: var(--il-fg-3);
+}
+
+.il-meta {
+  font-size: var(--il-text-meta);
+  color: var(--il-fg-4);
+}
+
+/* Eyebrow — SECTION LABELS, uppercase, tracked out */
+.il-eyebrow {
+  font-size: var(--il-text-eyebrow);
+  font-weight: 700;
+  letter-spacing: var(--il-tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--il-fg-3);
+}
+
+.il-mono {
+  font-family: var(--il-font-mono);
+  font-size: 13px;
+}
+
+/* ───────── Animations the system ships ───────── */
+
+@keyframes il-crystalDrop {
+  0%   { transform: translateY(-32px) scaleY(0.80); opacity: 0; }
+  52%  { transform: translateY(5px)   scaleY(1.05); opacity: 1; }
+  70%  { transform: translateY(-3px)  scaleY(0.97); }
+  85%  { transform: translateY(2px)   scaleY(1.01); }
+  100% { transform: translateY(0)     scaleY(1);    opacity: 1; }
+}
+
+@keyframes il-fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes il-sweepLight {
+  0%   { background-position: -200% center; }
+  100% { background-position: 200% center; }
+}
+
+@keyframes il-pulse {
+  0%, 100% { transform: scale(1);   opacity: 1; }
+  50%      { transform: scale(1.5); opacity: 0.5; }
+}
+
+@keyframes il-spin { to { transform: rotate(360deg); } }

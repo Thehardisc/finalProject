@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
 import TelemetryPanel  from '../components/TelemetryPanel';
 import AnalysisDrawer  from '../components/AnalysisDrawer';
+import DemoRunner      from '../components/DemoRunner';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -56,10 +57,10 @@ function buildDemoMessages(myName, otherName) {
             { label: 'neutral',     score: 0.10 },
             { label: 'joy',         score: 0.05 },
           ],
-          logic_map: { VADER: 0.12, BERT: 0.28, GoEmotions: 0.15, EmojiNet: 0.38, Context: 0.07 },
+          logic_map: { VADER: 0.12, BERT: 0.28, GoEmotions: 0.53, Context: 0.07 },
           sender_id: 'demo-other',
         },
-        ai_insight: 'Sarcasm detected: positive lexical content paired with dismissive 🙄. EmojiNet sarcasm potential: 0.90.',
+        ai_insight: 'Sarcasm detected: positive lexical content paired with dismissive 🙄. Sarcasm score: 0.90.',
       },
     },
     {
@@ -78,7 +79,7 @@ function buildDemoMessages(myName, otherName) {
             { label: 'admiration', score: 0.04 },
             { label: 'neutral',    score: 0.02 },
           ],
-          logic_map: { VADER: 0.38, BERT: 0.22, GoEmotions: 0.24, EmojiNet: 0.12, Context: 0.04 },
+          logic_map: { VADER: 0.38, BERT: 0.22, GoEmotions: 0.36, Context: 0.04 },
           sender_id: 'demo-me',
         },
       },
@@ -99,7 +100,7 @@ function buildDemoMessages(myName, otherName) {
             { label: 'nervousness',    score: 0.10 },
             { label: 'confusion',      score: 0.05 },
           ],
-          logic_map: { VADER: 0.30, BERT: 0.32, GoEmotions: 0.26, EmojiNet: 0.02, Context: 0.10 },
+          logic_map: { VADER: 0.30, BERT: 0.32, GoEmotions: 0.28, Context: 0.10 },
           context_shift: { type: 'Context Shift', from: 'joy', to: 'sadness', significance: 'High' },
           sender_id: 'demo-me',
         },
@@ -122,7 +123,7 @@ function buildDemoMessages(myName, otherName) {
             { label: 'remorse',   score: 0.12 },
             { label: 'relief',    score: 0.07 },
           ],
-          logic_map: { VADER: 0.20, BERT: 0.35, GoEmotions: 0.30, EmojiNet: 0.05, Context: 0.10 },
+          logic_map: { VADER: 0.20, BERT: 0.35, GoEmotions: 0.35, Context: 0.10 },
           sender_id: 'demo-other',
         },
       },
@@ -143,7 +144,7 @@ function buildDemoMessages(myName, otherName) {
             { label: 'gratitude', score: 0.10 },
             { label: 'joy',       score: 0.06 },
           ],
-          logic_map: { VADER: 0.25, BERT: 0.28, GoEmotions: 0.32, EmojiNet: 0.05, Context: 0.10 },
+          logic_map: { VADER: 0.25, BERT: 0.28, GoEmotions: 0.37, Context: 0.10 },
           sender_id: 'demo-me',
         },
         ai_insight: 'Arc recovery: RAGS_TO_RICHES pattern. Valence slope: +2.1 over 3 messages. Trajectory: ASCENDING.',
@@ -182,7 +183,13 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
 
 // ── MsgBubble ─────────────────────────────────────────────────────────────────
 
-function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
+const PIPELINE_MODELS = [
+  { key: 'vader',       label: 'VADER' },
+  { key: 'basic_bert',  label: 'BERT'  },
+  { key: 'go_emotions', label: 'GoE'   },
+];
+
+function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModels }) {
   const [hovered, setHovered] = useState(false);
 
   const bert = msg.analysis?.data?.bert_emotions;
@@ -267,7 +274,26 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
           <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
         )}
         {!msg.analysis && msg.sender === 'user' && (
-          <div style={{ fontSize: '0.64rem', color: '#9ca3af' }}>Analyzing…</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {PIPELINE_MODELS.map(({ key, label }) => {
+              const done = partialModels?.has(key);
+              return (
+                <div key={key} style={{
+                  fontSize: '0.60rem', fontWeight: 700,
+                  padding: '1px 5px', borderRadius: 99,
+                  background: done ? 'rgba(0,119,255,0.13)' : 'rgba(0,0,0,0.05)',
+                  color: done ? '#0077ff' : '#b0b7c3',
+                  border: `1px solid ${done ? 'rgba(0,119,255,0.30)' : 'rgba(0,0,0,0.08)'}`,
+                  transition: 'all 0.25s ease',
+                }}>
+                  {done ? '✓ ' : ''}{label}
+                </div>
+              );
+            })}
+            <span style={{ fontSize: '0.64rem', color: '#9ca3af', marginLeft: 2 }}>
+              {partialModels?.size === 3 ? 'Finalizing…' : 'Processing…'}
+            </span>
+          </div>
         )}
         {isOwn && hovered && onDelete && (
           <button
@@ -403,6 +429,8 @@ export default function IGDashboard({
   onRemoveMember,
   onDeleteMessage,
   onGoToAnalytics,
+  onGoToLiveAnalytics,
+  onGoToAdmin,
   onLogout,
   status,
   messages,
@@ -411,9 +439,12 @@ export default function IGDashboard({
   onSend,
   currentAnalysis,
   processing = false,
+  partialModels = new Set(),
   onRegenerateAnalysis,
   onInjectDemo,
   regeneratingIds = new Set(),
+  socketRef,
+  onDemoStart,
 }) {
   const [search, setSearch]                   = useState('');
   const [showCompose, setShowCompose]         = useState(false);
@@ -579,6 +610,24 @@ export default function IGDashboard({
                 >
                   <span>✨</span> Analytics
                 </button>
+                {onGoToLiveAnalytics && (
+                  <button onClick={() => { setShowProfileMenu(false); onGoToLiveAnalytics(); }}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
+                    onMouseOver={e => e.currentTarget.style.background = '#f8f9fa'}
+                    onMouseOut={e => e.currentTarget.style.background = 'none'}
+                  >
+                    <span>📊</span> Live Analytics
+                  </button>
+                )}
+                {currentUser?.role === 'admin' && (
+                  <button onClick={() => { setShowProfileMenu(false); onGoToAdmin(); }}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 10 }}
+                    onMouseOver={e => e.currentTarget.style.background = '#f5f3ff'}
+                    onMouseOut={e => e.currentTarget.style.background = 'none'}
+                  >
+                    <span>🔬</span> Pipeline Inspector
+                  </button>
+                )}
                 <div style={{ borderTop: '1px solid #f0f0f0' }}>
                   <button onClick={onLogout}
                     style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: 10 }}
@@ -768,6 +817,14 @@ export default function IGDashboard({
                   </button>
                 )}
 
+                {socketRef && onDemoStart && (
+                  <DemoRunner
+                    currentUser={currentUser}
+                    socketRef={socketRef}
+                    onDemoStart={onDemoStart}
+                  />
+                )}
+
                 {onInjectDemo && (
                   <button
                     onClick={() => {
@@ -882,6 +939,7 @@ export default function IGDashboard({
                         isRegenerating={isRegen}
                         onClick={(m) => setSelectedMsg(m)}
                         onDelete={onDeleteMessage}
+                        partialModels={!msg.analysis && msg.sender === 'user' ? partialModels : null}
                       />
 
                       {msg.analysis && !isRegen && onRegenerateAnalysis && (
@@ -950,6 +1008,7 @@ export default function IGDashboard({
             <TelemetryPanel
               processing={processing}
               lastAnalysis={currentAnalysis}
+              partialModels={partialModels}
             />
           )}
         </div>

@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Analytics Dashboard · InnerLink v2</title>
+  <link rel="stylesheet" href="tokens.css"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    
+    .dashboard {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      height: 100vh;
+    }
+
+    /* Sidebar with upgraded glass */
+    .sidebar {
+      background: var(--il-glass-bg);
+      backdrop-filter: var(--il-blur);
+      -webkit-backdrop-filter: var(--il-blur);
+      border-right: 1px solid var(--il-glass-border);
+      box-shadow: var(--il-glass-glow), inset 0 1px 0 rgba(255,255,255,1);
+      display: flex; flex-direction: column;
+      padding: 24px 0;
+    }
+
+    .logo-area {
+      padding: 0 20px 20px;
+      display: flex; align-items: center; gap: 12px;
+      border-bottom: 1px solid var(--il-hairline);
+      margin-bottom: 20px;
+    }
+    .mark {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: linear-gradient(135deg,#0077ff,#7000ff);
+      box-shadow: 0 4px 16px rgba(0,119,255,.35);
+      position: relative; overflow: hidden;
+    }
+    .mark::after {
+      content: ''; position: absolute; inset: 0 0 56% 0;
+      background: rgba(255,255,255,.18);
+    }
+    .logo-text { font-size: 20px; font-weight: 700; color: var(--il-fg-1); letter-spacing: -0.5px; }
+
+    .nav { flex: 1; padding: 0 12px; display: flex; flex-direction: column; gap: 4px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 10px;
+      background: none; border: 0; cursor: pointer;
+      font: inherit; color: var(--il-fg-2);
+      transition: background .15s;
+    }
+    .nav-item:hover { background: rgba(0,0,0,.04); }
+    .nav-item.active {
+      background: linear-gradient(135deg, rgba(0,119,255,.12), rgba(112,0,255,.08));
+      color: #0077ff; font-weight: 600;
+      box-shadow: 0 2px 12px rgba(0,119,255,.16);
+    }
+    .nav-item svg { width: 20px; height: 20px; }
+
+    /* Main */
+    .main {
+      overflow-y: auto;
+      padding: 32px;
+    }
+
+    .page-header {
+      margin-bottom: 28px;
+    }
+    .page-title {
+      font-size: 28px; font-weight: 800; color: var(--il-fg-1);
+      letter-spacing: -0.5px; margin: 0 0 6px 0;
+    }
+    .page-subtitle {
+      font-size: 14px; color: var(--il-fg-3); margin: 0;
+    }
+
+    /* Grid */
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+    .grid-full { grid-column: 1 / -1; }
+
+    /* Cards with new glass */
+    .card {
+      background: var(--il-glass-bg);
+      backdrop-filter: var(--il-blur);
+      -webkit-backdrop-filter: var(--il-blur);
+      border: 1px solid var(--il-glass-border);
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: var(--il-shadow-md), var(--il-shadow-inset), var(--il-glass-glow);
+      animation: ilFadeUp .4s cubic-bezier(.34,1.2,.64,1) both;
+    }
+    .card:nth-child(2) { animation-delay: .08s; }
+    .card:nth-child(3) { animation-delay: .16s; }
+    .card:nth-child(4) { animation-delay: .24s; }
+
+    .card-header {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      margin-bottom: 16px;
+    }
+    .card-title {
+      font-size: 15px; font-weight: 700; color: var(--il-fg-1);
+      margin: 0 0 4px 0;
+    }
+    .card-subtitle {
+      font-size: 11px; color: var(--il-fg-4); text-transform: uppercase;
+      letter-spacing: .06em; font-weight: 600;
+    }
+
+    /* Stat cards */
+    .stat-value {
+      font-size: 36px; font-weight: 800; line-height: 1;
+      background: linear-gradient(135deg, #0077ff, #7000ff);
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 6px;
+    }
+    .stat-label { font-size: 13px; color: var(--il-fg-3); }
+    .stat-change {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 12px; font-weight: 600; margin-top: 8px;
+    }
+    .stat-change.up { color: #22c55e; }
+    .stat-change.down { color: #ff2d2a; }
+    .stat-change svg { width: 14px; height: 14px; }
+
+    /* Timeline chart */
+    .timeline-chart {
+      height: 240px;
+      background: linear-gradient(180deg, rgba(0,119,255,.04) 0%, rgba(112,0,255,.02) 100%);
+      border-radius: 16px;
+      position: relative;
+      overflow: hidden;
+      padding: 24px 20px;
+    }
+    .chart-area {
+      position: relative;
+      width: 100%;
+      height: 100%;
+    }
+    .chart-line {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+    .chart-gradient {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      opacity: 0;
+      animation: ilFadeUp 1.2s cubic-bezier(.34,1.2,.64,1) .3s forwards;
+    }
+    @keyframes ilBarGrow { from { transform: scaleY(0); opacity: 0; } to { transform: scaleY(1); opacity: 1; } }
+
+    /* Emotion breakdown */
+    .emotion-list { display: flex; flex-direction: column; gap: 10px; }
+    .emotion-row {
+      display: flex; align-items: center; gap: 10px;
+    }
+    .emotion-dot {
+      width: 28px; height: 28px; border-radius: 50%;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .emotion-dot svg { width: 16px; height: 16px; }
+    .emotion-name {
+      flex: 1; font-size: 13px; font-weight: 600; color: var(--il-fg-1);
+      text-transform: capitalize;
+    }
+    .emotion-pct {
+      font-size: 14px; font-weight: 700;
+      font-family: var(--il-font-mono);
+    }
+
+    /* Quick insights */
+    .insight-card {
+      background: rgba(0,119,255,.06);
+      border: 1px solid rgba(0,119,255,.20);
+      border-radius: 14px;
+      padding: 14px;
+      font-size: 13px; color: var(--il-fg-2);
+      line-height: 1.5;
+      font-style: italic;
+    }
+    .insight-card strong { color: #0077ff; font-weight: 700; font-style: normal; }
+  </style>
+</head>
+<body>
+  <div class="il-shell">
+    <div class="dashboard">
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="logo-area">
+          <div class="mark"></div>
+          <div class="logo-text">InnerLink</div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item active">
+            <svg><use href="../../assets/icons-gradient.svg#icon-analytics"/></svg>
+            Analytics
+          </button>
+          <button class="nav-item">
+            <svg fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            Messages
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-timeline"/></svg>
+            History
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-group"/></svg>
+            Groups
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-user"/></svg>
+            Profile
+          </button>
+          <button class="nav-item" style="margin-top:auto;">
+            <svg><use href="../../assets/icons-gradient.svg#icon-settings"/></svg>
+            Settings
+          </button>
+        </nav>
+      </div>
+
+      <!-- Main -->
+      <main class="main">
+        <div class="page-header">
+          <h1 class="page-title">Analytics Dashboard</h1>
+          <p class="page-subtitle">Emotion insights · Group dynamics · Conversation patterns</p>
+        </div>
+
+        <div class="grid">
+          <!-- Stat cards -->
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">Messages analyzed</div>
+                <div class="card-title">Total Volume</div>
+              </div>
+              <svg width="24" height="24"><use href="../../assets/icons-gradient.svg#icon-analytics"/></svg>
+            </div>
+            <div class="stat-value">2,847</div>
+            <div class="stat-label">This week</div>
+            <div class="stat-change up">
+              <svg fill="currentColor"><path d="m16 6 2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>
+              +12% from last week
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">Dominant emotion</div>
+                <div class="card-title">Joy Index</div>
+              </div>
+              <svg width="24" height="24"><use href="../../assets/icons-gradient.svg#icon-emotion"/></svg>
+            </div>
+            <div class="stat-value">64%</div>
+            <div class="stat-label">Average joy prevalence</div>
+            <div class="stat-change up">
+              <svg fill="currentColor"><path d="m16 6 2.29 2.29-4.88 4.88-4-4L2 16.59 3.41 18l6-6 4 4 6.3-6.29L22 12V6z"/></svg>
+              +8% from last week
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">Group activity</div>
+                <div class="card-title">Active Groups</div>
+              </div>
+              <svg width="24" height="24"><use href="../../assets/icons-gradient.svg#icon-group"/></svg>
+            </div>
+            <div class="stat-value">12</div>
+            <div class="stat-label">Groups with messages</div>
+            <div class="stat-change down">
+              <svg fill="currentColor"><path d="m16 18 2.29-2.29-4.88-4.88-4 4L2 7.41 3.41 6l6 6 4-4 6.3 6.29L22 12v6z"/></svg>
+              -2 from last week
+            </div>
+          </div>
+
+          <!-- Timeline -->
+          <div class="card grid-full">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">7-day trend</div>
+                <div class="card-title">Emotion Timeline</div>
+              </div>
+              <svg width="20" height="20"><use href="../../assets/icons-gradient.svg#icon-timeline"/></svg>
+            </div>
+            <div class="timeline-chart">
+              <div class="chart-area">
+                <svg width="100%" height="100%" style="position: absolute; bottom: 0; left: 0;">
+                  <defs>
+                    <linearGradient id="joy-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="rgba(52,199,89,0.35)"/>
+                      <stop offset="100%" stop-color="rgba(52,199,89,0.02)"/>
+                    </linearGradient>
+                    <linearGradient id="excitement-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="rgba(255,126,0,0.3)"/>
+                      <stop offset="100%" stop-color="rgba(255,126,0,0.02)"/>
+                    </linearGradient>
+                    <linearGradient id="love-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+                      <stop offset="0%" stop-color="rgba(255,20,130,0.25)"/>
+                      <stop offset="100%" stop-color="rgba(255,20,130,0.02)"/>
+                    </linearGradient>
+                  </defs>
+                  
+                  <!-- Joy wave -->
+                  <path class="chart-gradient" d="M0,120 Q50,80 100,90 T200,85 T300,75 T400,80 T500,70 T600,75 T700,65 L700,200 L0,200 Z" fill="url(#joy-grad)"/>
+                  <path class="chart-gradient" d="M0,120 Q50,80 100,90 T200,85 T300,75 T400,80 T500,70 T600,75 T700,65" fill="none" stroke="rgba(52,199,89,0.7)" stroke-width="2.5" stroke-linecap="round"/>
+                  
+                  <!-- Excitement wave -->
+                  <path class="chart-gradient" d="M0,150 Q50,130 100,140 T200,135 T300,125 T400,130 T500,120 T600,125 T700,115 L700,200 L0,200 Z" fill="url(#excitement-grad)" style="animation-delay: .4s;"/>
+                  <path class="chart-gradient" d="M0,150 Q50,130 100,140 T200,135 T300,125 T400,130 T500,120 T600,125 T700,115" fill="none" stroke="rgba(255,126,0,0.6)" stroke-width="2.5" stroke-linecap="round" style="animation-delay: .4s;"/>
+                  
+                  <!-- Love wave -->
+                  <path class="chart-gradient" d="M0,170 Q50,155 100,165 T200,160 T300,150 T400,155 T500,145 T600,150 T700,140 L700,200 L0,200 Z" fill="url(#love-grad)" style="animation-delay: .6s;"/>
+                  <path class="chart-gradient" d="M0,170 Q50,155 100,165 T200,160 T300,150 T400,155 T500,145 T600,150 T700,140" fill="none" stroke="rgba(255,20,130,0.5)" stroke-width="2.5" stroke-linecap="round" style="animation-delay: .6s;"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- Emotion breakdown -->
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">Top 5 emotions</div>
+                <div class="card-title">Emotion Distribution</div>
+              </div>
+            </div>
+            <div class="emotion-list">
+              <div class="emotion-row">
+                <div class="emotion-dot" style="background: linear-gradient(135deg, rgba(52,199,89,.25), rgba(52,199,89,.15)); border: 2px solid rgba(52,199,89,.4);">
+                  <svg><use href="../../assets/icons-gradient.svg#icon-emotion"/></svg>
+                </div>
+                <div class="emotion-name">Joy</div>
+                <div class="emotion-pct" style="color: rgb(52,199,89);">38%</div>
+              </div>
+              <div class="emotion-row">
+                <div class="emotion-dot" style="background: linear-gradient(135deg, rgba(255,126,0,.25), rgba(255,126,0,.15)); border: 2px solid rgba(255,126,0,.4);">
+                  <svg><use href="../../assets/icons-gradient.svg#icon-sparkles"/></svg>
+                </div>
+                <div class="emotion-name">Excitement</div>
+                <div class="emotion-pct" style="color: rgb(255,126,0);">24%</div>
+              </div>
+              <div class="emotion-row">
+                <div class="emotion-dot" style="background: linear-gradient(135deg, rgba(255,20,130,.25), rgba(255,20,130,.15)); border: 2px solid rgba(255,20,130,.4);">
+                  <svg><use href="../../assets/icons-gradient.svg#icon-emotion"/></svg>
+                </div>
+                <div class="emotion-name">Love</div>
+                <div class="emotion-pct" style="color: rgb(255,20,130);">16%</div>
+              </div>
+              <div class="emotion-row">
+                <div class="emotion-dot" style="background: linear-gradient(135deg, rgba(0,122,255,.25), rgba(0,122,255,.15)); border: 2px solid rgba(0,122,255,.4);">
+                  <svg fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                </div>
+                <div class="emotion-name">Sadness</div>
+                <div class="emotion-pct" style="color: rgb(0,122,255);">12%</div>
+              </div>
+              <div class="emotion-row">
+                <div class="emotion-dot" style="background: linear-gradient(135deg, rgba(88,86,214,.25), rgba(88,86,214,.15)); border: 2px solid rgba(88,86,214,.4);">
+                  <svg fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                </div>
+                <div class="emotion-name">Neutral</div>
+                <div class="emotion-pct" style="color: rgb(88,86,214);">10%</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick insights -->
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <div class="card-subtitle">AI insights</div>
+                <div class="card-title">Conversation Patterns</div>
+              </div>
+              <svg width="20" height="20"><use href="../../assets/icons-gradient.svg#icon-sparkles"/></svg>
+            </div>
+            <div class="insight-card">
+              <strong>Arc recovery detected:</strong> Group "Project Mercury" showed RAGS_TO_RICHES pattern over 3 days. Valence slope: +2.8. Trajectory: ASCENDING.
+            </div>
+            <div class="insight-card" style="margin-top: 10px; background: rgba(255,126,0,.06); border-color: rgba(255,126,0,.20);">
+              <strong>Mood shift alert:</strong> Conversation with Diana Lee experienced sharp drop (Δ = −1.4) on May 21. Sentiment stabilized after intervention.
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

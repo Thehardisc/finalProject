@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
 /**
  * LoginModal
@@ -107,6 +107,7 @@ export default function LoginModal({ onSuccess }) {
                 <div style={styles.tabRow}>
                     <button
                         id="auth-tab-login"
+                        type="button"
                         aria-selected={tab === 'login'}
                         style={{ ...styles.tabBtn, ...(tab === 'login' ? styles.tabActive : {}) }}
                         onClick={() => { setTab('login'); resetForm(); }}
@@ -115,6 +116,7 @@ export default function LoginModal({ onSuccess }) {
                     </button>
                     <button
                         id="auth-tab-register"
+                        type="button"
                         aria-selected={tab === 'register'}
                         style={{ ...styles.tabBtn, ...(tab === 'register' ? styles.tabActive : {}) }}
                         onClick={() => { setTab('register'); resetForm(); }}
@@ -236,6 +238,7 @@ export default function LoginModal({ onSuccess }) {
                         {DEMO_SLOTS.map(({ slot, name, initials, color }) => (
                             <button
                                 key={slot}
+                                type="button"
                                 onClick={() => handleDemoLogin(slot)}
                                 disabled={demoLoading !== null || loading}
                                 style={{

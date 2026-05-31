@@ -1,0 +1,15 @@
+{
+  "trajectory_type": "escalating_conflict",
+  "messages": [
+    "Hey, did you end up submitting that report we talked about?",
+    "I asked you specifically to handle that by Tuesday and now it's Thursday. What happened?",
+    "I'm not trying to be difficult but this is the second time this month. It affects the whole team.",
+    "Don't tell me you were busy, everyone is busy. I stayed late three nights to finish my part.",
+    "You know what, I'm done covering for you. I'm telling the manager exactly what happened.",
+    "No, I'm not overreacting. You keep saying sorry and nothing actually changes.",
+    "This conversation is pointless. I'll handle it myself like I always do.",
+    "Fine. But don't expect me to share credit on the next project.",
+    "I mean it this time. I'm done.",
+    "Just leave me alone right now."
+  ]
+}

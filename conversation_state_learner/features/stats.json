@@ -1,0 +1,14 @@
+{
+  "n_conversations": 185,
+  "n_valid": 185,
+  "n_windows": 1385,
+  "window_dim": 210,
+  "msg_dim": 67,
+  "n_emotions": 28,
+  "window_size": 3,
+  "split": {
+    "train": 964,
+    "val": 200,
+    "test": 221
+  }
+}

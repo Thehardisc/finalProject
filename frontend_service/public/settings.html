@@ -1,0 +1,420 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Settings · InnerLink v2</title>
+  <link rel="stylesheet" href="tokens.css"/>
+  <style>
+    .dashboard {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      height: 100vh;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      background: var(--il-glass-bg);
+      backdrop-filter: var(--il-blur);
+      -webkit-backdrop-filter: var(--il-blur);
+      border-right: 1px solid var(--il-glass-border);
+      box-shadow: var(--il-glass-glow), inset 0 1px 0 rgba(255,255,255,1);
+      display: flex; flex-direction: column;
+      padding: 24px 0;
+    }
+
+    .logo-area {
+      padding: 0 20px 20px;
+      display: flex; align-items: center; gap: 12px;
+      border-bottom: 1px solid var(--il-hairline);
+      margin-bottom: 20px;
+    }
+    .mark {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: linear-gradient(135deg,#0077ff,#7000ff);
+      box-shadow: 0 4px 16px rgba(0,119,255,.35);
+    }
+    .logo-text { font-size: 20px; font-weight: 700; color: var(--il-fg-1); letter-spacing: -0.5px; }
+
+    .nav { flex: 1; padding: 0 12px; display: flex; flex-direction: column; gap: 4px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px; border-radius: 10px;
+      background: none; border: 0; cursor: pointer;
+      font: inherit; color: var(--il-fg-2);
+      transition: background .15s;
+    }
+    .nav-item:hover { background: rgba(0,0,0,.04); }
+    .nav-item.active {
+      background: linear-gradient(135deg, rgba(0,119,255,.12), rgba(112,0,255,.08));
+      color: #0077ff; font-weight: 600;
+      box-shadow: 0 2px 12px rgba(0,119,255,.16);
+    }
+    .nav-item svg { width: 20px; height: 20px; }
+
+    /* Main */
+    .main {
+      overflow-y: auto;
+      padding: 32px;
+      max-width: 900px;
+    }
+
+    .page-header {
+      margin-bottom: 32px;
+    }
+    .page-title {
+      font-size: 28px; font-weight: 800; color: var(--il-fg-1);
+      letter-spacing: -0.5px; margin: 0 0 6px 0;
+    }
+    .page-subtitle {
+      font-size: 14px; color: var(--il-fg-3); margin: 0;
+    }
+
+    /* Section cards */
+    .section {
+      background: var(--il-glass-bg);
+      backdrop-filter: var(--il-blur);
+      -webkit-backdrop-filter: var(--il-blur);
+      border: 1px solid var(--il-glass-border);
+      border-radius: 20px;
+      padding: 24px;
+      margin-bottom: 18px;
+      box-shadow: var(--il-shadow-md), var(--il-shadow-inset), var(--il-glass-glow);
+      animation: ilFadeUp .4s cubic-bezier(.34,1.2,.64,1) both;
+    }
+    .section:nth-child(2) { animation-delay: .08s; }
+    .section:nth-child(3) { animation-delay: .16s; }
+    .section:nth-child(4) { animation-delay: .24s; }
+    .section:nth-child(5) { animation-delay: .32s; }
+
+    .section-title {
+      font-size: 17px; font-weight: 700; color: var(--il-fg-1);
+      margin: 0 0 16px 0;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .section-title svg { width: 22px; height: 22px; }
+
+    /* Settings row */
+    .setting-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--il-hairline);
+    }
+    .setting-row:last-child { border-bottom: 0; }
+    .setting-label {
+      font-size: 14px; font-weight: 600; color: var(--il-fg-1);
+      margin-bottom: 3px;
+    }
+    .setting-desc {
+      font-size: 12px; color: var(--il-fg-3);
+    }
+
+    /* Toggle switch */
+    .toggle {
+      position: relative;
+      width: 48px; height: 28px;
+      background: rgba(0,0,0,.12);
+      border-radius: 14px;
+      cursor: pointer;
+      transition: background .2s;
+    }
+    .toggle::after {
+      content: '';
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 22px; height: 22px;
+      background: white;
+      border-radius: 50%;
+      box-shadow: 0 2px 6px rgba(0,0,0,.18);
+      transition: transform .2s var(--il-ease-spring);
+    }
+    .toggle.on {
+      background: linear-gradient(135deg, #0077ff, #7000ff);
+    }
+    .toggle.on::after {
+      transform: translateX(20px);
+    }
+
+    /* Theme selector */
+    .theme-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .theme-card {
+      background: var(--il-canvas);
+      border: 2px solid var(--il-hairline);
+      border-radius: 14px;
+      padding: 16px;
+      cursor: pointer;
+      transition: all .2s;
+      position: relative;
+      text-align: center;
+    }
+    .theme-card:hover {
+      border-color: rgba(0,119,255,.4);
+      box-shadow: 0 4px 16px rgba(0,119,255,.12);
+    }
+    .theme-card.active {
+      border-color: #0077ff;
+      background: linear-gradient(135deg, rgba(0,119,255,.08), rgba(112,0,255,.04));
+      box-shadow: 0 4px 20px rgba(0,119,255,.2);
+    }
+    .theme-card.active::before {
+      content: '';
+      position: absolute;
+      top: 8px; right: 8px;
+      width: 20px; height: 20px;
+      background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="%230077ff"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>');
+    }
+    .theme-preview {
+      width: 100%; height: 60px;
+      border-radius: 10px;
+      margin-bottom: 10px;
+    }
+    .theme-name {
+      font-size: 13px; font-weight: 600; color: var(--il-fg-1);
+    }
+
+    /* Input field */
+    .input-field {
+      width: 100%;
+      padding: 12px 16px;
+      border: 1.5px solid var(--il-hairline);
+      border-radius: 12px;
+      background: rgba(255,255,255,.5);
+      font: inherit;
+      color: var(--il-fg-1);
+      transition: all .2s;
+    }
+    .input-field:focus {
+      outline: none;
+      border-color: #0077ff;
+      background: rgba(255,255,255,.85);
+      box-shadow: 0 0 0 4px rgba(0,119,255,.12);
+    }
+
+    /* Button */
+    .btn {
+      padding: 11px 20px;
+      border: 0;
+      border-radius: 12px;
+      font: inherit; font-weight: 600;
+      cursor: pointer;
+      transition: all .2s var(--il-ease-spring);
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #0077ff, #7000ff);
+      color: white;
+      box-shadow: 0 4px 16px rgba(0,119,255,.35);
+    }
+    .btn-primary:hover {
+      box-shadow: 0 6px 24px rgba(0,119,255,.45);
+      transform: translateY(-1px);
+    }
+    .btn-secondary {
+      background: rgba(0,0,0,.06);
+      color: var(--il-fg-1);
+    }
+    .btn-secondary:hover {
+      background: rgba(0,0,0,.10);
+    }
+
+    .button-row {
+      display: flex; gap: 10px; margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="il-shell">
+    <div class="dashboard">
+      <!-- Sidebar -->
+      <div class="sidebar">
+        <div class="logo-area">
+          <div class="mark"></div>
+          <div class="logo-text">InnerLink</div>
+        </div>
+        <nav class="nav">
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-analytics"/></svg>
+            Analytics
+          </button>
+          <button class="nav-item">
+            <svg fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+            Messages
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-timeline"/></svg>
+            History
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-group"/></svg>
+            Groups
+          </button>
+          <button class="nav-item">
+            <svg><use href="../../assets/icons-gradient.svg#icon-user"/></svg>
+            Profile
+          </button>
+          <button class="nav-item active" style="margin-top:auto;">
+            <svg><use href="../../assets/icons-gradient.svg#icon-settings"/></svg>
+            Settings
+          </button>
+        </nav>
+      </div>
+
+      <!-- Main -->
+      <main class="main">
+        <div class="page-header">
+          <h1 class="page-title">Settings</h1>
+          <p class="page-subtitle">Preferences · Privacy · Themes · Notifications</p>
+        </div>
+
+        <!-- Themes -->
+        <section class="section">
+          <h2 class="section-title">
+            <svg><use href="../../assets/icons-gradient.svg#icon-palette"/></svg>
+            Theme
+          </h2>
+          <div class="theme-grid">
+            <div class="theme-card active">
+              <div class="theme-preview" style="background: linear-gradient(135deg, rgba(0,119,255,.15), rgba(112,0,255,.10));"></div>
+              <div class="theme-name">Crystal Glass</div>
+            </div>
+            <div class="theme-card">
+              <div class="theme-preview" style="background: linear-gradient(135deg, rgba(52,199,89,.15), rgba(255,196,0,.10));"></div>
+              <div class="theme-name">Warm Joy</div>
+            </div>
+            <div class="theme-card">
+              <div class="theme-preview" style="background: linear-gradient(135deg, rgba(162,67,220,.15), rgba(255,85,165,.10));"></div>
+              <div class="theme-name">Soft Purple</div>
+            </div>
+            <div class="theme-card">
+              <div class="theme-preview" style="background: linear-gradient(135deg, rgba(0,0,0,.08), rgba(0,0,0,.02));"></div>
+              <div class="theme-name">Minimal Gray</div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Notifications -->
+        <section class="section">
+          <h2 class="section-title">
+            <svg><use href="../../assets/icons-gradient.svg#icon-bell"/></svg>
+            Notifications
+          </h2>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Push notifications</div>
+              <div class="setting-desc">Receive alerts for new messages</div>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Emotion alerts</div>
+              <div class="setting-desc">Notify when significant emotion shift detected</div>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Group activity</div>
+              <div class="setting-desc">Alert when mentioned in group conversations</div>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Weekly digest</div>
+              <div class="setting-desc">Summary of emotion trends every Monday</div>
+            </div>
+            <div class="toggle" onclick="this.classList.toggle('on')"></div>
+          </div>
+        </section>
+
+        <!-- Privacy -->
+        <section class="section">
+          <h2 class="section-title">
+            <svg><use href="../../assets/icons-gradient.svg#icon-lock"/></svg>
+            Privacy & Data
+          </h2>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Emotion analysis</div>
+              <div class="setting-desc">Allow ML models to analyze message sentiment</div>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Training pipeline access</div>
+              <div class="setting-desc">Contribute anonymized data to model improvements</div>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Read receipts</div>
+              <div class="setting-desc">Let others see when you've read their messages</div>
+            </div>
+            <div class="toggle on" onclick="this.classList.toggle('on')"></div>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label">Online status</div>
+              <div class="setting-desc">Show live indicator when you're active</div>
+            </div>
+            <div class="toggle" onclick="this.classList.toggle('on')"></div>
+          </div>
+        </section>
+
+        <!-- Account -->
+        <section class="section">
+          <h2 class="section-title">
+            <svg><use href="../../assets/icons-gradient.svg#icon-user"/></svg>
+            Account
+          </h2>
+          <div class="setting-row">
+            <div style="flex: 1;">
+              <div class="setting-label">Display name</div>
+              <input type="text" class="input-field" value="Alex Chen" style="margin-top: 8px;"/>
+            </div>
+          </div>
+          <div class="setting-row">
+            <div style="flex: 1;">
+              <div class="setting-label">Email address</div>
+              <input type="email" class="input-field" value="alex@innerlink.ai" style="margin-top: 8px;"/>
+            </div>
+          </div>
+          <div class="button-row">
+            <button class="btn btn-primary">Save changes</button>
+            <button class="btn btn-secondary">Cancel</button>
+          </div>
+        </section>
+
+        <!-- Danger zone -->
+        <section class="section" style="border: 2px solid rgba(255,45,42,.2); background: rgba(255,45,42,.03);">
+          <h2 class="section-title">
+            <svg><use href="../../assets/icons-gradient.svg#icon-warning"/></svg>
+            Danger Zone
+          </h2>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label" style="color: #ff2d2a;">Delete all conversation data</div>
+              <div class="setting-desc">Permanently erase message history and emotion records</div>
+            </div>
+            <button class="btn" style="background: rgba(255,45,42,.1); color: #ff2d2a; font-weight: 600;">Delete</button>
+          </div>
+          <div class="setting-row">
+            <div>
+              <div class="setting-label" style="color: #ff2d2a;">Deactivate account</div>
+              <div class="setting-desc">Temporarily disable your InnerLink account</div>
+            </div>
+            <button class="btn" style="background: rgba(255,45,42,.1); color: #ff2d2a; font-weight: 600;">Deactivate</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

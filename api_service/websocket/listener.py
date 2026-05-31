@@ -86,11 +86,32 @@ async def _handle_reasoning_update(message_id, data):
                     await manager.broadcast_to_user(r["user_id"], payload)
 
 
+async def _handle_partial_result(message_id, data):
+    payload = {
+        "type":       "partial",
+        "message_id": data.get("message_id"),
+        "model":      data.get("model"),
+    }
+    convo_id = data.get("conversation_id")
+    if not convo_id:
+        return
+    pool = get_pool()
+    if not pool:
+        return
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id FROM conversation_participants WHERE conversation_id = $1",
+            convo_id,
+        )
+        for r in rows:
+            await manager.broadcast_to_user(r["user_id"], payload)
+
+
 async def redis_listener(redis_client) -> None:
     """Listen to Redis streams and push updates to connected WebSocket clients."""
     logger.info("Starting Redis Listener for WebSockets...")
     r = redis_client.redis
-    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream"]
+    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream", "partial_result_stream"]
     last_ids = {k: "$" for k in STREAM_KEYS}
 
     while True:
@@ -106,6 +127,8 @@ async def redis_listener(redis_client) -> None:
                             await _handle_conversation_update(message_id, data)
                         elif stream_name == "reasoning_update_stream":
                             await _handle_reasoning_update(message_id, data)
+                        elif stream_name == "partial_result_stream":
+                            await _handle_partial_result(message_id, data)
         except Exception as e:
             logger.log_exception("WebSocket Redis Listener Error", e)
             await asyncio.sleep(1)

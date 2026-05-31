@@ -8,6 +8,7 @@ import json
 import asyncio
 import time
 import uuid
+from collections import OrderedDict
 from typing import List, Optional
 
 # Add parent directory to path to import shared
@@ -45,6 +46,7 @@ db_pool = None  # kept for inline endpoints that reference it directly
 
 # ── Health ─────────────────────────────────────────────────────────────────────
 
+@app.get("/health")
 @app.get("/health/status")
 async def get_system_status():
     """Returns readiness status for subsystems. Returns 503 if not ready."""
@@ -63,7 +65,9 @@ async def get_system_status():
     try:
         if db_pool:
             async with db_pool.acquire() as conn:
-                await conn.fetchval("SELECT 1 FROM messages LIMIT 0")
+                await asyncio.wait_for(
+                    conn.fetchval("SELECT 1 FROM messages LIMIT 0"), timeout=5.0
+                )
                 db_ok = True
     except Exception:
         pass
@@ -95,6 +99,35 @@ async def get_system_status():
         return JSONResponse(content=payload, status_code=503)
 
     return payload
+
+
+# ── Stream Metrics ─────────────────────────────────────────────────────────────
+
+MONITORED_STREAMS = [
+    "message_stream",
+    "preprocessed_stream",
+    "partial_analysis_stream",
+    "emotion_stream",
+    "conversation_update_stream",
+]
+
+@app.get("/metrics/streams")
+async def get_stream_depths():
+    """Returns current XLEN for each Redis stream. Use as an early warning for consumer lag."""
+    if not redis_client.redis:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "redis unavailable"}, status_code=503)
+    try:
+        depths = {}
+        for stream in MONITORED_STREAMS:
+            try:
+                depths[stream] = await redis_client.redis.xlen(stream)
+            except Exception:
+                depths[stream] = None
+        return {"timestamp": time.time(), "streams": depths, "maxlen": int(os.getenv("REDIS_STREAM_MAXLEN", 10_000))}
+    except Exception as e:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 # ── WebSocket Manager ──────────────────────────────────────────────────────────
@@ -131,6 +164,26 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
+# LRU cache: conversation_id → [user_id, ...]; evicts oldest when >1000 entries
+_participant_cache: OrderedDict = OrderedDict()
+_PARTICIPANT_CACHE_MAX = 1000
+
+
+async def _get_participants(pool, conv_id: str) -> list:
+    """Fetch conversation participants with LRU caching to avoid N+1 DB queries."""
+    if conv_id in _participant_cache:
+        _participant_cache.move_to_end(conv_id)
+        return _participant_cache[conv_id]
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT user_id FROM conversation_participants WHERE conversation_id = $1", conv_id
+        )
+    user_ids = [r["user_id"] for r in rows]
+    _participant_cache[conv_id] = user_ids
+    if len(_participant_cache) > _PARTICIPANT_CACHE_MAX:
+        _participant_cache.popitem(last=False)
+    return user_ids
+
 
 # ── Redis Stream → WebSocket bridge ───────────────────────────────────────────
 
@@ -155,8 +208,8 @@ async def _handle_conversation_update(message_id, data):
     payload = {
         "type": "analysis",
         "data": {
-            "id":                     str(message_id),
-            "conversation_id":        convo_id,        # required for frontend per-conversation filtering
+            "id":                     data.get("message_id") or str(message_id),
+            "conversation_id":        convo_id,
             "raw_text":               raw_text,
             "final_dominant_emotion": dom_emo,
             "final_valence":          float(ems.get("vader_compound", 0)),
@@ -165,6 +218,8 @@ async def _handle_conversation_update(message_id, data):
             "context_shift":          json.loads(data.get("context_shift", "null")),
             "logic_map":              pipeline_log.get("logic_map", {}),
             "sender_id":              data.get("user_id"),
+            "context_snapshot":       pipeline_log.get("context_snapshot"),
+            "lstm_trajectory":        pipeline_log.get("trajectory"),
         },
         "vibe": {
             "valence":     conv_state.get("average_valence", 0),
@@ -172,13 +227,9 @@ async def _handle_conversation_update(message_id, data):
         },
     }
 
-    pool = get_pool()
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT user_id FROM conversation_participants WHERE conversation_id = $1", convo_id
-        )
-        for r in rows:
-            await manager.broadcast_to_user(r["user_id"], payload)
+    user_ids = await _get_participants(get_pool(), convo_id)
+    for uid in user_ids:
+        await manager.broadcast_to_user(uid, payload)
 
 
 async def _handle_reasoning_update(message_id, data):
@@ -195,19 +246,30 @@ async def _handle_reasoning_update(message_id, data):
             convo_id = await conn.fetchval(
                 "SELECT conversation_id FROM messages WHERE message_id = $1", msg_id
             )
-            if convo_id:
-                rows = await conn.fetch(
-                    "SELECT user_id FROM conversation_participants WHERE conversation_id = $1", convo_id
-                )
-                for r in rows:
-                    await manager.broadcast_to_user(r["user_id"], payload)
+        if convo_id:
+            user_ids = await _get_participants(pool, convo_id)
+            for uid in user_ids:
+                await manager.broadcast_to_user(uid, payload)
+
+
+async def _handle_model_ready(message_id, data):
+    payload = {
+        "type":       "model_ready",
+        "message_id": data.get("message_id"),
+        "model":      data.get("model"),
+    }
+    conv_id = data.get("conversation_id")
+    if conv_id:
+        user_ids = await _get_participants(get_pool(), conv_id)
+        for uid in user_ids:
+            await manager.broadcast_to_user(uid, payload)
 
 
 async def redis_listener():
     """Listen to Redis streams and push updates to connected WebSocket clients."""
     logger.info("Starting Redis Listener for WebSockets...")
     r = redis_client.redis
-    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream"]
+    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream", "partial_result_stream"]
     last_ids = {k: "$" for k in STREAM_KEYS}
 
     while True:
@@ -223,6 +285,8 @@ async def redis_listener():
                             await _handle_conversation_update(message_id, data)
                         elif stream_name == "reasoning_update_stream":
                             await _handle_reasoning_update(message_id, data)
+                        elif stream_name == "partial_result_stream":
+                            await _handle_model_ready(message_id, data)
         except Exception as e:
             logger.log_exception("WebSocket Redis Listener Error", e)
             await asyncio.sleep(1)
@@ -260,7 +324,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 msg_obj = json.loads(data)
                 text = msg_obj.get("text")
                 if text:
-                    sender = msg_obj.get("sender_id", user_id)
+                    # Admins may impersonate sender_id (used by DemoRunner for bi-directional demo)
+                    sender = (
+                        msg_obj.get("sender_id")
+                        if user_data.get("role") == "admin" and msg_obj.get("sender_id")
+                        else user_id
+                    )
                     conversation_id = msg_obj.get("conversation_id")
                     if not conversation_id:
                         await websocket.send_json({"type": "error", "message": "conversation_id is required."})
@@ -455,7 +524,7 @@ async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = 
         )
     if result == "UPDATE 0":
         raise HTTPException(status_code=404, detail="User not found.")
-    logger.info(f"Admin {admin['username']} updated user {user_id}: {req.dict(exclude_none=True)}")
+    logger.info(f"Admin {admin['display_name']} updated user {user_id}: {req.dict(exclude_none=True)}")
     return {"status": "updated", "user_id": user_id}
 
 
@@ -468,8 +537,167 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
         result = await conn.execute("DELETE FROM users WHERE user_id = $1", user_id)
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="User not found.")
-    logger.info(f"Admin {admin['username']} deleted user {user_id}")
+    logger.info(f"Admin {admin['display_name']} deleted user {user_id}")
     return
+
+
+@app.get("/admin/recent-analyses")
+async def admin_recent_analyses(
+    limit: int = 50,
+    conversation_id: Optional[str] = None,
+    admin: dict = Depends(require_admin),
+):
+    """List recent messages with emotion analyses. Admin only."""
+    async with db_pool.acquire() as conn:
+        if conversation_id:
+            rows = await conn.fetch(
+                """
+                SELECT m.message_id, m.text, m.timestamp, m.user_id,
+                       m.conversation_id, u.display_name,
+                       a.pipeline_log_json
+                FROM messages m
+                LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
+                LEFT JOIN users u ON m.user_id = u.user_id
+                WHERE m.conversation_id = $1
+                ORDER BY m.timestamp DESC LIMIT $2
+                """,
+                conversation_id, limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT m.message_id, m.text, m.timestamp, m.user_id,
+                       m.conversation_id, u.display_name,
+                       a.pipeline_log_json
+                FROM messages m
+                LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
+                LEFT JOIN users u ON m.user_id = u.user_id
+                ORDER BY m.timestamp DESC LIMIT $1
+                """,
+                limit,
+            )
+
+    results = []
+    for row in rows:
+        d = dict(row)
+        dominant, confidence = "—", None
+        if d.get("pipeline_log_json"):
+            try:
+                pl = json.loads(d["pipeline_log_json"])
+                dominant   = pl.get("dominant_selected", "—")
+                confidence = pl.get("meta_confidence")
+            except Exception:
+                pass
+        results.append({
+            "message_id":      d["message_id"],
+            "text":            (d["text"] or "")[:120],
+            "timestamp":       d["timestamp"],
+            "user_id":         d["user_id"],
+            "display_name":    d.get("display_name") or d["user_id"][:8],
+            "conversation_id": d["conversation_id"],
+            "dominant":        dominant,
+            "confidence":      round(confidence * 100, 1) if confidence is not None else None,
+            "has_pipeline":    d.get("pipeline_log_json") is not None,
+        })
+    return results
+
+
+@app.get("/admin/pipeline/{message_id}")
+async def admin_pipeline_detail(
+    message_id: str,
+    admin: dict = Depends(require_admin),
+):
+    """Full step-by-step pipeline breakdown for a message. Admin only."""
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT m.message_id, m.text, m.timestamp, m.user_id,
+                   m.conversation_id, u.display_name,
+                   a.emotions_json, a.pipeline_log_json, a.reasoning_json,
+                   a.ground_truth_emotion, a.is_verified
+            FROM messages m
+            LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
+            LEFT JOIN users u ON m.user_id = u.user_id
+            WHERE m.message_id = $1
+            """,
+            message_id,
+        )
+        prev_rows = await conn.fetch(
+            """
+            SELECT m.message_id, m.text, m.timestamp, u.display_name,
+                   a.pipeline_log_json
+            FROM messages m
+            LEFT JOIN emotion_analysis a ON m.message_id = a.message_id
+            LEFT JOIN users u ON m.user_id = u.user_id
+            WHERE m.conversation_id = $1 AND m.timestamp < $2
+            ORDER BY m.timestamp DESC LIMIT 10
+            """,
+            row["conversation_id"] if row else "",
+            row["timestamp"] if row else 0,
+        ) if row else []
+
+    if not row:
+        raise HTTPException(status_code=404, detail="Message not found.")
+
+    d = dict(row)
+
+    def _json(s):
+        try:
+            return json.loads(s) if s else {}
+        except Exception:
+            return {}
+
+    emotions     = _json(d.get("emotions_json"))
+    pipeline_log = _json(d.get("pipeline_log_json"))
+    reasoning    = _json(d.get("reasoning_json"))
+    models       = pipeline_log.get("models", {})
+
+    trajectory = []
+    for r in reversed(prev_rows):
+        pl = _json(r["pipeline_log_json"])
+        trajectory.append({
+            "message_id":   r["message_id"],
+            "text":         (r["text"] or "")[:80],
+            "timestamp":    r["timestamp"],
+            "display_name": r.get("display_name"),
+            "dominant":     pl.get("dominant_selected", "neutral"),
+            "confidence":   pl.get("meta_confidence"),
+        })
+
+    return {
+        "message": {
+            "id":              d["message_id"],
+            "text":            d["text"],
+            "timestamp":       d["timestamp"],
+            "user_id":         d["user_id"],
+            "display_name":    d.get("display_name") or d["user_id"][:8],
+            "conversation_id": d["conversation_id"],
+        },
+        "stages": {
+            "vader":      models.get("vader", {}),
+            "bert":       models.get("basic_bert", {}),
+            "goemotions": models.get("go_emotions", {}),
+        },
+        "decision": {
+            "aggregated":    pipeline_log.get("aggregated", {}),
+            "dominant":      pipeline_log.get("dominant_selected"),
+            "confidence":    pipeline_log.get("meta_confidence"),
+            "decision_mode": pipeline_log.get("decision_mode", "rule-based"),
+            "logic_map":             pipeline_log.get("logic_map", {}),
+            "ctx_correction_weight": pipeline_log.get("ctx_correction_weight", 0.0),
+            "sarcasm_score":         pipeline_log.get("sarcasm_score", 0),
+            "conflict":              pipeline_log.get("conflict"),
+        },
+        "context": {
+            "reasoning":        reasoning,
+            "raw_emotions":     emotions,
+            "context_snapshot": pipeline_log.get("context_snapshot"),
+            "lstm_trajectory":  pipeline_log.get("trajectory"),
+        },
+        "ground_truth": d.get("ground_truth_emotion"),
+        "is_verified":  d.get("is_verified", False),
+        "trajectory":   trajectory,
+    }
 
 
 # ── Users / Presence ───────────────────────────────────────────────────────────
@@ -481,13 +709,13 @@ async def get_online_users():
 
 
 DEMO_USERS = [
-    {"email": "alice@demo.innerlink",   "first_name": "Alice",   "last_name": "Chen"},
-    {"email": "bob@demo.innerlink",     "first_name": "Bob",     "last_name": "Kim"},
-    {"email": "charlie@demo.innerlink", "first_name": "Charlie", "last_name": "Park"},
-    {"email": "diana@demo.innerlink",   "first_name": "Diana",   "last_name": "Lee"},
-    {"email": "eve@demo.innerlink",     "first_name": "Eve",     "last_name": "Zhao"},
+    {"user_id": "531c7f56-e5c4-4557-9b2d-e7e8ed7c942f", "email": "alice@demo.innerlink",   "first_name": "Alice",   "last_name": "Chen",  "role": "admin"},
+    {"user_id": "90b04411-2879-4e2d-adb9-cf254793d1d2", "email": "bob@demo.innerlink",     "first_name": "Bob",     "last_name": "Kim"},
+    {"user_id": "b3c15d22-3f4a-4b8e-a1c9-df365804e3a1", "email": "charlie@demo.innerlink", "first_name": "Charlie", "last_name": "Park"},
+    {"user_id": "c4d26e33-4f5b-4c9f-b2da-ef476915f4b2", "email": "diana@demo.innerlink",   "first_name": "Diana",   "last_name": "Lee"},
+    {"user_id": "d5e37f44-5f6c-4d0f-c3eb-f0587a26f5c3", "email": "eve@demo.innerlink",     "first_name": "Eve",     "last_name": "Zhao"},
 ]
-_DEMO_PW = "demo-innerlink-2026"
+_DEMO_PW = os.environ.get("DEMO_PASSWORD", "demo-innerlink-2026")
 
 
 @app.post("/auth/demo-login/{slot}")
@@ -500,15 +728,21 @@ async def demo_login(slot: int, response: Response):
         row = await conn.fetchrow(
             "SELECT user_id, display_name, role FROM users WHERE email = $1", demo["email"]
         )
+        desired_role = demo.get("role", "user")
         if row:
             user_id      = row["user_id"]
             display_name = row["display_name"]
             role         = row["role"]
+            if role != desired_role:
+                await conn.execute(
+                    "UPDATE users SET role = $1 WHERE user_id = $2", desired_role, user_id
+                )
+                role = desired_role
         else:
-            user_id      = str(uuid.uuid4())
+            user_id      = demo.get("user_id") or str(uuid.uuid4())
             display_name = f"{demo['first_name']} {demo['last_name']}"
             pw_hash      = hash_password(_DEMO_PW)
-            role         = "user"
+            role         = desired_role
             await conn.execute(
                 """INSERT INTO users
                    (user_id, email, first_name, last_name, display_name,

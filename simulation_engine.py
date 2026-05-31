@@ -110,8 +110,16 @@ async def run_simulation(scenario: str = "A late night argument that ends in rec
             "metadata": {"source": "simulation_engine"}
         }
         
-        # Inject to Redis exactly how the API Gateway does it
-        await redis.xadd("message_stream", {"payload": json.dumps(event)})
+        # Format event data properly (stringifying nested dicts like ingestion_service does)
+        prepared_data = {}
+        for k, v in event.items():
+            if isinstance(v, (dict, list)):
+                prepared_data[k] = json.dumps(v)
+            else:
+                prepared_data[k] = str(v)
+                
+        # Inject to Redis
+        await redis.xadd("message_stream", prepared_data, maxlen=10_000, approximate=True)
         
         print(f"[{time.strftime('%H:%M:%S', time.localtime(current_simulated_time))}] {actor}: {text}")
         
