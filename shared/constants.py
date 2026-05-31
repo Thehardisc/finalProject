@@ -66,3 +66,8 @@ CDM_STATES = [
     "DIVERGING",          # 6 — speakers moving apart emotionally
 ]
 N_CDM_STATES = len(CDM_STATES)
+
+# Alias for backward compatibility with meta_learner's gating network.
+# In the old HMM this was P(current_state); in CDM the semantically equivalent
+# scalar is CTX_RESIDENCY — both are 0-1 confidence in the current state.
+CTX_HMM_CONF = CTX_RESIDENCY

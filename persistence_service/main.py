@@ -106,8 +106,14 @@ async def main():
                 for stream, msgs in messages:
                     for message_id, data in msgs:
                         session = SessionLocal()
-                        logger.debug(f"Persisting data from stream: {stream}")
-                        
+                        biz_mid = data.get("message_id", "")
+                        mlog = logger.bind(
+                            message_id=biz_mid,
+                            conversation_id=data.get("conversation_id", ""),
+                            user_id=data.get("user_id", ""),
+                            stream=stream,
+                        )
+                        mlog.debug("persist_dispatch", extra={"event": "persist_dispatch"})
                         try:
                             if stream == "message_stream":
                                 # Pv2: strip null bytes that corrupt PostgreSQL text columns
@@ -120,26 +126,35 @@ async def main():
                                 await process_state_event(session, data)
                             elif stream == "feedback_stream":
                                 await process_feedback_event(session, data)
-                            
+
                             session.commit()
                             to_ack.append((stream, message_id))
                             success_count += 1
                         except Exception as e:
                             session.rollback()
-                            logger.log_exception(
-                                f"SQL TRANSACTION ROLLBACK for {message_id} — routing to DLQ", e
+                            mlog.error(
+                                "persistence_failed",
+                                extra={
+                                    "event":       "persistence_failed",
+                                    "error_class": type(e).__name__,
+                                    "error":       str(e)[:500],
+                                },
+                                exc_info=True,
                             )
-                            # R2: send failed events to DLQ instead of silently dropping
                             try:
                                 await r.xadd(DLQ_STREAM, {
                                     "original_stream": stream,
                                     "original_id":     message_id,
+                                    "message_id":      biz_mid or "",
+                                    "error_class":     type(e).__name__,
                                     "error":           str(e)[:500],
-                                    "timestamp":       time.time()
+                                    "timestamp":       time.time(),
                                 }, maxlen=5000, approximate=True)
-                            except Exception:
-                                pass
-                            # Ensure we ACK the failed message so it doesn't cause a memory leak
+                            except Exception as dlq_err:
+                                mlog.warning(
+                                    "dlq_write_failed",
+                                    extra={"event": "dlq_write_failed", "stream": stream, "error": str(dlq_err)},
+                                )
                             to_ack.append((stream, message_id))
                         finally:
                             session.close()
@@ -150,9 +165,14 @@ async def main():
                 if success_count > 0:
                     elapsed = (time.time() - start_time) * 1000
                     logger.info(
-                        f"Successfully persisted batch of {success_count} events "
-                        f"in {elapsed:.2f}ms"
+                        "persist_batch_done",
+                        extra={
+                            "event":      "persist_batch_done",
+                            "batch_size": success_count,
+                            "latency_ms": round(elapsed, 2),
+                        },
                     )
+
 
         except Exception as e:
             logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)

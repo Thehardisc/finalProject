@@ -12,6 +12,8 @@ frontend_service/node_modules/
 # ── ML Model artifacts (generated, not source) ─
 central_responder_service/models/*.pkl
 central_responder_service/models/*.json
+central_responder_service/models/*.sha256
+central_responder_service/models/.ready
 !central_responder_service/models/.gitkeep
 
 # ── Runtime logs ──────────────────────────────
@@ -29,3 +31,4 @@ output_utf8.txt
 .vscode/
 .idea/
 *.swp
+CLAUDE.md

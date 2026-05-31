@@ -2,9 +2,13 @@
 Self-contained ConversationLSTM definition for inference inside central_responder.
 Mirrors conversation_state_learner/models/lstm.py exactly — kept in sync manually.
 
-Input  per timestep : 39-dim  (go_emotions 28 + bert 7 + vader 4)
+Input  per timestep : 67-dim  (go_emotions 28 + bert 7 + vader 4 + emoji 28)
 Output per timestep : 28-dim  predicted next-message emotion distribution
 Hidden state h_t    : [num_layers, 1, hidden_dim] — the learned conversation state
+
+The checkpoint at central_responder_service/models/trajectory_lstm.pt was
+trained with the 67-dim layout; inference.py passes input_dim=67 to the
+constructor explicitly. The default below is the truth-as-trained.
 """
 
 import torch
