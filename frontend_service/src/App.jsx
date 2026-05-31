@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import LoginModal from './components/LoginModal';
+import DemoRunner from './components/DemoRunner';
 import IGDashboard from './pages/IGDashboard';
 import AnalyticsPage from './pages/AnalyticsPage';
-import './glass/CrystalGlass.css';
+import LiveAnalyticsDashboardPage from './pages/LiveAnalyticsDashboardPage';
+import AdminPipelinePage from './pages/AdminPipelinePage';
+import './glass/CrystalGlass-v2.css';
 
-const API_BASE = 'http://localhost:8001';
-const WS_BASE  = 'ws://localhost:8001';
+const API_BASE = import.meta.env.VITE_API_URL  || 'http://localhost:8001';
+const WS_BASE  = import.meta.env.VITE_WS_URL   || 'ws://localhost:8001';
 
 axios.defaults.withCredentials = true;
 
@@ -16,6 +19,9 @@ function parseAnalysis(msg) {
   if (!msg.emotions) return null;
   try {
     const ems = typeof msg.emotions === 'string' ? JSON.parse(msg.emotions) : msg.emotions;
+    const pl  = msg.pipeline_log
+      ? (typeof msg.pipeline_log === 'string' ? JSON.parse(msg.pipeline_log) : msg.pipeline_log)
+      : {};
     const bert_list = [];
     for (const [k, v] of Object.entries(ems)) {
       if (!['vader_neg','vader_neu','vader_pos','vader_compound',
@@ -28,14 +34,18 @@ function parseAnalysis(msg) {
       data: {
         id:                     msg.id,
         raw_text:               msg.content || msg.text,
-        final_dominant_emotion: ems.dominant_emotion || 'Neutral',
+        final_dominant_emotion: ems.dominant_emotion || pl.dominant_selected || 'Neutral',
         final_valence:          ems.vader_compound || 0,
         bert_emotions:          bert_list,
         llm_insights:           'Analysis loaded.',
-        llm_sarcasm_score:      0,
+        llm_sarcasm_score:      pl.sarcasm_score || 0,
         hierarchical_scores:    [],
         emojis_found:           [],
         slang_detected:         {},
+        meta_confidence:        pl.meta_confidence ?? null,
+        logic_map:              pl.logic_map || null,
+        context_snapshot:       pl.context_snapshot || null,
+        lstm_trajectory:        pl.trajectory || null,
       },
     };
   } catch {
@@ -46,7 +56,7 @@ function parseAnalysis(msg) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics'
+  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'live-analytics' | 'admin'
 
   // ── Auth ────────────────────────────────────────────────────────────────
   const [currentUser, setCurrentUser]       = useState(null);
@@ -72,6 +82,7 @@ export default function App() {
   const [analyticsData, setAnalyticsData]           = useState(null);
   const [mlProcessing, setMlProcessing]             = useState(false);
   const [regeneratingIds, setRegeneratingIds]       = useState(new Set());
+  const [partialModels, setPartialModels]           = useState(new Set());
 
   const socketRef      = useRef(null);
   const activeConvRef  = useRef(activeConversationId); // tracks current conv without causing WS reconnect
@@ -212,6 +223,7 @@ export default function App() {
             if (convId && convId !== activeConvRef.current) return;
 
             setMlProcessing(false);
+            setPartialModels(new Set());
             setRegeneratingIds(prev => { const n = new Set(prev); n.delete(payload.data?.id); return n; });
             setCurrentAnalysis(prev => ({ ...payload, ai_insight: null, loadingReasoning: true }));
 
@@ -248,6 +260,12 @@ export default function App() {
               }
               return prev;
             });
+          } else if (payload.type === 'model_ready') {
+            setPartialModels(prev => {
+              const next = new Set(prev);
+              next.add(payload.model);
+              return next;
+            });
           }
         } catch {}
       };
@@ -255,7 +273,8 @@ export default function App() {
       ws.onclose = (event) => {
         if (!mountedRef.current) return;
         setStatus('Offline');
-        if (event.code === 1000 || event.code === 1008) return;
+        if (event.code === 1000) return;
+        if (event.code === 1008) { handleLogout(); return; }
         if (retryCountRef.current < MAX_RETRIES) {
           const delay = Math.min(BASE_DELAY * 2 ** retryCountRef.current, 30_000);
           retryCountRef.current++;
@@ -387,6 +406,7 @@ export default function App() {
     };
     setMessages(prev => [...prev, optimistic]);
     setMlProcessing(true);
+    setPartialModels(new Set());
     socketRef.current.send(JSON.stringify({
       text:            inputValue,
       recipient_id:    'system',
@@ -409,6 +429,13 @@ export default function App() {
     setMessages(demoMessages);
     const last = demoMessages[demoMessages.length - 1];
     if (last?.analysis) setCurrentAnalysis(last.analysis);
+  };
+
+  const handleDemoStart = async (convId) => {
+    await fetchConversations();
+    setActiveConversationId(convId);
+    setMessages([]);
+    setCurrentAnalysis(null);
   };
 
   // ── Render: loading gate ──────────────────────────────────────────────────
@@ -482,6 +509,8 @@ export default function App() {
           onRemoveMember={handleRemoveMember}
           onDeleteMessage={handleDeleteMessage}
           onGoToAnalytics={() => setView('analytics')}
+          onGoToLiveAnalytics={() => setView('live-analytics')}
+          onGoToAdmin={() => setView('admin')}
           onLogout={handleLogout}
           status={status}
           messages={messages}
@@ -490,9 +519,12 @@ export default function App() {
           onSend={sendMessage}
           currentAnalysis={currentAnalysis}
           processing={mlProcessing}
+          partialModels={partialModels}
           regeneratingIds={regeneratingIds}
           onRegenerateAnalysis={handleRegenerateAnalysis}
           onInjectDemo={handleInjectDemo}
+          socketRef={socketRef}
+          onDemoStart={handleDemoStart}
         />
       )}
 
@@ -504,6 +536,20 @@ export default function App() {
           currentUser={currentUser}
           onBack={() => setView('dashboard')}
           onRefresh={fetchAnalytics}
+        />
+      )}
+
+      {view === 'live-analytics' && (
+        <LiveAnalyticsDashboardPage
+          currentUser={currentUser}
+          onBack={() => setView('dashboard')}
+        />
+      )}
+
+      {view === 'admin' && (
+        <AdminPipelinePage
+          currentUser={currentUser}
+          onBack={() => setView('dashboard')}
         />
       )}
     </div>

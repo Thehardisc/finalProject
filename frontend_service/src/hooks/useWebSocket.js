@@ -5,6 +5,10 @@ import { WS_BASE } from '../api/client';
  * useWebSocket
  * Manages the WebSocket connection lifecycle, message dispatching,
  * and exponential-backoff auto-reconnect (F1).
+ *
+ * The connection is per-user (/ws/{user_id}), not per-conversation.
+ * activeConversationId is intentionally excluded from the effect deps
+ * so that switching conversations does not trigger a reconnect.
  */
 export function useWebSocket({
     currentUser, activeConversationId, systemReady,
@@ -14,6 +18,15 @@ export function useWebSocket({
     const retryCountRef  = useRef(0);
     const retryTimerRef  = useRef(null);
     const mountedRef     = useRef(true);
+
+    // Stable refs for callbacks that must stay current inside the long-lived
+    // WebSocket handlers without causing a reconnect on every render.
+    const applyThemeRef  = useRef(applyTheme);
+    const fetchVibeRef   = useRef(fetchVibe);
+    const currentUserRef = useRef(currentUser);
+    useEffect(() => { applyThemeRef.current  = applyTheme;   }, [applyTheme]);
+    useEffect(() => { fetchVibeRef.current   = fetchVibe;    }, [fetchVibe]);
+    useEffect(() => { currentUserRef.current = currentUser;  }, [currentUser]);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -40,26 +53,27 @@ export function useWebSocket({
                 if (!mountedRef.current) return;
                 try {
                     const payload = JSON.parse(event.data);
+                    const user = currentUserRef.current;
 
                     if (payload.type === 'analysis') {
                         setCurrentAnalysis(prev => ({
                             ...payload,
-                            ai_insight:      null,
+                            ai_insight:       null,
                             loadingReasoning: true
                         }));
-                        applyTheme(payload.data.final_dominant_emotion);
+                        applyThemeRef.current(payload.data.final_dominant_emotion);
 
                         if (payload.vibe) setVibeAnalysis(payload.vibe);
-                        else fetchVibe();
+                        else fetchVibeRef.current();
 
                         setMessages(prev => {
-                            const isSelf     = payload.data.sender_id === currentUser?.user_id;
+                            const isSelf     = payload.data.sender_id === user?.user_id;
                             const newMsgData = {
                                 id:         payload.data.id,
                                 sender:     isSelf ? 'user' : 'ai',
                                 text:       payload.data.raw_text,
-                                timestamp:  payload.data.timestamp,   // F5: real server timestamp
-                                senderName: isSelf ? currentUser?.display_name : payload.data.sender_id,
+                                timestamp:  payload.data.timestamp,
+                                senderName: isSelf ? user?.display_name : payload.data.sender_id,
                                 analysis:   payload
                             };
 
@@ -127,5 +141,5 @@ export function useWebSocket({
                 socketRef.current.close(1000, 'component unmounted');
             }
         };
-    }, [activeConversationId, currentUser, systemReady]);
+    }, [currentUser, systemReady]); // activeConversationId excluded — WS is per-user, not per-conversation
 }

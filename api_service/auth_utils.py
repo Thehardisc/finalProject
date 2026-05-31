@@ -14,7 +14,9 @@ from fastapi import HTTPException, Header, status
 from typing import Optional
 
 # ── Config ────────────────────────────────────────────────────────────────────
-JWT_SECRET = os.environ.get("JWT_SECRET", "dev-jwt-secret-change-in-production")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET environment variable is required but not set.")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_HOURS = int(os.environ.get("JWT_EXPIRY_HOURS", "24"))
 

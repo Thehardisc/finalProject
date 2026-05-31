@@ -61,6 +61,7 @@ async def main():
                         try:
                             conversation_id = data.get("conversation_id")
                             original_text   = data.get("original_text", "")
+                            user_id         = data.get("user_id", "")
 
                             emotions_map = {}
                             try:
@@ -72,15 +73,20 @@ async def main():
                             if dom_emo:
                                 emotions_map["dominant_emotion"] = dom_emo
 
-                            t0 = time.time()
-                            updated_state = await update_conversation_state(
-                                conversation_id, new_emotions=emotions_map,
-                                r=r, original_text=original_text
-                            )
-                            elapsed = (time.time() - t0) * 1000
-                            logger.debug(
-                                f"Aggregation for {conversation_id} took {elapsed:.2f}ms"
-                            )
+                            if conversation_id:
+                                t0 = time.time()
+                                updated_state = await update_conversation_state(
+                                    conversation_id, new_emotions=emotions_map,
+                                    r=r, original_text=original_text,
+                                    user_id=user_id,
+                                )
+                                elapsed = (time.time() - t0) * 1000
+                                logger.debug(
+                                    f"Aggregation for {conversation_id} took {elapsed:.2f}ms"
+                                )
+                            else:
+                                logger.warning(f"No conversation_id for msg {message_id}, skipping state update.")
+                                updated_state = {}
 
                             output_event = data.copy()
                             output_event["conversation_state"] = json.dumps(updated_state)

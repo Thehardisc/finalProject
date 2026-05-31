@@ -18,12 +18,17 @@ logger = get_logger("ingestion_service")
 
 app = FastAPI(title="Ingestion Service", version="1.0.0")
 
+_allowed_origins = [
+    o.strip() for o in
+    os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost").split(",")
+    if o.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key"],
 )
 
 redis_client = RedisClient()
@@ -48,9 +53,9 @@ async def shutdown_event():
 
 @app.post("/messages")
 async def ingest_message(msg: MessageInput, api_key: str = Depends(validate_api_key)):
-    # rate limit by user_id
-    if not await rate_limiter.is_allowed(msg.user_id):
-        logger.warning(f"Rate limit exceeded for user: {msg.user_id}, conv={msg.conversation_id}")
+    # rate limit by api_key instead of spoofable user_id
+    if not await rate_limiter.is_allowed(api_key):
+        logger.warning(f"Rate limit exceeded for api_key: {api_key[:8]}..., conv={msg.conversation_id}")
         raise HTTPException(status_code=429, detail="Too Many Requests: Rate limit exceeded")
     
     logger.debug(f"Received ingestion request: conv={msg.conversation_id}, user={msg.user_id}, len={len(msg.text)}")

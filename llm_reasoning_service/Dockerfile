@@ -22,6 +22,6 @@ ENV PYTHONPATH=/app
 
 # Health check verifies the reasoning process is active
 HEALTHCHECK --interval=30s --timeout=15s --start-period=5s --retries=3 \
-  CMD ps aux | grep "python llm_reasoning_service/main.py" || exit 1
+  CMD kill -0 1 || exit 1
 
 CMD ["python", "llm_reasoning_service/main.py"]

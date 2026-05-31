@@ -39,8 +39,11 @@ async def get_calibration_analytics():
         confusion = {}
 
         for row in rows:
-            actual    = row['ground_truth_emotion']
-            ems       = json.loads(row['emotions_json'])
+            actual = row['ground_truth_emotion']
+            try:
+                ems = json.loads(row['emotions_json'])
+            except (json.JSONDecodeError, TypeError):
+                continue
             predicted = ems.get("dominant_emotion", "Neutral")
 
             if actual not in confusion:
@@ -54,9 +57,10 @@ async def get_calibration_analytics():
                 fp[predicted] += 1
                 fn[actual]    += 1
 
+        actual_counts = Counter(r['ground_truth_emotion'] for r in rows)
         emotion_stats = {}
         for emo in EMOTION_LABELS:
-            actual_count = sum(1 for r in rows if r['ground_truth_emotion'] == emo)
+            actual_count = actual_counts.get(emo, 0)
             if actual_count:
                 precision = tp[emo] / (tp[emo] + fp[emo]) if (tp[emo] + fp[emo]) > 0 else 0
                 recall    = tp[emo] / (tp[emo] + fn[emo]) if (tp[emo] + fn[emo]) > 0 else 0

@@ -21,6 +21,6 @@ ENV PYTHONPATH=/app
 
 # Health check verifies the transformer analysis process is active
 HEALTHCHECK --interval=30s --timeout=15s --start-period=30s --retries=3 \
-  CMD ps aux | grep "python bert_service/main.py" || exit 1
+  CMD kill -0 1 || exit 1
 
 CMD ["python", "bert_service/main.py"]

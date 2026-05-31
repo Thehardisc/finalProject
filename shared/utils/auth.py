@@ -8,7 +8,10 @@ logger = get_logger("shared.auth")
 # api key validation
 # Default key for internal use/local dev. 
 # In production, set INTERNAL_API_KEY environment variable.
-VALID_API_KEYS = os.environ.get("INTERNAL_API_KEY", "dev-secret-key").split(",")
+_raw_key = os.environ.get("INTERNAL_API_KEY")
+if not _raw_key:
+    raise RuntimeError("INTERNAL_API_KEY environment variable is required but not set.")
+VALID_API_KEYS = _raw_key.split(",")
 
 async def validate_api_key(x_api_key: str = Header(None)):
     """
@@ -50,9 +53,8 @@ class RateLimiter:
         """
         r = self.redis_client.redis
         if not r:
-            # If Redis is down, we fail open for availability but log an error
-            logger.error("RateLimiter: Redis connection missing. Failing open.")
-            return True
+            logger.error("RateLimiter: Redis connection missing. Failing closed.")
+            return False
         
         # Key format: ratelimit:<identifier>:<window_bucket>
         bucket = int(time.time() // self.window)
@@ -70,4 +72,4 @@ class RateLimiter:
             return True
         except Exception as e:
             logger.error(f"RateLimiter error: {e}")
-            return True # Fail open
+            return False
