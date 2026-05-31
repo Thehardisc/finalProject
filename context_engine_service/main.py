@@ -111,10 +111,10 @@ class ContextEngineService:
             return {"historical_valence": 0.0, "topic_resonance": 0.0}
 
         try:
-            response = await asyncio.wait_for(
-                self.qdrant.query_points(
+            search_result = await asyncio.wait_for(
+                self.qdrant.search(
                     collection_name=self.collection_name,
-                    query=current_embedding,
+                    query_vector=current_embedding,
                     query_filter=models.Filter(
                         must=[models.FieldCondition(key="user_id", match=models.MatchValue(value=user_id))]
                     ),
@@ -122,7 +122,6 @@ class ContextEngineService:
                 ),
                 timeout=0.5,  # 500 ms circuit breaker
             )
-            search_result = response.points
 
             if not search_result:
                 return {"historical_valence": 0.0, "topic_resonance": 0.0}
@@ -158,10 +157,13 @@ class ContextEngineService:
         linguistic_key  = f"context:user:{user_id}:linguistic_window"
 
         try:
+            # Ensure current_valence is a plain Python float before it enters
+            # json.dumps — numpy 2.0 scalars are not JSON-serialisable.
+            _valence = float(current_valence)
             async with self.redis.pipeline(transaction=True) as pipe:
                 pipe.zremrangebyscore(valence_key,    "-inf", window_cutoff)
                 pipe.zremrangebyscore(linguistic_key, "-inf", window_cutoff)
-                pipe.zadd(valence_key,    {json.dumps({"valence": current_valence, "id": str(uuid.uuid4())}): now})
+                pipe.zadd(valence_key,    {json.dumps({"valence": _valence, "id": str(uuid.uuid4())}): now})
                 pipe.zadd(linguistic_key, {json.dumps(linguistic_markers): now})
                 pipe.zrange(valence_key, 0, -1)
                 pipe.hgetall(state_key)
@@ -170,15 +172,15 @@ class ContextEngineService:
             history_raw = results[4]
             prev_state  = results[5]
 
-            recent_valences = [json.loads(x)["valence"] for x in history_raw]
-            current_variance = np.var(recent_valences) if len(recent_valences) > 1 else 0.0
+            recent_valences  = [json.loads(x)["valence"] for x in history_raw]
+            current_variance = float(np.var(recent_valences)) if len(recent_valences) > 1 else 0.0
             prev_volatility  = float(prev_state.get("current_volatility", 0.0))
-            new_volatility   = self.decay_factor * prev_volatility + (1 - self.decay_factor) * current_variance
+            new_volatility   = float(self.decay_factor * prev_volatility + (1 - self.decay_factor) * current_variance)
 
             await self.redis.hset(state_key, mapping={
-                "current_volatility": float(new_volatility),
-                "last_message_ts":    now,
-                "baseline_valence":   float(np.mean(recent_valences)) if recent_valences else float(current_valence),
+                "current_volatility": new_volatility,
+                "last_message_ts":    float(now),
+                "baseline_valence":   float(np.mean(recent_valences)) if recent_valences else _valence,
             })
             return new_volatility
         except Exception as e:
@@ -416,24 +418,29 @@ class ContextEngineService:
             return
 
         try:
-            await self.qdrant.upsert(
-                collection_name=self.collection_name,
-                points=[
-                    models.PointStruct(
-                        id=str(uuid.uuid4()),
-                        vector=current_embedding,
-                        payload={
-                            "user_id":          user_id,
-                            "timestamp":        time.time(),
-                            "valence":          valence,
-                            "dominant_emotion": dominant_emotion,
-                            "text":             text,
-                        }
-                    )
-                ]
+            await asyncio.wait_for(
+                self.qdrant.upsert(
+                    collection_name=self.collection_name,
+                    points=[
+                        models.PointStruct(
+                            id=str(uuid.uuid4()),
+                            vector=current_embedding,
+                            payload={
+                                "user_id":          user_id,
+                                "timestamp":        time.time(),
+                                "valence":          float(valence),
+                                "dominant_emotion": dominant_emotion,
+                                "text":             text[:500],  # cap to avoid large payloads
+                            }
+                        )
+                    ]
+                ),
+                timeout=3.0,
             )
+        except asyncio.TimeoutError:
+            logger.warning("Qdrant upsert timed out — episodic memory point dropped")
         except Exception as e:
-            logger.error(f"Failed to save to Qdrant: {e}")
+            logger.error(f"Failed to save to Qdrant: {type(e).__name__}: {e}")
 
 
 context_engine = ContextEngineService(
