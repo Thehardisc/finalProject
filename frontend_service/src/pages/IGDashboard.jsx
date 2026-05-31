@@ -1,9 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import EmojiPicker from 'emoji-picker-react';
 import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
 import TelemetryPanel  from '../components/TelemetryPanel';
 import AnalysisDrawer  from '../components/AnalysisDrawer';
 import DemoRunner      from '../components/DemoRunner';
+import SyntaxText from '../syntax/SyntaxText';
+import { THEMES } from '../syntax/highlighter';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -190,7 +191,7 @@ const PIPELINE_MODELS = [
   { key: 'go_emotions', label: 'GoE'   },
 ];
 
-function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModels }) {
+function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModels, theme = 'prism', dark = false }) {
   const [hovered, setHovered] = useState(false);
 
   const bert = msg.analysis?.data?.bert_emotions;
@@ -204,7 +205,7 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
   const ownBg    = hasAnalysis ? (bubbleGradient(emotionDict) || 'rgba(0,119,255,0.10)') : 'rgba(0,119,255,0.10)';
   const borderClr = isOwn
     ? (domRgb ? `rgba(${domRgb},.35)` : 'rgba(0,119,255,.25)')
-    : 'rgba(0,0,0,.07)';
+    : dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,.07)';
 
   return (
     <div
@@ -220,33 +221,35 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
       }}
     >
       <div style={{
-        maxWidth: 'min(70vw, 520px)',
-        width: 'fit-content',
+        maxWidth: '70%',
         padding: '10px 14px',
         borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
-        background: isOwn ? ownBg : '#f0f0f0',
+        background: dark 
+          ? (isOwn ? ownBg.replace('0.10', '0.18') : 'rgba(40,41,60,0.62)') 
+          : (isOwn ? ownBg : '#f0f0f0'),
         border: `1.5px solid ${borderClr}`,
         fontSize: '0.94rem', lineHeight: 1.5,
-        color: '#1c1c2e',
-        overflowWrap: 'break-word',
-        whiteSpace: 'pre-wrap',
-        boxShadow: domRgb && isOwn
-          ? `0 2px 12px rgba(${domRgb},.14), inset 0 1px 0 rgba(255,255,255,.75)`
-          : isOwn
-            ? '0 2px 12px rgba(0,119,255,.09), inset 0 1px 0 rgba(255,255,255,.75)'
-            : '0 1px 3px rgba(0,0,0,.07)',
-        backdropFilter: isOwn ? 'blur(20px) saturate(180%)' : 'none',
-        WebkitBackdropFilter: isOwn ? 'blur(20px) saturate(180%)' : 'none',
+        color: dark ? '#e0e0e0' : '#1c1c2e',
+        wordBreak: 'break-word',
+        boxShadow: dark
+          ? `0 4px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.05)`
+          : domRgb && isOwn
+            ? `0 2px 12px rgba(${domRgb},.14), inset 0 1px 0 rgba(255,255,255,.75)`
+            : isOwn
+              ? '0 2px 12px rgba(0,119,255,.09), inset 0 1px 0 rgba(255,255,255,.75)'
+              : '0 1px 3px rgba(0,0,0,.07)',
+        backdropFilter: isOwn || dark ? 'blur(20px) saturate(180%)' : 'none',
+        WebkitBackdropFilter: isOwn || dark ? 'blur(20px) saturate(180%)' : 'none',
         animation: 'igMsgIn .26s cubic-bezier(.34,1.2,.64,1) both',
         position: 'relative', overflow: 'hidden',
         outline: hovered && msg.analysis ? `2px solid rgba(${domRgb || '0,119,255'},.30)` : 'none',
         outlineOffset: 1,
-        transition: 'outline-color .15s',
+        transition: 'outline-color .15s, background .3s, border .3s',
       }}>
         {isOwn && (
           <div style={{
             position: 'absolute', top: 0, left: 0, right: 0, height: '38%',
-            background: 'linear-gradient(180deg,rgba(255,255,255,.50) 0%,transparent 100%)',
+            background: dark ? 'linear-gradient(180deg,rgba(255,255,255,.06) 0%,transparent 100%)' : 'linear-gradient(180deg,rgba(255,255,255,.50) 0%,transparent 100%)',
             pointerEvents: 'none',
           }} />
         )}
@@ -260,7 +263,7 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
             }} />
             Re-analyzing…
           </span>
-        ) : msg.text}
+        ) : <SyntaxText text={msg.text} theme={theme} dark={dark} />}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
@@ -449,7 +452,16 @@ export default function IGDashboard({
   socketRef,
   onDemoStart,
 }) {
+  const [theme, setTheme] = useState(() => localStorage.getItem('il_theme') || 'prism');
+  const [dark, setDark]   = useState(() => localStorage.getItem('il_dark') === 'true');
   const [search, setSearch]                   = useState('');
+
+  useEffect(() => {
+    localStorage.setItem('il_theme', theme);
+    localStorage.setItem('il_dark', dark);
+    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  }, [theme, dark]);
+
   const [showCompose, setShowCompose]         = useState(false);
   const [showGroupModal, setShowGroupModal]   = useState(false);
   const [composeSearch, setComposeSearch]     = useState('');
@@ -457,14 +469,11 @@ export default function IGDashboard({
   const [selectedMsg, setSelectedMsg]         = useState(null);
   const [memberPanelOpen, setMemberPanelOpen] = useState(false);
   const [memberError, setMemberError]         = useState('');
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const messagesContainerRef = useRef(null);
-  const inputRef             = useRef(null);
-  const emojiPickerRef       = useRef(null);
+  const messagesEndRef = useRef(null);
+  const inputRef       = useRef(null);
 
   useEffect(() => {
-    const el = messagesContainerRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [messages]);
 
   useEffect(() => {
@@ -472,17 +481,6 @@ export default function IGDashboard({
   }, [activeConversationId]);
 
   useEffect(() => { setSelectedMsg(null); setMemberPanelOpen(false); setMemberError(''); }, [activeConversationId]);
-
-  useEffect(() => {
-    if (!showEmojiPicker) return;
-    const handler = (e) => {
-      if (emojiPickerRef.current && !emojiPickerRef.current.contains(e.target)) {
-        setShowEmojiPicker(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [showEmojiPicker]);
 
   // Conversation filtering — works for both direct (other_display_name) and group (name)
   const filteredConvs = conversations.filter(c => {
@@ -528,7 +526,7 @@ export default function IGDashboard({
   return (
     <div style={{
       display: 'flex', height: '100vh',
-      background: '#ffffff',
+      background: dark ? '#12121c' : '#ffffff',
       fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       position: 'relative',
     }}>
@@ -598,23 +596,23 @@ export default function IGDashboard({
       )}
 
       {/* ── Left Sidebar ──────────────────────────────────────────────── */}
-      <div style={{ width: 360, borderRight: '1px solid #efefef', display: 'flex', flexDirection: 'column', background: '#ffffff', flexShrink: 0 }}>
+      <div style={{ width: 360, borderRight: dark ? '1px solid #2a2a35' : '1px solid #efefef', display: 'flex', flexDirection: 'column', background: dark ? '#181824' : '#ffffff', flexShrink: 0 }}>
         {/* Header */}
         <div style={{ padding: '20px 20px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div
             style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', position: 'relative' }}
             onClick={() => setShowProfileMenu(p => !p)}
           >
-            <span style={{ fontWeight: 800, fontSize: '1.05rem', color: '#1c1c2e' }}>{currentUser?.display_name}</span>
-            <svg width="14" height="14" fill="none" stroke="#1c1c2e" strokeWidth="2.5" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+            <span style={{ fontWeight: 800, fontSize: '1.05rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{currentUser?.display_name}</span>
+            <svg width="14" height="14" fill="none" stroke={dark ? '#e0e0e0' : '#1c1c2e'} strokeWidth="2.5" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
 
             {showProfileMenu && (
               <div
-                style={{ position: 'absolute', top: '100%', left: 0, zIndex: 100, background: '#fff', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.14)', border: '1px solid rgba(0,0,0,.07)', overflow: 'hidden', marginTop: 8, animation: 'igModalIn .18s ease both' }}
+                style={{ position: 'absolute', top: '100%', left: 0, zIndex: 100, background: dark ? '#1e1e2d' : '#fff', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.14)', border: dark ? '1px solid #333' : '1px solid rgba(0,0,0,.07)', overflow: 'hidden', marginTop: 8, animation: 'igModalIn .18s ease both' }}
                 onClick={e => e.stopPropagation()}
               >
-                <div style={{ padding: '14px 18px', borderBottom: '1px solid #f0f0f0' }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem', color: '#1c1c2e' }}>{currentUser?.display_name}</div>
+                <div style={{ padding: '14px 18px', borderBottom: dark ? '1px solid #333' : '1px solid #f0f0f0' }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.9rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{currentUser?.display_name}</div>
                   <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 2 }}>{currentUser?.email}</div>
                   {currentUser?.role === 'admin' && (
                     <span style={{ display: 'inline-block', marginTop: 4, background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#fff', fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: 6, letterSpacing: '.06em' }}>ADMIN</span>
@@ -673,17 +671,17 @@ export default function IGDashboard({
 
         {/* Search */}
         <div style={{ padding: '0 16px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: dark ? '#222230' : '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
             <svg width="15" height="15" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)}
-              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: '#1c1c2e', flex: 1 }}
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: dark ? '#e0e0e0' : '#1c1c2e', flex: 1 }}
             />
           </div>
         </div>
 
         {/* Section label + WS status */}
         <div style={{ padding: '0 20px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#1c1c2e' }}>Messages</span>
+          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>Messages</span>
           <span style={{ fontSize: '0.78rem', color: status === 'Live' ? '#22c55e' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: status === 'Live' ? '#22c55e' : '#d1d5db', display: 'inline-block', boxShadow: status === 'Live' ? '0 0 5px #22c55e' : 'none' }} />
             {status}
@@ -785,7 +783,7 @@ export default function IGDashboard({
       </div>
 
       {/* ── Chat Area ─────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {!activeConversationId ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
             <div style={{ width: 96, height: 96, borderRadius: '50%', border: '3px solid #1c1c2e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.6rem' }}>💬</div>
@@ -800,11 +798,11 @@ export default function IGDashboard({
         ) : (
           <>
             {/* Chat header */}
-            <div style={{ padding: '14px 20px', borderBottom: '1px solid #efefef', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#ffffff', position: 'sticky', top: 0, zIndex: 10 }}>
+            <div style={{ padding: '14px 20px', borderBottom: dark ? '1px solid #2a2a35' : '1px solid #efefef', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: dark ? '#12121c' : '#ffffff', position: 'sticky', top: 0, zIndex: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <Avatar name={activeLabel} size={42} rgb={activeRgb} online={!isGroup && onlineUsers.has(activeConv?.other_user_id)} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: dark ? '#e0e0e0' : '#1c1c2e', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {activeLabel}
                     {isGroup && (
                       <span style={{ fontSize: '0.65rem', background: '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6 }}>
@@ -826,6 +824,17 @@ export default function IGDashboard({
               </div>
 
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <div style={{ display: 'flex', background: dark ? 'rgba(255,255,255,0.05)' : '#f3f4f6', borderRadius: '20px', padding: '3px', gap: '3px', marginRight: '8px' }}>
+                  {Object.keys(THEMES).map(k => (
+                    <button key={`${k}|${k===theme}|${dark}`} onClick={() => setTheme(k)} style={{ background: theme === k ? (dark ? '#333' : '#fff') : 'none', color: theme === k ? (dark ? '#fff' : '#1c1c2e') : '#9ca3af', border: 'none', borderRadius: '16px', padding: '4px 10px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', boxShadow: theme === k ? '0 2px 5px rgba(0,0,0,0.08)' : 'none' }}>
+                      {THEMES[k].label}
+                    </button>
+                  ))}
+                  <button onClick={() => setDark(!dark)} style={{ background: 'none', border: 'none', padding: '4px 6px', cursor: 'pointer', fontSize: '0.85rem' }}>
+                    {dark ? '🌙' : '☀️'}
+                  </button>
+                </div>
+
                 {isGroup && (
                   <button onClick={() => setMemberPanelOpen(p => !p)}
                     title="Manage members"
@@ -916,7 +925,7 @@ export default function IGDashboard({
             )}
 
             {/* Messages */}
-            <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {messages.length === 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 12, color: '#9ca3af' }}>
                   <Avatar name={activeLabel} size={72} rgb={activeRgb} />
@@ -957,6 +966,8 @@ export default function IGDashboard({
                         onClick={(m) => setSelectedMsg(m)}
                         onDelete={onDeleteMessage}
                         partialModels={!msg.analysis && msg.sender === 'user' ? partialModels : null}
+                        theme={theme}
+                        dark={dark}
                       />
 
                       {msg.analysis && !isRegen && onRegenerateAnalysis && (
@@ -971,25 +982,11 @@ export default function IGDashboard({
                   </div>
                 );
               })}
+              <div ref={messagesEndRef} />
             </div>
 
             {/* Input bar */}
-            <div style={{ padding: '12px 20px', borderTop: '1px solid #efefef', background: '#ffffff', position: 'relative' }}>
-              {showEmojiPicker && (
-                <div ref={emojiPickerRef} style={{ position: 'absolute', bottom: '100%', left: 20, zIndex: 100, marginBottom: 8 }}>
-                  <EmojiPicker
-                    onEmojiClick={(emojiData) => {
-                      setInputValue(prev => prev + emojiData.emoji);
-                      inputRef.current?.focus();
-                    }}
-                    height={380}
-                    width={320}
-                    searchDisabled={false}
-                    skinTonesDisabled
-                    previewConfig={{ showPreview: false }}
-                  />
-                </div>
-              )}
+            <div style={{ padding: '12px 20px', borderTop: '1px solid #efefef', background: '#ffffff' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 border: `1.5px solid ${dominantRgb ? `rgba(${dominantRgb},.35)` : 'rgba(0,0,0,.14)'}`,
@@ -997,27 +994,14 @@ export default function IGDashboard({
                 transition: 'border-color .4s',
                 background: dominantRgb ? `rgba(${dominantRgb},.04)` : 'transparent',
               }}>
-                <button
-                  onClick={() => setShowEmojiPicker(p => !p)}
-                  style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 0, flexShrink: 0, opacity: showEmojiPicker ? 1 : 0.6, transition: 'opacity .15s' }}
-                >😊</button>
+                <button style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 0, flexShrink: 0 }}>😊</button>
                 <textarea
                   ref={inputRef} rows={1}
                   placeholder="Message…"
                   value={inputValue}
-                  onChange={e => {
-                    setInputValue(e.target.value);
-                    e.target.style.height = 'auto';
-                    e.target.style.height = Math.min(e.target.scrollHeight, 100) + 'px';
-                  }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      e.target.style.height = 'auto';
-                      onSend();
-                    }
-                  }}
-                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.95rem', color: '#1c1c2e', fontFamily: 'inherit', padding: '9px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'hidden' }}
+                  onChange={e => setInputValue(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.95rem', color: '#1c1c2e', fontFamily: 'inherit', padding: '9px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
                 />
                 {inputValue.trim() ? (
                   <button onClick={onSend} style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem', color: '#0077ff', padding: '6px 10px', flexShrink: 0 }}>Send</button>

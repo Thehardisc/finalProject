@@ -1,6 +1,7 @@
 import asyncio
 import sys
 import os
+import uuid
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -23,6 +24,7 @@ async def _process_one(
     record_id:       str,
     data:            dict,
     is_continuation: bool = False,
+    burst_fragments: str = None,
 ) -> None:
     """
     Clean, demojize, tag, and forward one message to preprocessed_stream.
@@ -42,8 +44,9 @@ async def _process_one(
         output_event["processed_text"]           = processed_text
         output_event["processed_text_demojized"] = processed_text_demojized
         output_event["original_text"]            = original_text
-        # "true"/"false" strings — Redis stream values are always strings
         output_event["is_continuation"]          = "true" if is_continuation else "false"
+        if burst_fragments:
+            output_event["burst_fragments"]      = burst_fragments
 
         await redis_client.publish_event(OUTPUT_STREAM, output_event)
 
@@ -98,8 +101,24 @@ async def main():
                 f"user={user}  conv={conv}  "
                 f"continuations={sum(flags)}"
             )
-        for (record_id, data), is_cont in zip(items, flags):
-            await _process_one(r, record_id, data, is_continuation=is_cont)
+        if len(items) > 1:
+            combined_text = " ".join(data.get("text", "") for _, data in items)
+            fragments_data = [{"message_id": data.get("message_id")} for _, data in items]
+            
+            # Use the first item's metadata as the base payload
+            first_record_id, first_data = items[0]
+            first_data = first_data.copy()
+            first_data["text"] = combined_text
+            
+            import json
+            await _process_one(
+                r, first_record_id, first_data,
+                is_continuation=flags[0],
+                burst_fragments=json.dumps(fragments_data)
+            )
+        else:
+            first_record_id, first_data = items[0]
+            await _process_one(r, first_record_id, first_data, is_continuation=flags[0])
 
     while True:
         try:

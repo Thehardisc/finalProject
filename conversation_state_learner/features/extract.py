@@ -36,7 +36,7 @@ DEFAULT_OUT    = Path(__file__).parent.parent / "features"
 
 def msg_to_vec(pipeline: dict) -> np.ndarray:
     """
-    Convert a single message's pipeline dict to a 67-dim feature vector.
+    Convert a single message's pipeline dict to a 77-dim feature vector.
     Returns zeros if pipeline data is missing.
     """
     if not pipeline:
@@ -47,12 +47,19 @@ def msg_to_vec(pipeline: dict) -> np.ndarray:
     go    = stages.get("goemotions", {})
     bert  = stages.get("bert", {})
     vader = stages.get("vader", {})
+    ce    = stages.get("context_engine", {})
 
     go_vec    = np.array([go.get(e, 0.0)    for e in EMOTION_LABELS_28], dtype=np.float32)
     bert_vec  = np.array([bert.get(e, 0.0)  for e in BERT_LABELS_7],     dtype=np.float32)
     vader_vec = np.array([vader.get(k, 0.0) for k in VADER_KEYS_4],      dtype=np.float32)
 
-    return np.concatenate([go_vec, bert_vec, vader_vec])  # 39
+    cv_raw = ce.get("context_vector")
+    if cv_raw and isinstance(cv_raw, list) and len(cv_raw) == 38:
+        ce_vec = np.array(cv_raw, dtype=np.float32)
+    else:
+        ce_vec = np.zeros(38, dtype=np.float32)
+
+    return np.concatenate([go_vec, bert_vec, vader_vec, ce_vec])  # 77
 
 
 # ── Derived window features (9 dims) ──────────────────────────────────────────

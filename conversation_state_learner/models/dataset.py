@@ -121,10 +121,10 @@ def make_loaders(train_ds, val_ds, test_ds, batch_size: int = 8):
         val_ds, batch_size=batch_size, shuffle=False,
         collate_fn=collate_fn,
     ) if val_ds else None
-
     test_loader = DataLoader(
         test_ds, batch_size=batch_size, shuffle=False,
         collate_fn=collate_fn,
     ) if test_ds else None
+
 
     return train_loader, val_loader, test_loader

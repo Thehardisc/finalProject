@@ -103,7 +103,22 @@ async def main():
 
                             output_event = data.copy()
                             output_event["conversation_state"] = json.dumps(updated_state)
-                            await redis_client.publish_event(OUTPUT_STREAM, output_event)
+                            
+                            burst_fragments_str = data.get("burst_fragments")
+                            if burst_fragments_str:
+                                try:
+                                    fragments = json.loads(burst_fragments_str)
+                                    for frag in fragments:
+                                        frag_event = output_event.copy()
+                                        frag_event["message_id"] = frag["message_id"]
+                                        frag_event.pop("burst_fragments", None)
+                                        await redis_client.publish_event(OUTPUT_STREAM, frag_event)
+                                except Exception as e:
+                                    logger.error(f"Failed to unpack burst fragments for {message_id}: {e}")
+                                    await redis_client.publish_event(OUTPUT_STREAM, output_event)
+                            else:
+                                await redis_client.publish_event(OUTPUT_STREAM, output_event)
+                                
                             await r.xack(STREAM_KEY, GROUP_NAME, message_id)
 
                         except Exception as msg_err:

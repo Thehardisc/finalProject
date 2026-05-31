@@ -56,8 +56,48 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score
 
-from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM
+from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM, ML_DIM, N_CDM_STATES
 from meta_learner import build_feature_vector, GatingEnsembleNet, GatingNetworkWrapper, D_MODEL, DROPOUT
+
+# ── Label → likely CDM intent state (primary, secondary, tertiary) ───────────────
+# Used to generate label-correlated CDM state in synthetic context so the network
+# can learn to use context features during training on GoEmotions.
+_LABEL_TO_INTENT: dict = {
+    'admiration':     (2,  14,  1),   # PRAISE, AGREEMENT, WARMTH
+    'amusement':      (4,  10,  0),   # HUMOR, CURIOSITY, NEUTRAL
+    'approval':       (14,  2, 11),   # AGREEMENT, PRAISE, ASSERTIVENESS
+    'caring':         (12,  1,  9),   # EMPATHY, WARMTH, RECONCILIATION
+    'curiosity':      (10,  3,  0),   # CURIOSITY, HELP_REQUEST, NEUTRAL
+    'desire':         (1,  10,  0),   # WARMTH, CURIOSITY, NEUTRAL
+    'excitement':     (2,  14,  4),   # PRAISE, AGREEMENT, HUMOR
+    'gratitude':      (14,  1,  2),   # AGREEMENT, WARMTH, PRAISE
+    'joy':            (1,   2, 14),   # WARMTH, PRAISE, AGREEMENT
+    'love':           (1,  12,  9),   # WARMTH, EMPATHY, RECONCILIATION
+    'optimism':       (14,  1,  2),   # AGREEMENT, WARMTH, PRAISE
+    'pride':          (2,  11, 14),   # PRAISE, ASSERTIVENESS, AGREEMENT
+    'relief':         (9,  14,  0),   # RECONCILIATION, AGREEMENT, NEUTRAL
+    'realization':    (0,  10, 11),   # NEUTRAL, CURIOSITY, ASSERTIVENESS
+    'anger':          (6,   5,  7),   # CONFLICT, TENSION, ARGUMENT
+    'annoyance':      (5,  13,  6),   # TENSION, FRUSTRATION, CONFLICT
+    'disapproval':    (5,  11,  6),   # TENSION, ASSERTIVENESS, CONFLICT
+    'disgust':        (6,   5,  0),   # CONFLICT, TENSION, NEUTRAL
+    'disappointment': (8,  13,  0),   # WITHDRAWAL, FRUSTRATION, NEUTRAL
+    'embarrassment':  (8,   0, 13),   # WITHDRAWAL, NEUTRAL, FRUSTRATION
+    'fear':           (3,   8,  0),   # HELP_REQUEST, WITHDRAWAL, NEUTRAL
+    'grief':          (8,  12,  0),   # WITHDRAWAL, EMPATHY, NEUTRAL
+    'nervousness':    (3,   8, 13),   # HELP_REQUEST, WITHDRAWAL, FRUSTRATION
+    'remorse':        (9,   8, 12),   # RECONCILIATION, WITHDRAWAL, EMPATHY
+    'sadness':        (8,  12,  0),   # WITHDRAWAL, EMPATHY, NEUTRAL
+    'confusion':      (11,  3,  0),   # ASSERTIVENESS, HELP_REQUEST, NEUTRAL
+    'neutral':        (0,  10, 11),   # NEUTRAL, CURIOSITY, ASSERTIVENESS
+    'surprise':       (4,  10,  0),   # HUMOR, CURIOSITY, NEUTRAL
+}
+
+# Labels with strong, unambiguous emotional intent — higher hmm_confidence
+_STRONG_LABELS = frozenset({
+    'anger', 'joy', 'love', 'grief', 'admiration', 'fear',
+    'disgust', 'gratitude', 'pride', 'remorse', 'sadness', 'excitement',
+})
 
 # ── Approximate valence baselines for synthetic context generation ──────────────
 # These are deliberately imprecise (±0.10 vs _PREV_EMOTION_VALENCE in meta_learner.py)
@@ -104,26 +144,35 @@ def build_synthetic_context_vector(
 
     rng = np.random.RandomState()  # unseeded — each call is independent
 
-    # ── CDM state: random draw, slight bias toward NEUTRAL_EXPLORE (state 0) ──
-    cdm_dirichlet = rng.dirichlet(alpha=[3.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
-    cdm_state     = int(rng.choice(7, p=cdm_dirichlet))
-    cdm_one_hot   = [0.0] * 7
+    # ── CDM intent state: label-correlated when label is known ──────────────────
+    if label and label in _LABEL_TO_INTENT:
+        primary, secondary, tertiary = _LABEL_TO_INTENT[label]
+        # 20% adversarial: random state to prevent lookup-table memorization
+        if mode == "train" and rng.random() < 0.20:
+            cdm_state = int(rng.randint(0, N_CDM_STATES))
+        else:
+            p = rng.random()
+            cdm_state = primary if p < 0.60 else (secondary if p < 0.85 else tertiary)
+    else:
+        dirichlet_alpha = [3.0] + [1.0] * (N_CDM_STATES - 1)
+        cdm_state = int(rng.choice(N_CDM_STATES, p=rng.dirichlet(dirichlet_alpha)))
+    cdm_one_hot     = [0.0] * N_CDM_STATES
     cdm_one_hot[cdm_state] = 1.0
 
     # ── Temporal / structural scalars (independent of label) ─────────────────
-    residency  = float(rng.beta(2.0, 5.0))           # recent entry into state
-    transition = [float(rng.randint(0, 7) / 7.0) for _ in range(3)]
-    abruptness = float(rng.beta(1.0, 3.0))           # most transitions are smooth
+    residency  = float(rng.beta(2.0, 5.0))
+    transition = [float(rng.randint(0, N_CDM_STATES) / float(N_CDM_STATES)) for _ in range(3)]
+    abruptness = float(rng.beta(1.0, 3.0))
 
     # ── Semantic scalars (independent of label) ───────────────────────────────
-    coherence      = float(rng.beta(3.0, 2.0))       # convos tend to be coherent
+    coherence      = float(rng.beta(3.0, 2.0))
     entropy        = float(rng.beta(2.0, 3.0))
     spk_divergence = float(rng.beta(1.0, 4.0))
     acceleration   = float(np.clip(rng.normal(0.0, 0.12), -1.0, 1.0))
     resonance      = float(rng.beta(2.0, 2.0))
     volatility     = float(rng.beta(1.5, 3.0))
-    msg_length     = float(rng.beta(2.0, 5.0))       # normalised 0-1
-    latency_norm   = float(rng.beta(1.0, 4.0))       # normalised 0-1
+    msg_length     = float(rng.beta(2.0, 5.0))
+    latency_norm   = float(rng.beta(1.0, 4.0))
 
     # ── Valence scalars: label-correlated but heavily noisy ───────────────────
     noise_sigma = 0.35 if mode == "train" else 0.20
@@ -131,30 +180,55 @@ def build_synthetic_context_vector(
 
     cur_valence  = float(np.clip(base_val + rng.normal(0.0, noise_sigma), -1.0, 1.0))
     velocity     = float(np.clip(rng.normal(0.0, 0.25),                   -1.0, 1.0))
-    hist_valence = float(np.clip(base_val * 0.5 + rng.normal(0.0, noise_sigma + 0.05), -1.0, 1.0))
 
-    # Adversarial flip: 25% of training samples get opposite-polarity context.
-    # Forces the network to be skeptical of context and not over-rely on it.
+    # Episodic memory: 3-dim sentiment vector (pos, neu, neg) correlated with label
+    _pos_base = max(0.0, base_val)
+    _neg_base = max(0.0, -base_val)
+    hist_pos = float(np.clip(_pos_base * 0.6 + rng.uniform(0.0, 0.3), 0.0, 1.0))
+    hist_neu = float(np.clip(0.5 - abs(base_val) * 0.4 + rng.uniform(-0.1, 0.1), 0.0, 1.0))
+    hist_neg = float(np.clip(_neg_base * 0.6 + rng.uniform(0.0, 0.3), 0.0, 1.0))
+
     if mode == "train" and rng.random() < 0.25:
-        cur_valence  = -cur_valence
-        hist_valence = -hist_valence
+        cur_valence = -cur_valence
+        hist_pos, hist_neg = hist_neg, hist_pos
+
+    # ── HMM-derived features: label-correlated ───────────────────────────────
+    # Build α as a peaked distribution around cdm_state so hmm_conf and
+    # hmm_entropy are consistent with the intent state we already chose.
+    is_strong   = label in _STRONG_LABELS if label else False
+    conf_base   = float(rng.uniform(0.55, 0.85) if is_strong else rng.uniform(0.35, 0.65))
+    alpha_raw   = rng.dirichlet([0.5] * N_CDM_STATES)
+    alpha_raw[cdm_state] += conf_base * 6.0
+    alpha_raw   /= alpha_raw.sum()
+    hmm_conf    = float(alpha_raw.max())
+    hmm_ent     = float(-np.sum(alpha_raw * np.log(alpha_raw + 1e-12)))
+    hmm_emit    = float(rng.beta(3.0, 2.0) if is_strong else rng.beta(2.0, 3.0))
+    top3_next   = sorted(rng.dirichlet([1.0] * 3).tolist(), reverse=True)
+    intent_stab = float(rng.beta(3.0, 2.0) if label else rng.beta(1.0, 4.0))
 
     ctx = (
-        cdm_one_hot            +   # [0:7]
-        [residency]            +   # [7]
-        transition             +   # [8:11]
-        [abruptness,               # [11]
-         coherence,                # [12]
-         entropy,                  # [13]
-         spk_divergence,           # [14]
-         velocity,                 # [15]
-         acceleration,             # [16]
-         hist_valence,             # [17]
-         resonance,                # [18]
-         volatility,               # [19]
-         cur_valence,              # [20]
-         msg_length,               # [21]
-         latency_norm]             # [22]
+        cdm_one_hot            +   # [0:15]  CDM one-hot (15 intent states)
+        [residency]            +   # [15]
+        transition             +   # [16:19]
+        [abruptness,               # [19]
+         coherence,                # [20]
+         entropy,                  # [21]
+         spk_divergence,           # [22]
+         velocity,                 # [23]
+         acceleration,             # [24]
+         hist_pos,                 # [25]
+         hist_neu,                 # [26]
+         hist_neg,                 # [27]
+         resonance,                # [28]
+         volatility,               # [29]
+         cur_valence,              # [30]
+         msg_length,               # [31]
+         latency_norm,             # [32]
+         hmm_conf,                 # [33]
+         hmm_ent,                  # [34]
+         hmm_emit,                 # [35]
+        ] + top3_next +            # [36:39]
+        [intent_stab]              # [39]
     )
 
     # Per-feature dropout: 15% of features zeroed on each training sample
@@ -164,6 +238,50 @@ def build_synthetic_context_vector(
 
     assert len(ctx) == CONTEXT_DIM, f"ctx dim={len(ctx)} != {CONTEXT_DIM}"
     return ctx
+
+
+# ── Context encoder pre-training ───────────────────────────────────────────────
+
+def pretrain_context_encoder(
+    model: GatingEnsembleNet,
+    X_ctx: np.ndarray,
+    y_labels: list,
+    classes: list,
+    n_epochs: int = 20,
+    lr: float = 1e-3,
+    device: str = "cpu",
+) -> GatingEnsembleNet:
+    """
+    Pre-train enc_ctx_expert + ctx_prior_head on context → emotion before
+    full pipeline training. Forces the context encoder to learn emotion-predictive
+    representations rather than noise, giving the Bayesian prior a useful starting point.
+
+    Only trains enc_ctx_expert and ctx_prior_head — all other parameters frozen.
+    """
+    class_to_idx = {c: i for i, c in enumerate(classes)}
+    y_idx = np.array([class_to_idx.get(y, 0) for y in y_labels])
+
+    X_ctx_t = torch.tensor(X_ctx[:, ML_DIM:].astype(np.float32), device=device)
+    y_t     = torch.tensor(y_idx, dtype=torch.long, device=device)
+
+    params  = list(model.enc_ctx_expert.parameters()) + \
+              list(model.ctx_prior_head.parameters())
+    opt     = torch.optim.Adam(params, lr=lr)
+
+    model.to(device)
+    for epoch in range(n_epochs):
+        model.train()
+        logits = model.ctx_prior_head(model.enc_ctx_expert(X_ctx_t))
+        loss   = F.cross_entropy(logits, y_t)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        if (epoch + 1) % 5 == 0:
+            logger.info(f"  [CtxPretrain] epoch {epoch+1}/{n_epochs}  loss={loss.item():.4f}")
+
+    logger.info("  [CtxPretrain] Done — enc_ctx_expert primed.")
+    model.eval()
+    return model
 
 
 # ── PyTorch training loop ───────────────────────────────────────────────────────
@@ -178,7 +296,7 @@ def train_gating_network(
     batch_size: int = 256,
     lr: float = 5e-4,
     weight_decay: float = 1e-4,
-    load_balance_coeff: float = 5e-3,
+    load_balance_coeff: float = 5e-4,  # reduced: Bayesian arch self-regulates ctx weight
     patience: int = 10,
     device: str = None,
 ) -> GatingNetworkWrapper:
@@ -222,7 +340,12 @@ def train_gating_network(
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=False)
 
     # ── Model + optimiser ─────────────────────────────────────────────────────
-    model     = GatingEnsembleNet(n_classes=len(classes), d=D_MODEL, dropout=DROPOUT).to(device)
+    model = GatingEnsembleNet(n_classes=len(classes), d=D_MODEL, dropout=DROPOUT).to(device)
+
+    # Pre-train context encoder before full pipeline training
+    logger.info("  [CtxPretrain] Pre-training context encoder on context block...")
+    model = pretrain_context_encoder(model, X_tr, y_tr, classes, n_epochs=20, device=device)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
@@ -233,7 +356,7 @@ def train_gating_network(
     )
     criterion = nn.CrossEntropyLoss(weight=cw_tensor, label_smoothing=0.10)
 
-    uniform_gate  = torch.ones(3, device=device) / 3.0
+    uniform_gate  = torch.ones(4, device=device) / 4.0
     X_v_t         = torch.tensor(X_v_s, dtype=torch.float32, device=device)
     best_f1       = -1.0
     best_state    = None
@@ -273,10 +396,11 @@ def train_gating_network(
             val_f1      = f1_score(y_v_idx, preds_v, average='macro', zero_division=0)
             alpha_mean_ = alpha_v.mean(dim=0).cpu().numpy()
             avg_loss    = epoch_loss / len(loader)
+            ctx_str = f" ctx:{alpha_mean_[3]:.3f}]" if len(alpha_mean_) > 3 else "]"
             logger.info(
                 f"  [Epoch {epoch+1:3d}/{n_epochs}]  "
                 f"loss={avg_loss:.4f}  val_F1={val_f1:.4f}  "
-                f"α=[vader:{alpha_mean_[0]:.3f} bert:{alpha_mean_[1]:.3f} goe:{alpha_mean_[2]:.3f}]"
+                f"α=[vader:{alpha_mean_[0]:.3f} bert:{alpha_mean_[1]:.3f} goe:{alpha_mean_[2]:.3f}{ctx_str}"
             )
 
             if val_f1 > best_f1:
@@ -295,6 +419,213 @@ def train_gating_network(
 
     model.eval()
     return GatingNetworkWrapper(model=model, classes=classes, scaler=scaler)
+
+
+# ── EmpatheticDialogues conversation-context training data ─────────────────────
+
+# Map EmpatheticDialogues 32 emotions → GoEmotions 28 labels
+_EMPATHETIC_TO_GOEMOTION: dict = {
+    'sentimental': 'love',       'afraid':       'fear',
+    'proud':       'pride',      'faithful':     'caring',
+    'terrified':   'fear',       'joyful':       'joy',
+    'angry':       'anger',      'sad':          'sadness',
+    'jealous':     'disapproval','grateful':     'gratitude',
+    'prepared':    'optimism',   'embarrassed':  'embarrassment',
+    'excited':     'excitement', 'annoyed':      'annoyance',
+    'lonely':      'sadness',    'surprised':    'surprise',
+    'furious':     'anger',      'disappointed': 'disappointment',
+    'caring':      'caring',     'trusting':     'approval',
+    'disgusted':   'disgust',    'anticipating': 'optimism',
+    'anxious':     'nervousness','nostalgic':    'realization',
+    'confident':   'pride',      'content':      'relief',
+    'devastated':  'grief',      'hopeful':      'optimism',
+    'guilty':      'remorse',    'impressed':    'admiration',
+    'apprehensive':'nervousness','touched':      'caring',
+}
+
+# Rough valence for EmpatheticDialogues emotions (used to approximate velocity)
+_EMPATHETIC_VALENCE: dict = {
+    'joyful': 0.82, 'excited': 0.78, 'grateful': 0.72, 'proud': 0.68,
+    'content': 0.55, 'hopeful': 0.60, 'anticipating': 0.40, 'trusting': 0.50,
+    'caring': 0.58, 'faithful': 0.50, 'sentimental': 0.40, 'impressed': 0.65,
+    'touched': 0.55, 'prepared': 0.35, 'nostalgic': 0.10, 'confident': 0.60,
+    'surprised': 0.15,
+    'angry': -0.72, 'furious': -0.85, 'sad': -0.68, 'terrified': -0.80,
+    'afraid': -0.62, 'lonely': -0.65, 'disappointed': -0.58, 'annoyed': -0.48,
+    'embarrassed': -0.42, 'disgusted': -0.70, 'devastated': -0.88,
+    'jealous': -0.52, 'guilty': -0.58, 'anxious': -0.45, 'apprehensive': -0.40,
+}
+
+
+def _load_hmm_params():
+    """Load HMM transmat and emissionprob from models/cdm_hmm.pkl."""
+    hmm_path = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")).parent / "cdm_hmm.pkl"
+    if not hmm_path.exists():
+        return None, None
+    try:
+        import pickle as pkl
+        with open(hmm_path, "rb") as f:
+            d = pkl.load(f)
+        return np.array(d["transmat"]), np.array(d["emissionprob"])
+    except Exception as e:
+        logger.warning(f"Could not load CDM HMM for EmpatheticDialogues: {e}")
+        return None, None
+
+
+def _hmm_forward_step(alpha, transmat, emissionprob, obs):
+    """Single HMM forward step: α_t = normalise((α_{t-1} @ A) ⊙ B[:,obs])."""
+    pred = alpha @ transmat
+    upd  = pred * emissionprob[:, obs]
+    s    = upd.sum()
+    return upd / s if s > 1e-12 else np.ones(len(alpha)) / len(alpha)
+
+
+def _empathetic_obs(emotion_label: str) -> int:
+    """Map an EmpatheticDialogues emotion to a DailyDialog-compatible obs index."""
+    # act=3 (commissive) for positive, act=1 (inform) for neutral/negative
+    # emotion: map to 0-6 (neutral/anger/disgust/fear/happiness/sadness/surprise)
+    _EMO_TO_7 = {
+        'joy': 4, 'joyful': 4, 'excited': 4, 'grateful': 4, 'proud': 4,
+        'content': 4, 'hopeful': 4, 'trusting': 4, 'caring': 4, 'impressed': 4,
+        'anger': 1, 'angry': 1, 'furious': 1, 'annoyed': 1, 'jealous': 1,
+        'disgust': 2, 'disgusted': 2, 'guilty': 2,
+        'fear': 3, 'afraid': 3, 'terrified': 3, 'anxious': 3, 'apprehensive': 3,
+        'sadness': 5, 'sad': 5, 'lonely': 5, 'devastated': 5, 'disappointed': 5,
+        'embarrassed': 5, 'sentimental': 5,
+        'surprise': 6, 'surprised': 6,
+    }
+    emot_idx = _EMO_TO_7.get(emotion_label.lower(), 0)
+    val = _EMPATHETIC_VALENCE.get(emotion_label.lower(), 0.0)
+    act_idx  = 3 if val > 0.3 else (1 if val > -0.3 else 2)
+    return act_idx * 7 + emot_idx
+
+
+def extract_empathetic_dialogues_features(
+    vader_analyzer, bert_analyzer, goe_analyzer,
+    max_conversations: int = 2000,
+) -> tuple:
+    """
+    Build (X [N, 77], y [N]) from EmpatheticDialogues with real HMM context history.
+
+    For each conversation, runs HMM forward filtering through utterances,
+    producing a real context vector rather than synthetic noise.
+    """
+    try:
+        from datasets import load_dataset
+        emp = load_dataset("empathetic_dialogues")
+    except Exception as e:
+        logger.warning(f"EmpatheticDialogues load failed: {e} — skipping.")
+        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
+
+    transmat, emissionprob = _load_hmm_params()
+    n_states = N_CDM_STATES
+    if transmat is None:
+        logger.warning("HMM params unavailable — skipping EmpatheticDialogues.")
+        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
+
+    # Group utterances by conversation id
+    convs: dict = {}
+    for row in emp['train']:
+        cid = row.get('conv_id', '')
+        if cid not in convs:
+            convs[cid] = []
+        convs[cid].append(row)
+
+    features, labels = [], []
+    conv_list = list(convs.items())[:max_conversations]
+
+    logger.info(f"  [EmpDialogues] Building context features from {len(conv_list)} conversations...")
+
+    for conv_id, turns in conv_list:
+        turns_sorted = sorted(turns, key=lambda t: int(t.get('utterance_idx', 0)))
+        conv_emotion = turns_sorted[0].get('context', 'neutral').lower()
+        goemo_label  = _EMPATHETIC_TO_GOEMOTION.get(conv_emotion, 'neutral')
+
+        hmm_alpha   = np.ones(n_states, dtype=np.float64) / n_states
+        val_hist    = []
+        prev_val    = 0.0
+
+        for i, turn in enumerate(turns_sorted):
+            text = str(turn.get('utterance', '')).strip()
+            if not text:
+                continue
+
+            # NLP features for this utterance
+            try:
+                vader_out = vader_analyzer(text) if callable(vader_analyzer) else {}
+                bert_out  = bert_analyzer(text)  if callable(bert_analyzer)  else {}
+                goe_out   = goe_analyzer(text)   if callable(goe_analyzer)   else {}
+            except Exception:
+                continue
+
+            # Valence history for velocity
+            cur_val  = float(vader_out.get('vader_compound', 0.0))
+            val_hist.append(cur_val)
+            velocity     = cur_val - prev_val
+            acceleration = (velocity - (prev_val - val_hist[-3] if len(val_hist) >= 3 else 0.0))
+            prev_val     = cur_val
+
+            # CDM state from HMM forward variable
+            cdm_state  = int(np.argmax(hmm_alpha))
+            cdm_onehot = [0.0] * n_states
+            cdm_onehot[cdm_state] = 1.0
+
+            hmm_conf    = float(hmm_alpha.max())
+            hmm_entropy = float(-np.sum(hmm_alpha * np.log(hmm_alpha + 1e-12)))
+            top3_next   = sorted(transmat[cdm_state].tolist(), reverse=True)[:3]
+            stab_count  = sum(1 for _ in range(min(i, 5)) if i > 0)  # approximate
+            intent_stab = min(stab_count / 10.0, 1.0)
+
+            # Build context vector (38-dim)
+            ctx = (
+                cdm_onehot +
+                [min(i / 10.0, 1.0)] +   # residency
+                [cdm_state / n_states, cdm_state / n_states, cdm_state / n_states] +  # transition path
+                [0.0,         # abruptness (no prev state for first turn)
+                 0.5,         # topic coherence (neutral approx)
+                 0.5,         # emotion entropy (neutral approx)
+                 0.0,         # speaker divergence (single speaker)
+                 float(np.clip(velocity, -1, 1)),
+                 float(np.clip(acceleration, -1, 1)),
+                 _EMPATHETIC_VALENCE.get(conv_emotion, 0.0),  # hist valence from conv emotion
+                 0.5,         # topic resonance
+                 0.2,         # volatility
+                 float(np.clip(cur_val, -1, 1)),
+                 float(np.clip(len(text) / 500.0, 0, 1)),
+                 0.1,         # latency
+                 hmm_conf,
+                 hmm_entropy,
+                 0.7 if hmm_conf > 0.5 else 0.3,  # emission approx
+                ] + top3_next +
+                [intent_stab]
+            )
+
+            if len(ctx) != CONTEXT_DIM:
+                continue  # skip malformed
+
+            # ML block
+            ml = []
+            for k in VADER_KEYS:
+                ml.append(float(vader_out.get(k, 0.0)))
+            for k in BERT_LABELS:
+                ml.append(float(bert_out.get(k, 0.0)))
+            for k in EMOTION_LABELS:
+                ml.append(float(goe_out.get(k, 0.0)))
+
+            fv = np.array(ml + ctx, dtype=np.float32)
+            if len(fv) != FEATURE_DIM:
+                continue
+
+            features.append(fv)
+            labels.append(goemo_label)
+
+            # Update HMM for next turn
+            obs        = _empathetic_obs(conv_emotion)
+            hmm_alpha  = _hmm_forward_step(hmm_alpha, transmat, emissionprob, obs)
+
+    logger.info(f"  [EmpDialogues] Extracted {len(features)} conv-context samples.")
+    return (np.array(features, dtype=np.float32) if features else np.empty((0, FEATURE_DIM), dtype=np.float32),
+            labels)
 
 
 # ── Reporting ───────────────────────────────────────────────────────────────────
@@ -335,6 +666,10 @@ def print_report(
 def _get_analyzers(device: int):
     logger.info("Loading analyzers transiently into RAM...")
     torch.set_num_threads(1)
+    # Prevent HuggingFace from doing network version-check calls on every load.
+    # Models are already cached after first download; offline mode avoids hangs.
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     from transformers import pipeline as hf_pipeline
 
@@ -475,7 +810,8 @@ def run_one_cycle(reload_callback) -> None:
             pass
 
     # ── Feature vector cache ───────────────────────────────────────────────────
-    CACHE_PATH = MODEL_PATH.parent / "dataset_features_cache.pkl"
+    CACHE_PATH   = MODEL_PATH.parent / "dataset_features_cache.pkl"
+    _fresh_build = not CACHE_PATH.exists()  # track before we create it
     if CACHE_PATH.exists():
         logger.info("Loading cached dataset features...")
         try:
@@ -576,6 +912,25 @@ def run_one_cycle(reload_callback) -> None:
             f"  [Trainer] Augmented with {len(X_live)} live samples (weight={weight})"
         )
 
+    # ── EmpatheticDialogues: real conversation context augmentation ────────────
+    # Only on fresh build (analyzers still in RAM) to avoid re-running every cycle.
+    if _fresh_build:
+        logger.info("  [EmpDialogues] Extracting conversation-context features...")
+        X_emp, y_emp = extract_empathetic_dialogues_features(
+            vader_analyzer=lambda t: {f"vader_{k}": v for k, v in _vader(vader, t).items()},
+            bert_analyzer=lambda t: _run(bert, t),
+            goe_analyzer=lambda t: _run(goe, t),
+            max_conversations=2000,
+        )
+        if len(X_emp) > 0:
+            # Mix 40% EmpatheticDialogues with 60% GoEmotions in training set
+            emp_weight = 2  # each EmpDialogues sample counts twice vs GoEmotions
+            X_tr.extend([row for row in X_emp] * emp_weight)
+            y_tr.extend(y_emp * emp_weight)
+            # Set gold-label confidence=1.0 so filter_outliers keeps these samples
+            gs_tr.extend([{label: 1.0} for label in y_emp] * emp_weight)
+            logger.info(f"  [EmpDialogues] Added {len(X_emp)*emp_weight} conv-context samples to training set.")
+
     del vader, bert, goe
     gc.collect()
     logger.info("Transient analysers purged.")
@@ -615,7 +970,7 @@ def run_one_cycle(reload_callback) -> None:
         batch_size=256,
         lr=5e-4,
         weight_decay=1e-4,
-        load_balance_coeff=5e-3,
+        load_balance_coeff=5e-4,
         patience=10,
         device=train_device,
     )
@@ -634,10 +989,32 @@ def run_one_cycle(reload_callback) -> None:
     # Log mean gate weights on test set for monitoring (expert collapse detection)
     alpha_te = wrapper.get_gate_weights(X_te_arr)
     alpha_means = alpha_te.mean(axis=0)
+    ctx_log = f"  ctx:{alpha_means[3]:.3f}" if len(alpha_means) > 3 else ""
     logger.info(
         f"  [Gate α] Test mean — "
-        f"vader:{alpha_means[0]:.3f}  bert:{alpha_means[1]:.3f}  goe:{alpha_means[2]:.3f}"
+        f"vader:{alpha_means[0]:.3f}  bert:{alpha_means[1]:.3f}  goe:{alpha_means[2]:.3f}{ctx_log}"
     )
+
+    # ── Temperature calibration (Platt scaling) ──────────────────────────────
+    calibration_temperature = 1.0
+    try:
+        from scipy.optimize import minimize_scalar
+        y_v_idx = np.array([EMOTION_LABELS.index(y) if y in EMOTION_LABELS else 0 for y in y_v])
+        proba_v = wrapper.predict_proba(X_v_arr)
+        log_p   = np.log(np.clip(proba_v, 1e-8, 1.0))
+
+        def nll(T):
+            scaled = log_p / max(T, 0.1)
+            scaled -= scaled.max(axis=1, keepdims=True)
+            exp_s  = np.exp(scaled)
+            p_norm = exp_s / exp_s.sum(axis=1, keepdims=True)
+            return -np.mean(np.log(p_norm[np.arange(len(y_v_idx)), y_v_idx] + 1e-8))
+
+        result = minimize_scalar(nll, bounds=(0.5, 5.0), method='bounded')
+        calibration_temperature = float(result.x)
+        logger.info(f"  [Calibration] Temperature T={calibration_temperature:.4f}")
+    except Exception as e:
+        logger.warning(f"  [Calibration] Failed: {e} — using T=1.0")
 
     # ── Accuracy gate + deploy ─────────────────────────────────────────────────
     deployed = test_acc >= ACCURACY_GATE
@@ -661,10 +1038,12 @@ def run_one_cycle(reload_callback) -> None:
                 "previous_accuracy":   round(prev_meta.get("test_accuracy", 0), 4),
                 "improvement":         round(test_acc - prev_meta.get("test_accuracy", 0), 4),
                 "accuracy_gate":       ACCURACY_GATE,
+                "calibration_temperature": round(calibration_temperature, 4),
                 "gate_weights_mean":   {
-                    "vader": round(float(alpha_means[0]), 4),
-                    "bert":  round(float(alpha_means[1]), 4),
-                    "goe":   round(float(alpha_means[2]), 4),
+                    "vader":   round(float(alpha_means[0]), 4),
+                    "bert":    round(float(alpha_means[1]), 4),
+                    "goe":     round(float(alpha_means[2]), 4),
+                    **( {"context": round(float(alpha_means[3]), 4)} if len(alpha_means) > 3 else {} ),
                 },
             }, f, indent=2)
 
@@ -672,6 +1051,33 @@ def run_one_cycle(reload_callback) -> None:
 
         ready_marker = MODEL_PATH.parent / ".ready"
         ready_marker.touch()
+
+        # Publish model stats to Redis for API health endpoint consumption
+        try:
+            _r = redis_sync.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", 6379)),
+                decode_responses=True,
+            )
+            _stats = {
+                "test_accuracy":         str(round(test_acc, 4)),
+                "test_f1_macro":         str(round(test_f1, 4)),
+                "val_f1_macro":          str(round(val_f1, 4)),
+                "ctx_gate":              str(round(float(alpha_means[3]), 4)) if len(alpha_means) > 3 else "0",
+                "goe_gate":              str(round(float(alpha_means[2]), 4)),
+                "vader_gate":            str(round(float(alpha_means[0]), 4)),
+                "bert_gate":             str(round(float(alpha_means[1]), 4)),
+                "calibration_temperature": str(round(calibration_temperature, 4)),
+                "feature_dim":           str(FEATURE_DIM),
+                "model_version":         "v2-gating-ensemble-bayesian",
+                "training_samples":      str(len(X_tr)),
+                "last_trained_utc":      datetime.datetime.utcnow().isoformat() + "Z",
+                "status":                "ready",
+            }
+            _r.hset("model:stats", mapping=_stats)
+            _r.expire("model:stats", 86400 * 7)
+        except Exception as _re:
+            logger.debug(f"Could not write model stats to Redis: {_re}")
 
         if not hasattr(start_trainer_thread, '_initial_trained'):
             logger.info("Training complete. Opening system gates.")

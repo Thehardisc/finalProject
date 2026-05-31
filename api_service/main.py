@@ -108,6 +108,35 @@ async def get_system_status():
     return payload
 
 
+@app.get("/health/model")
+async def get_model_health():
+    """Returns meta-learner stats: gate weights, accuracy, calibration temperature."""
+    try:
+        stats = await redis_client.redis.hgetall("model:stats") if redis_client.redis else {}
+    except Exception:
+        stats = {}
+
+    if not stats:
+        return {"status": "training", "message": "Model not yet deployed."}
+
+    return {
+        "status":                    stats.get("status", "unknown"),
+        "model_version":             stats.get("model_version"),
+        "feature_dim":               int(stats.get("feature_dim", 0)),
+        "test_accuracy":             float(stats.get("test_accuracy", 0)),
+        "test_f1_macro":             float(stats.get("test_f1_macro", 0)),
+        "calibration_temperature":   float(stats.get("calibration_temperature", 1.0)),
+        "gate_alpha": {
+            "vader":   float(stats.get("vader_gate", 0)),
+            "bert":    float(stats.get("bert_gate", 0)),
+            "goe":     float(stats.get("goe_gate", 0)),
+            "context": float(stats.get("ctx_gate", 0)),
+        },
+        "training_samples":          int(stats.get("training_samples", 0)),
+        "last_trained_utc":          stats.get("last_trained_utc"),
+    }
+
+
 # ── Stream Metrics ─────────────────────────────────────────────────────────────
 
 MONITORED_STREAMS = [
