@@ -30,7 +30,8 @@ from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.constants import (
     CONTEXT_DIM, N_CDM_STATES,
-    CTX_HIST_VALENCE, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
+    CTX_HIST_POS, CTX_HIST_NEU, CTX_HIST_NEG,
+    CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
     CTX_RESIDENCY, CTX_ABRUPTNESS,
 )
 from shared.module_registry import ModuleRegistry
@@ -253,7 +254,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         v = _ce_packet.get(key)
         return round(float(v), 4) if v is not None else round(float(context_vector[idx]), 4)
 
-    hist_val   = _named("ctx_hist_valence",    CTX_HIST_VALENCE)
+    hist_pos   = _named("ctx_hist_pos",         CTX_HIST_POS)
+    hist_neu   = _named("ctx_hist_neu",         CTX_HIST_NEU)
+    hist_neg   = _named("ctx_hist_neg",         CTX_HIST_NEG)
     resonance  = _named("ctx_topic_resonance", CTX_RESONANCE)
     volatility = _named("ctx_volatility",      CTX_VOLATILITY)
     cur_val    = _named("ctx_curr_valence",    CTX_CURR_VALENCE)
@@ -263,7 +266,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "Message ID":       message_id,
         "Dominant Emotion": f"'{dominant_emotion}' ({meta_confidence:.2%})",
         "Prev Emotion":     prev_emotion,
-        "CE Context":       f"cur:{cur_val:.3f} hist:{hist_val:.3f} vol:{volatility:.3f} ce={'yes' if ce_available else 'no'}",
+        "CE Context":       f"cur:{cur_val:.3f} hist_pos:{hist_pos:.3f} hist_neg:{hist_neg:.3f} vol:{volatility:.3f} ce={'yes' if ce_available else 'no'}",
         "Top 3":            ", ".join([f"{e}:{s:.2%}" for e, s in top_3]),
         "E2E Latency":      f"{e2e_lat:.2f}ms",
         "Agg Latency":      f"{agg_lat:.2f}ms",
@@ -317,7 +320,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "context_snapshot": {
             "prev_emotion":         prev_emotion,
             "cur_valence":          cur_val,
-            "historical_valence":   hist_val,
+            "historical_pos":        hist_pos,
+            "historical_neu":        hist_neu,
+            "historical_neg":        hist_neg,
             "topic_resonance":      resonance,
             "volatility":           volatility,
             "ce_available":         ce_available,
@@ -437,7 +442,9 @@ async def main():
                                 "model_name":          model_name,
                                 "context_vector":      data.get("context_vector"),
                                 "original_data":       data.get("original_data"),
-                                "ctx_hist_valence":    data.get("ctx_hist_valence"),
+                                "ctx_hist_pos":        data.get("ctx_hist_pos"),
+                                "ctx_hist_neu":        data.get("ctx_hist_neu"),
+                                "ctx_hist_neg":        data.get("ctx_hist_neg"),
                                 "ctx_topic_resonance": data.get("ctx_topic_resonance"),
                                 "ctx_volatility":      data.get("ctx_volatility"),
                                 "ctx_curr_valence":    data.get("ctx_curr_valence"),

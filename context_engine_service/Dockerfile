@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Download model at build time
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+RUN python -m spacy download en_core_web_sm
 
 # Copy shared utilities (needed for shared/constants.py)
 COPY shared/ ./shared/

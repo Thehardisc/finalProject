@@ -2,7 +2,11 @@
 fastapi
 uvicorn
 redis
-qdrant-client
+qdrant-client>=1.7.0,<1.8.0
 numpy
 torch==2.6.0+cpu
 sentence-transformers
+hmmlearn
+datasets
+scikit-learn
+spacy

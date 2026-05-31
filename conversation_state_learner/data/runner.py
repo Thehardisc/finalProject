@@ -27,14 +27,10 @@ logger = logging.getLogger("runner")
 
 # Seconds to wait after sending the last message before closing the WebSocket.
 # The pipeline (preprocessing → 3 models → central_responder) takes ~3-5s per message.
-PIPELINE_WAIT_PER_MSG = 6.0
-
-# Seconds between consecutive messages in the same conversation.
-MSG_SEND_INTERVAL = 2.0
-
-# Max retries when polling the admin pipeline endpoint for a result.
+PIPELINE_WAIT_PER_MSG = 1.0
+MSG_SEND_INTERVAL = 0.5
 PIPELINE_POLL_RETRIES = 10
-PIPELINE_POLL_DELAY = 2.0
+PIPELINE_POLL_DELAY = 1.0
 
 
 class PipelineRunner:

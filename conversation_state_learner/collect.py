@@ -121,6 +121,8 @@ def phase_run(
     trajectories_filter: Optional[List[str]],
     resume: bool = True,
 ):
+    import concurrent.futures
+    import threading
     logger.info("=== PHASE 2: RUN PIPELINE ===")
     runner = PipelineRunner(base_url=base_url)
 
@@ -129,17 +131,13 @@ def phase_run(
         logger.error(f"No raw conversations found in {RAW_DIR}. Run --phase generate first.")
         sys.exit(1)
 
-    # Track which files have already been enriched (for resume)
     enriched_ids: set[str] = set()
     if resume and OUTPUT_FILE.exists():
         with OUTPUT_FILE.open() as fh:
             for line in fh:
                 try:
                     r = json.loads(line)
-                    # Key: trajectory_type + first message text (unique enough)
-                    key = r.get("trajectory_type", "") + "|" + (
-                        r.get("messages", [{}])[0].get("text", "")[:50]
-                    )
+                    key = r.get("trajectory_type", "") + "|" + (r.get("messages", [{}])[0].get("text", "")[:50])
                     enriched_ids.add(key)
                 except Exception:
                     pass
@@ -169,9 +167,8 @@ def phase_run(
         except Exception as e:
             logger.error(f"  ✗ Failed: {e}")
 
-        # Brief pause between conversations to avoid overloading the pipeline
         if i < total - 1:
-            time.sleep(3.0)
+            time.sleep(1.0)
 
     logger.info(f"\n✓ Enriched {done}/{total} conversations → {OUTPUT_FILE}")
 

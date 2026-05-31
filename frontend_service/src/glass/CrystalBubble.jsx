@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { blendEmotions } from '../components/EmotionPalette';
+import SyntaxText from '../syntax/SyntaxText';
 
 // Crystal Glass message bubble — pure CSS spring drop, ZERO SVG filters.
-export function CrystalBubble({ message, onFeedback, allEmotions }) {
+export function CrystalBubble({ message, onFeedback, allEmotions, theme = 'prism', dark = false }) {
   const isUser = message.sender === 'user';
   const mountedRef = useRef(false);
 
@@ -31,31 +32,35 @@ export function CrystalBubble({ message, onFeedback, allEmotions }) {
       <div style={{
         '--bubble-rgb': blendedRgb,
         animation: 'crystalDrop 0.52s cubic-bezier(0.34, 1.2, 0.64, 1) both',
-        background: isUser
-          ? `rgba(${blendedRgb}, 0.13)`
-          : 'rgba(255, 255, 255, 0.84)',
+        background: dark
+          ? 'rgba(40,41,60,0.62)'
+          : isUser
+            ? `rgba(${blendedRgb}, 0.13)`
+            : 'rgba(255, 255, 255, 0.84)',
         backdropFilter: 'blur(20px) saturate(180%)',
         WebkitBackdropFilter: 'blur(20px) saturate(180%)',
-        border: `1.5px solid rgba(${blendedRgb}, ${isUser ? '0.32' : '0.16'})`,
+        border: dark 
+          ? `1.5px solid rgba(255, 255, 255, 0.08)`
+          : `1.5px solid rgba(${blendedRgb}, ${isUser ? '0.32' : '0.16'})`,
         borderRadius: isUser ? '20px 20px 6px 20px' : '20px 20px 20px 6px',
         padding: '12px 16px',
         maxWidth: '72%',
         minWidth: '80px',
-        boxShadow: `
-          0 4px 20px rgba(${blendedRgb}, 0.16),
-          0 1px 0 rgba(255,255,255,0.95) inset,
-          0 0 0 6px rgba(${blendedRgb}, 0.04)
-        `,
+        boxShadow: dark
+          ? `0 4px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.05)`
+          : `0 4px 20px rgba(${blendedRgb}, 0.16),
+             0 1px 0 rgba(255,255,255,0.95) inset,
+             0 0 0 6px rgba(${blendedRgb}, 0.04)`,
         position: 'relative',
         overflow: 'hidden',
-        transition: 'box-shadow 0.4s ease',
+        transition: 'box-shadow 0.4s ease, background 0.3s, border 0.3s',
       }}>
         {/* Specular highlight — rigid glass top edge */}
         <div style={{
           position: 'absolute',
           top: 0, left: 0, right: 0,
           height: '38%',
-          background: 'linear-gradient(180deg, rgba(255,255,255,0.58) 0%, transparent 100%)',
+          background: dark ? 'linear-gradient(180deg, rgba(255,255,255,0.06) 0%, transparent 100%)' : 'linear-gradient(180deg, rgba(255,255,255,0.58) 0%, transparent 100%)',
           borderRadius: 'inherit',
           pointerEvents: 'none',
         }} />
@@ -64,9 +69,9 @@ export function CrystalBubble({ message, onFeedback, allEmotions }) {
         <div style={{
           fontSize: '0.70rem',
           fontWeight: 700,
-          color: `rgb(${blendedRgb})`,
-          mixBlendMode: 'color-burn',
-          opacity: 0.7,
+          color: dark ? '#a5a6b5' : `rgb(${blendedRgb})`,
+          mixBlendMode: dark ? 'normal' : 'color-burn',
+          opacity: dark ? 0.9 : 0.7,
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
           marginBottom: '4px',
@@ -78,15 +83,15 @@ export function CrystalBubble({ message, onFeedback, allEmotions }) {
 
         {/* Message text */}
         <div style={{
-          color: `rgb(${blendedRgb})`,
-          mixBlendMode: 'color-burn',
+          color: dark ? '#e0e0e0' : `rgb(${blendedRgb})`,
+          mixBlendMode: dark ? 'normal' : 'color-burn',
           fontSize: '0.96rem',
           lineHeight: 1.55,
           fontWeight: 500,
           position: 'relative',
           zIndex: 1,
         }}>
-          {message.text}
+          <SyntaxText text={message.text} theme={theme} dark={dark} />
         </div>
 
         {/* Emotion tag */}
@@ -94,9 +99,9 @@ export function CrystalBubble({ message, onFeedback, allEmotions }) {
           <div style={{
             marginTop: '6px',
             fontSize: '0.68rem',
-            color: `rgb(${blendedRgb})`,
-            mixBlendMode: 'color-burn',
-            opacity: 0.55,
+            color: dark ? '#a5a6b5' : `rgb(${blendedRgb})`,
+            mixBlendMode: dark ? 'normal' : 'color-burn',
+            opacity: dark ? 0.8 : 0.55,
             letterSpacing: '0.05em',
             textTransform: 'capitalize',
             position: 'relative',

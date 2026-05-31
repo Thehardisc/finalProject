@@ -3,7 +3,6 @@ Trajectory inference module — integrates ConversationLSTM into the live pipeli
 
 Responsibilities:
   1. build_feature_vector()   — convert central_responder model_outputs → 67-dim tensor
-                                 (GoEmotions 28 + BERT 7 + VADER 4 + EmojiNet 28)
   2. load_hidden_state()      — fetch (h, c) for a conversation from Redis
   3. save_hidden_state()      — persist (h, c) back to Redis with 2-hour inactivity TTL
   4. run_trajectory_step()    — full inference: load → forward → save → return dict
@@ -52,9 +51,9 @@ end
 
 # ── Feature construction ──────────────────────────────────────────────────────
 
-def build_feature_vector(model_outputs: dict) -> torch.Tensor:
+def build_feature_vector(model_outputs: dict, context_vector: list = None) -> torch.Tensor:
     """
-    Convert central_responder model_outputs dict → [1, 1, 39] float tensor.
+    Convert central_responder model_outputs dict → [1, 1, 77] float tensor.
     model_outputs keys: go_emotions, basic_bert, vader
     """
     go    = model_outputs.get("go_emotions", {})
@@ -65,8 +64,10 @@ def build_feature_vector(model_outputs: dict) -> torch.Tensor:
     bert_vec  = [float(bert.get(e,  0.0)) for e in BERT_LABELS_7]       # 7
     vader_vec = [float(vader.get(k, 0.0)) for k in VADER_KEYS_4]        # 4
 
-    vec = go_vec + bert_vec + vader_vec   # 39
-    return torch.tensor(vec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, 39]
+    ce_vec = context_vector if (context_vector and len(context_vector) == 38) else [0.0] * 38
+
+    vec = go_vec + bert_vec + vader_vec + ce_vec   # 77
+    return torch.tensor(vec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, 77]
 
 
 # ── Redis hidden state I/O ────────────────────────────────────────────────────
@@ -136,6 +137,7 @@ async def run_trajectory_step(
     model_outputs: dict,
     conv_id: str,
     redis,
+    context_vector: list = None,
 ) -> dict:
     """
     Full trajectory inference step for one message.
@@ -162,7 +164,7 @@ async def run_trajectory_step(
         return {}
 
     try:
-        x = build_feature_vector(model_outputs)
+        x = build_feature_vector(model_outputs, context_vector)
 
         hidden = await load_hidden_state(
             conv_id, redis,
@@ -219,10 +221,9 @@ def load_trajectory_model(model_path: str, config_path: str):
         hidden_dim = config.get("hidden_dim", 64)
         num_layers = config.get("num_layers", 1)
         dropout    = config.get("dropout",    0.1)
-        input_dim  = config.get("input_dim",  67)
 
         model = ConversationLSTM(
-            input_dim=input_dim,
+            input_dim=77,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             output_dim=28,

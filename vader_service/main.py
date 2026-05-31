@@ -58,29 +58,23 @@ async def main():
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
-                        mid  = data.get("message_id", "")
-                        cid  = data.get("conversation_id", "")
-                        uid  = data.get("user_id", "")
-                        mlog = logger.bind(message_id=mid, conversation_id=cid, user_id=uid, model=MODEL_NAME)
                         try:
                             text_to_analyze = data.get("text", "") or data.get("original_text", "")
                             start_time = time.time()
-                            mlog.debug("vader_start", extra={"event": "model_start"})
+                            logger.debug(f"Analyzing message {message_id} with {MODEL_NAME}...")
 
                             scores = analyzer.analyze(text_to_analyze)
                             elapsed = (time.time() - start_time) * 1000
 
-                            mlog.info(
-                                "vader_done",
-                                extra={
-                                    "event":            "model_done",
-                                    "latency_ms":       round(elapsed, 2),
-                                    "vader_compound":   scores["vader_compound"],
-                                    "vader_pos":        scores["vader_pos"],
-                                    "vader_neg":        scores["vader_neg"],
-                                    "text_len":         len(text_to_analyze),
-                                },
-                            )
+                            stats = {
+                                "Message ID": data.get("message_id", "N/A"),
+                                "Text Snippet": (text_to_analyze[:30] + '...') if len(text_to_analyze) > 30 else text_to_analyze,
+                                "Latency": f"{elapsed:.2f}ms",
+                                "VADER Compound": scores["vader_compound"],
+                                "Positive": scores["vader_pos"],
+                                "Negative": scores["vader_neg"]
+                            }
+                            logger.log_stats(f"{MODEL_NAME.upper()} Inference", stats)
 
                             output_event = {
                                 "message_id": data.get("message_id", message_id),
@@ -93,18 +87,11 @@ async def main():
                             await r.xack(STREAM_KEY, GROUP_NAME, message_id)
 
                         except Exception as msg_err:
-                            mlog.error(
-                                "vader_failed",
-                                extra={
-                                    "event":       "model_failed",
-                                    "error_class": type(msg_err).__name__,
-                                    "error":       str(msg_err),
-                                },
-                            )
+                            logger.error(f"[VADER] Failed on {message_id}: {msg_err}. ACKing to prevent requeue.", exc_info=True)
                             try:
                                 await r.xack(STREAM_KEY, GROUP_NAME, message_id)
-                            except Exception as ack_err:
-                                mlog.warning("xack_failed", extra={"event": "xack_failed", "error": str(ack_err)})
+                            except Exception:
+                                pass
 
         except Exception as e:
             if "NOGROUP" in str(e):
