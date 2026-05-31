@@ -19,6 +19,9 @@ function parseAnalysis(msg) {
   if (!msg.emotions) return null;
   try {
     const ems = typeof msg.emotions === 'string' ? JSON.parse(msg.emotions) : msg.emotions;
+    const pl  = msg.pipeline_log
+      ? (typeof msg.pipeline_log === 'string' ? JSON.parse(msg.pipeline_log) : msg.pipeline_log)
+      : {};
     const bert_list = [];
     for (const [k, v] of Object.entries(ems)) {
       if (!['vader_neg','vader_neu','vader_pos','vader_compound',
@@ -31,14 +34,18 @@ function parseAnalysis(msg) {
       data: {
         id:                     msg.id,
         raw_text:               msg.content || msg.text,
-        final_dominant_emotion: ems.dominant_emotion || 'Neutral',
+        final_dominant_emotion: ems.dominant_emotion || pl.dominant_selected || 'Neutral',
         final_valence:          ems.vader_compound || 0,
         bert_emotions:          bert_list,
         llm_insights:           'Analysis loaded.',
-        llm_sarcasm_score:      0,
+        llm_sarcasm_score:      pl.sarcasm_score || 0,
         hierarchical_scores:    [],
         emojis_found:           [],
         slang_detected:         {},
+        meta_confidence:        pl.meta_confidence ?? null,
+        logic_map:              pl.logic_map || null,
+        context_snapshot:       pl.context_snapshot || null,
+        lstm_trajectory:        pl.trajectory || null,
       },
     };
   } catch {
@@ -75,6 +82,7 @@ export default function App() {
   const [analyticsData, setAnalyticsData]           = useState(null);
   const [mlProcessing, setMlProcessing]             = useState(false);
   const [regeneratingIds, setRegeneratingIds]       = useState(new Set());
+  const [partialModels, setPartialModels]           = useState(new Set());
 
   const socketRef      = useRef(null);
   const activeConvRef  = useRef(activeConversationId); // tracks current conv without causing WS reconnect
@@ -215,6 +223,7 @@ export default function App() {
             if (convId && convId !== activeConvRef.current) return;
 
             setMlProcessing(false);
+            setPartialModels(new Set());
             setRegeneratingIds(prev => { const n = new Set(prev); n.delete(payload.data?.id); return n; });
             setCurrentAnalysis(prev => ({ ...payload, ai_insight: null, loadingReasoning: true }));
 
@@ -251,6 +260,12 @@ export default function App() {
               }
               return prev;
             });
+          } else if (payload.type === 'model_ready') {
+            setPartialModels(prev => {
+              const next = new Set(prev);
+              next.add(payload.model);
+              return next;
+            });
           }
         } catch {}
       };
@@ -258,7 +273,8 @@ export default function App() {
       ws.onclose = (event) => {
         if (!mountedRef.current) return;
         setStatus('Offline');
-        if (event.code === 1000 || event.code === 1008) return;
+        if (event.code === 1000) return;
+        if (event.code === 1008) { handleLogout(); return; }
         if (retryCountRef.current < MAX_RETRIES) {
           const delay = Math.min(BASE_DELAY * 2 ** retryCountRef.current, 30_000);
           retryCountRef.current++;
@@ -390,6 +406,7 @@ export default function App() {
     };
     setMessages(prev => [...prev, optimistic]);
     setMlProcessing(true);
+    setPartialModels(new Set());
     socketRef.current.send(JSON.stringify({
       text:            inputValue,
       recipient_id:    'system',
@@ -502,6 +519,7 @@ export default function App() {
           onSend={sendMessage}
           currentAnalysis={currentAnalysis}
           processing={mlProcessing}
+          partialModels={partialModels}
           regeneratingIds={regeneratingIds}
           onRegenerateAnalysis={handleRegenerateAnalysis}
           onInjectDemo={handleInjectDemo}

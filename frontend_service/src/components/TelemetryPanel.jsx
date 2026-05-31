@@ -1,173 +1,220 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EmotionPalette } from './EmotionPalette';
+import CDMStateGraph from './CDMStateGraph';
 
-const ENGINES = [
-  { key: 'vader',      label: 'VADER Lexical',   color: '234,179,8',  sub: '4-dim · lexical sentiment' },
-  { key: 'bert',       label: 'BERT Basic',       color: '59,130,246', sub: '7 Ekman classes · transformer' },
-  { key: 'goemotions', label: 'GoEmotions',       color: '168,85,247', sub: '28-dim fine-grained + emoji semantics' },
-  { key: 'meta',       label: 'Meta-Learner',     color: '16,185,129', sub: '103-dim → 28 classes' },
+// Pipeline stage definitions — ordered by execution sequence
+const STAGES = [
+  { key: 'vader',       label: 'VADER',          color: '234,179,8',   sub: 'Lexical sentiment · 4-dim',     modelKey: 'vader'       },
+  { key: 'bert',        label: 'BERT Ekman',      color: '59,130,246',  sub: 'Transformer · 7 Ekman classes', modelKey: 'basic_bert'  },
+  { key: 'goemotions',  label: 'GoEmotions',      color: '168,85,247',  sub: 'Fine-grained · 28 classes',     modelKey: 'go_emotions' },
+  { key: 'context',     label: 'Context Engine',  color: '20,184,166',  sub: 'CDM · 23-dim semantic state',   modelKey: null          },
+  { key: 'meta',        label: 'Meta-Learner',    color: '16,185,129',  sub: 'MLP · 62-dim → final decision', modelKey: null          },
 ];
 
-const TIMING = {
-  vader:      { start: 15,  dur: 90  },
-  bert:       { start: 75,  dur: 190 },
-  goemotions: { start: 75,  dur: 215 },
-  meta:       { start: 310, dur: 70  },
+// Which partial-result model names map to each stage key
+const PARTIAL_MAP = {
+  vader:      'vader',
+  basic_bert: 'bert',
+  go_emotions:'goemotions',
 };
 
-const IDLE = () => Object.fromEntries(ENGINES.map(e => [e.key, { phase: 'idle', latency: null }]));
+export default function TelemetryPanel({ processing, lastAnalysis, partialModels = new Set() }) {
+  const [tab, setTab] = useState('pipeline'); // 'pipeline' | 'cdm'
 
-export default function TelemetryPanel({ processing, lastAnalysis }) {
-  const [states, setStates] = useState(IDLE);
-  const [totalMs, setTotalMs]   = useState(null);
-  const runRef = useRef(0);
+  const d       = lastAnalysis?.data;
+  const pl      = d ? null : null; // unused — read directly from d
+  const logMap  = d?.logic_map    ?? {};
+  const conf    = d?.meta_confidence ?? null;
+  const snap    = d?.context_snapshot ?? null;
+  const traj    = d?.lstm_trajectory;
+  const domEmo  = d?.final_dominant_emotion;
+  const domRgb  = domEmo ? (EmotionPalette[domEmo.toLowerCase()] || EmotionPalette.neutral) : null;
 
-  useEffect(() => {
-    if (!processing) return;
-    const runId = ++runRef.current;
-    setStates(IDLE());
-    setTotalMs(null);
+  // Determine stage status: idle | active | done
+  // A stage is 'done' once we have the final analysis.
+  // VADER/BERT/GoEmotions can be 'active' when their partial event arrives.
+  const stageStatus = (stage) => {
+    if (!processing && !d) return 'idle';
+    // final analysis arrived → all done
+    if (d) return 'done';
+    // analysis not yet arrived — check partialModels
+    if (stage.modelKey && partialModels.has(stage.modelKey)) return 'done';
+    if (stage.key === 'context' || stage.key === 'meta') return 'idle';
+    // show "active" while pipeline is running and we haven't seen this model yet
+    if (processing) return 'active';
+    return 'idle';
+  };
 
-    const tids = [];
-    ENGINES.forEach(({ key }) => {
-      const { start, dur } = TIMING[key];
-      const j = Math.floor(Math.random() * 40);
-      tids.push(setTimeout(() => {
-        if (runRef.current !== runId) return;
-        setStates(p => ({ ...p, [key]: { phase: 'active', latency: null } }));
-      }, start));
-      tids.push(setTimeout(() => {
-        if (runRef.current !== runId) return;
-        setStates(p => ({ ...p, [key]: { phase: 'done', latency: dur + j } }));
-      }, start + dur + j));
-    });
-    tids.push(setTimeout(() => {
-      if (runRef.current !== runId) return;
-      setTotalMs(395 + Math.floor(Math.random() * 85));
-    }, 415));
+  const busy = processing || STAGES.some(s => stageStatus(s) === 'active');
 
-    return () => tids.forEach(clearTimeout);
-  }, [processing]);
-
-  const busy = processing || ENGINES.some(e => states[e.key].phase === 'active');
-  const statusLabel = processing ? 'Processing…' : totalMs ? `Healthy · ${totalMs}ms` : 'Healthy';
-  const statusColor = busy ? '234,179,8' : '16,185,129';
-
-  const d = lastAnalysis?.data;
-  const domRgb = d?.final_dominant_emotion
-    ? (EmotionPalette[d.final_dominant_emotion.toLowerCase()] || EmotionPalette.neutral)
-    : null;
+  // Compute real latency label from pipeline_log if available
+  const latencyLabel = d ? null : null; // E2E latency not in WS payload, omit
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', padding: '18px 14px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', padding: '16px 14px' }}>
 
       {/* ── Header ── */}
-      <div style={{ marginBottom: 16 }}>
+      <div style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#1c1c2e' }}>Pipeline Telemetry</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{
               display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
-              background: `rgb(${statusColor})`,
-              boxShadow: `0 0 ${busy ? 8 : 4}px rgba(${statusColor},.65)`,
+              background: busy ? 'rgb(234,179,8)' : 'rgb(16,185,129)',
+              boxShadow: busy ? '0 0 8px rgba(234,179,8,.65)' : '0 0 4px rgba(16,185,129,.5)',
               animation: busy ? 'tp-pulse .75s ease-in-out infinite' : 'none',
             }} />
-            <span style={{ fontSize: '0.69rem', fontWeight: 600, color: `rgb(${statusColor})` }}>
-              {statusLabel}
+            <span style={{ fontSize: '0.69rem', fontWeight: 600, color: busy ? 'rgb(234,179,8)' : 'rgb(16,185,129)' }}>
+              {busy ? 'Processing…' : d ? 'Healthy' : 'Idle'}
             </span>
           </div>
         </div>
-        <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 3 }}>4-model multimodal NLP</div>
+        <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 3 }}>
+          4-model multimodal NLP + CDM context
+        </div>
       </div>
 
-      {/* ── Engine cards ── */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
-        {ENGINES.map(({ key, label, color, sub }) => {
-          const { phase, latency } = states[key];
-          const active = phase === 'active';
-          const done   = phase === 'done';
-          return (
-            <div key={key} style={{
-              background: active ? `rgba(${color},.07)` : '#fafafa',
-              border: `1px solid ${active ? `rgba(${color},.22)` : 'rgba(0,0,0,.06)'}`,
-              borderRadius: 9, padding: '9px 11px',
-              transition: 'background .2s, border-color .2s',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-                  <div style={{
-                    width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                    background: active ? `rgb(${color})` : done ? `rgba(${color},.50)` : 'rgba(0,0,0,.14)',
-                    boxShadow: active ? `0 0 7px rgba(${color},.75)` : 'none',
-                    animation: active ? 'tp-pulse .65s ease-in-out infinite' : 'none',
-                    transition: 'background .15s',
-                  }} />
-                  <span style={{ fontSize: '0.78rem', fontWeight: 600, color: active ? `rgb(${color})` : '#374151' }}>
-                    {label}
-                  </span>
+      {/* ── Tabs ── */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
+        {['pipeline', 'cdm'].map(t => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            flex: 1, padding: '5px 0', borderRadius: 7, cursor: 'pointer',
+            background: tab === t ? 'rgba(88,86,214,.10)' : 'transparent',
+            border: `1px solid ${tab === t ? 'rgba(88,86,214,.30)' : 'rgba(0,0,0,.08)'}`,
+            color: tab === t ? '#4f46e5' : '#6b7280',
+            fontSize: '0.70rem', fontWeight: 600,
+            transition: 'all .15s',
+          }}>
+            {t === 'pipeline' ? 'Pipeline' : 'State Machine'}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Pipeline Tab ── */}
+      {tab === 'pipeline' && (
+        <>
+          {/* Stage cards */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 16 }}>
+            {STAGES.map((stage) => {
+              const status = stageStatus(stage);
+              const active = status === 'active';
+              const done   = status === 'done';
+              const { color } = stage;
+              return (
+                <div key={stage.key} style={{
+                  background: active ? `rgba(${color},.07)` : '#fafafa',
+                  border: `1px solid ${active ? `rgba(${color},.22)` : done ? `rgba(${color},.15)` : 'rgba(0,0,0,.06)'}`,
+                  borderRadius: 9, padding: '8px 11px',
+                  transition: 'background .2s, border-color .2s',
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                      <div style={{
+                        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
+                        background: active ? `rgb(${color})` : done ? `rgba(${color},.60)` : 'rgba(0,0,0,.14)',
+                        boxShadow: active ? `0 0 7px rgba(${color},.75)` : 'none',
+                        animation: active ? 'tp-pulse .65s ease-in-out infinite' : 'none',
+                        transition: 'background .15s',
+                      }} />
+                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: active ? `rgb(${color})` : '#374151' }}>
+                        {stage.label}
+                      </span>
+                    </div>
+                    {active && (
+                      <span style={{ fontSize: '0.65rem', color: `rgb(${color})`, fontWeight: 700, letterSpacing: 2 }}>···</span>
+                    )}
+                    {done && (
+                      <span style={{ fontSize: '0.65rem', fontWeight: 700, color: `rgb(${color})`, background: `rgba(${color},.10)`, padding: '2px 6px', borderRadius: 20 }}>
+                        ✓
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ height: 3, borderRadius: 2, background: 'rgba(0,0,0,.07)', overflow: 'hidden' }}>
+                    <div style={{
+                      height: '100%',
+                      width: active ? '65%' : done ? '100%' : '0%',
+                      background: `rgb(${color})`,
+                      borderRadius: 2, opacity: done ? .40 : 1,
+                      transition: active ? 'width .18s linear' : 'width .12s ease',
+                    }} />
+                  </div>
+                  <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 4 }}>{stage.sub}</div>
                 </div>
-                {done && latency
-                  ? <span style={{ fontSize: '0.65rem', fontWeight: 600, color: `rgb(${color})`, background: `rgba(${color},.10)`, padding: '2px 6px', borderRadius: 20 }}>{latency}ms</span>
-                  : active
-                    ? <span style={{ fontSize: '0.65rem', color: `rgb(${color})`, fontWeight: 700, letterSpacing: 2 }}>···</span>
-                    : null}
-              </div>
-              <div style={{ height: 3, borderRadius: 2, background: 'rgba(0,0,0,.07)', overflow: 'hidden' }}>
-                <div style={{
-                  height: '100%',
-                  width: active ? '65%' : done ? '100%' : '0%',
-                  background: `rgb(${color})`,
-                  borderRadius: 2, opacity: done ? .40 : 1,
-                  transition: active ? 'width .18s linear' : 'width .12s ease',
-                }} />
-              </div>
-              <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 4 }}>{sub}</div>
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
 
-      {/* ── Last inference ── */}
-      {d && domRgb && (
-        <div style={{
-          background: `rgba(${domRgb},.06)`,
-          border: `1px solid rgba(${domRgb},.18)`,
-          borderRadius: 10, padding: '12px 13px',
-        }}>
-          <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 7 }}>
-            Last Inference
-          </div>
-          <div style={{ fontSize: '0.92rem', fontWeight: 800, color: `rgb(${domRgb})`, textTransform: 'capitalize', marginBottom: 3 }}>
-            {d.final_dominant_emotion}
-          </div>
-          {d.meta_confidence != null && (
-            <div style={{ fontSize: '0.73rem', color: '#6b7280', marginBottom: 9 }}>
-              {(d.meta_confidence * 100).toFixed(0)}% confidence · click any bubble for details
+          {/* Logic Map (real data) */}
+          {d && Object.keys(logMap).length > 0 && (
+            <div style={{
+              background: domRgb ? `rgba(${domRgb},.05)` : '#f9fafb',
+              border: `1px solid ${domRgb ? `rgba(${domRgb},.15)` : 'rgba(0,0,0,.07)'}`,
+              borderRadius: 10, padding: '11px 13px', marginBottom: 14,
+            }}>
+              <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 9 }}>
+                Feature Attribution
+              </div>
+              {Object.entries(logMap).map(([block, v]) => (
+                <div key={block} style={{ marginBottom: 6 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                    <span style={{ fontSize: '0.63rem', color: '#6b7280' }}>{block}</span>
+                    <span style={{ fontSize: '0.63rem', fontWeight: 700, color: `rgb(${domRgb || '88,86,214'})` }}>
+                      {(Math.abs(v) * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <div style={{ height: 2, background: 'rgba(0,0,0,.08)', borderRadius: 1 }}>
+                    <div style={{
+                      height: '100%',
+                      width: `${Math.min(Math.abs(v) * 100, 100)}%`,
+                      background: `rgb(${domRgb || '88,86,214'})`,
+                      borderRadius: 1, transition: 'width .4s ease',
+                    }} />
+                  </div>
+                </div>
+              ))}
             </div>
           )}
-          {d.logic_map && Object.entries(d.logic_map).map(([model, v]) => (
-            <div key={model} style={{ marginBottom: 5 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                <span style={{ fontSize: '0.63rem', color: '#9ca3af' }}>{model}</span>
-                <span style={{ fontSize: '0.63rem', fontWeight: 600, color: v >= 0 ? '#0077ff' : '#ef4444' }}>
-                  {(Math.abs(v) * 100).toFixed(0)}%
-                </span>
+
+          {/* Last inference card */}
+          {d && domRgb && (
+            <div style={{
+              background: `rgba(${domRgb},.06)`,
+              border: `1px solid rgba(${domRgb},.18)`,
+              borderRadius: 10, padding: '11px 13px',
+            }}>
+              <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 7 }}>
+                Last Inference
               </div>
-              <div style={{ height: 2, background: 'rgba(0,0,0,.08)', borderRadius: 1 }}>
-                <div style={{
-                  height: '100%', width: `${Math.min(Math.abs(v) * 100, 100)}%`,
-                  background: v >= 0 ? `rgb(${domRgb})` : '#ef4444', borderRadius: 1,
-                }} />
+              <div style={{ fontSize: '0.92rem', fontWeight: 800, color: `rgb(${domRgb})`, textTransform: 'capitalize', marginBottom: 2 }}>
+                {domEmo}
               </div>
+              {conf != null && (
+                <div style={{ fontSize: '0.73rem', color: '#6b7280', marginBottom: traj ? 8 : 0 }}>
+                  {(conf * 100).toFixed(0)}% confidence
+                </div>
+              )}
+              {traj?.top_predicted && (
+                <div style={{ fontSize: '0.68rem', color: '#9ca3af', marginTop: 4 }}>
+                  Next predicted:{' '}
+                  <span style={{ color: `rgb(${domRgb})`, fontWeight: 700, textTransform: 'capitalize' }}>
+                    {traj.top_predicted}
+                  </span>
+                </div>
+              )}
             </div>
-          ))}
-        </div>
+          )}
+
+          {!d && (
+            <div style={{ textAlign: 'center', padding: '20px 0', color: '#9ca3af', fontSize: '0.8rem' }}>
+              Send a message to see<br />live model activations
+            </div>
+          )}
+        </>
       )}
 
-      {!d && (
-        <div style={{ textAlign: 'center', padding: '20px 0', color: '#9ca3af', fontSize: '0.8rem' }}>
-          Send a message to see<br />live model activations
-        </div>
+      {/* ── CDM State Machine Tab ── */}
+      {tab === 'cdm' && (
+        <CDMStateGraph snapshot={snap} />
       )}
 
       <style>{`

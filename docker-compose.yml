@@ -163,6 +163,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      context_engine_service:
+        condition: service_healthy
     networks:
       - emotion_net
     environment:
@@ -312,10 +314,11 @@ services:
       - emotion_net
     # qdrant images ship without curl; bash's /dev/tcp probe works on any base image
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/6333'"]
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     restart: unless-stopped
     logging: *log-rotation
 
@@ -337,6 +340,12 @@ services:
         condition: service_healthy
     networks:
       - emotion_net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8008/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     restart: unless-stopped
     logging: *log-rotation
 

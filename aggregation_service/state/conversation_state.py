@@ -25,7 +25,8 @@ def _valence_to_mood(avg_valence: float) -> str:
 
 
 async def update_conversation_state(
-    conversation_id: str, new_emotions: dict, r, original_text: str = ""
+    conversation_id: str, new_emotions: dict, r,
+    original_text: str = "", user_id: str = ""
 ) -> dict:
     """
     Update the Redis conversation state hash for a conversation.
@@ -95,8 +96,22 @@ async def update_conversation_state(
         "last_message_emotions":  json.dumps(new_emotions)
     }
 
+    # CDM history — written here so context_engine reads it for the NEXT message
+    # prev_valence lets context_engine compute velocity without a separate query
+    new_state["prev_valence"] = str(ema_valence)   # valence BEFORE this update
+
+    # Per-speaker valence for speaker-asymmetry feature
+    if user_id:
+        new_state[f"spk:{user_id}"] = str(new_valence)
+
     await r.hset(state_key, mapping={k: str(v) for k, v in new_state.items()})
     await r.expire(state_key, 86400 * 7)  # 7-day TTL — stale conversations don't leak memory
+
+    # Sliding valence history (last 3) — used by context_engine for velocity + acceleration
+    hist_key = f"conv:{conversation_id}:valence_hist"
+    await r.lpush(hist_key, str(new_valence))
+    await r.ltrim(hist_key, 0, 2)
+    await r.expire(hist_key, 86400 * 7)
 
     logger.log_stats(f"AGGREGATION: {conversation_id}", {
         "Session ID":    conversation_id,

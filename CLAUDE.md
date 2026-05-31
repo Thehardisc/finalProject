@@ -1,4 +1,4 @@
-ok# CLAUDE.md — InnerLink Emotion Analysis System
+# CLAUDE.md — InnerLink Emotion Analysis System
 
 ## Project Summary
 InnerLink is a real-time emotion analysis chat application. Messages flow through an ML pipeline of parallel NLP analyzers, a meta-learner that fuses their outputs, and a trajectory LSTM that predicts emotional direction. The frontend displays live emotion scores alongside each message.
@@ -10,14 +10,14 @@ InnerLink is a real-time emotion analysis chat application. Messages flow throug
 | Service | Port | Purpose |
 |---|---|---|
 | `ingestion_service` | 8000 | REST entry point — accepts messages, publishes to Redis `message_stream` |
-| `preprocessing_service` | — | Normalizes text, publishes to `preprocessed_stream` |
+| `preprocessing_service` | — | Normalizes text (with debouncer), publishes to `preprocessed_stream` |
 | `vader_service` | — | Lexicon sentiment (4 scores) |
 | `bert_service` | — | 7-class Ekman emotion via `j-hartmann/emotion-english-distilroberta-base` |
 | `goemotions_service` | — | 28-class GoEmotions via `bhadresh-savani/bert-base-go-emotion` + emoji scoring |
 | `central_responder_service` | — | Fuses all model outputs → meta-learner inference + background retraining |
 | `aggregation_service` | — | Conversation state tracking (valence, mood trajectory) |
 | `llm_reasoning_service` | — | Optional LLM reasoning layer (default: RULE_BASED) |
-| `context_engine_service` | — | Episodic memory via Qdrant vector DB |
+| `context_engine_service` | — | CDM (Conversation Dynamics Machine) + episodic memory via Qdrant |
 | `persistence_service` | — | Writes to PostgreSQL |
 | `api_service` | 8001 | WebSocket + REST API for frontend |
 | `frontend_service` | 5173 | React app served via Nginx |
@@ -33,37 +33,54 @@ InnerLink is a real-time emotion analysis chat application. Messages flow throug
 message_stream
   → preprocessed_stream
       → partial_analysis_stream   (vader, basic_bert, go_emotions — all parallel)
+                                  (context_engine — optional, CDM vector)
           → emotion_stream
               → conversation_update_stream
 ```
 
-`goemotions_service` also computes emoji scores (via `emoji.demojize` → GoEmotions model) and includes them in its `partial_analysis_stream` event as `emoji_scores`.
+`goemotions_service` computes emoji scores (via `emoji.demojize` → GoEmotions model) and includes them in its `partial_analysis_stream` event as `emoji_scores`. These are forwarded but not currently incorporated into the meta-learner feature vector.
 
-`central_responder_service` reads the `emoji_scores` field from the go_emotions result and injects it as `model_outputs["emojinet"]` before building the feature vector.
+`context_engine_service` publishes a 23-dim CDM context vector as `model_name=context_engine`. The central responder waits for all required models, then optionally uses the context vector if it arrived within `OPTIONAL_TIMEOUT_MS`.
 
 ---
 
-## Feature Vector (103 dimensions)
+## Feature Vector (62 dimensions)
 
-**Both** `central_responder_service/ml/predictor.py:build_feature_vector` (inference) and `central_responder_service/trainer/preprocessor.py:build_fv` (training) MUST produce the same layout. Any change to one must be mirrored in the other.
+`central_responder_service/meta_learner.py:build_feature_vector` (inference) and `central_responder_service/trainer.py` (training) MUST produce the same layout.
 
 | Block | Indices | Source | Size |
 |---|---|---|---|
 | VADER | [0:4] | `vader_neg, vader_neu, vader_pos, vader_compound` | 4 |
 | BERT Ekman | [4:11] | 7 Ekman labels from `BERT_LABELS` | 7 |
 | GoEmotions | [11:39] | 28 labels from `EMOTION_LABELS` | 28 |
-| EmojiNet | [39:67] | 28 emoji-derived scores (same label order as GoEmotions) | 28 |
-| Context | [67:96] | `avg_valence` (1) + one-hot previous emotion (28) | 29 |
-| Derived | [96:103] | bert_entropy, goe_entropy, bert_margin, goe_margin, bert_goe_agreement, vader_abs_compound, max_goe_score | 7 |
+| CDM Context | [39:62] | 23-dim Conversation Dynamics Machine vector | 23 |
 
-Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` (7), `VADER_KEYS` (4).
+**CDM context vector layout** (23 dims, from `shared/constants.py`):
+- `[0:7]` CDM state one-hot (7 latent states)
+- `[7]` state_residency
+- `[8:11]` transition_path (last 3 state indices / 7)
+- `[11]` entry_abruptness
+- `[12]` topic_coherence
+- `[13]` emotion_entropy
+- `[14]` speaker_divergence
+- `[15]` velocity (Δvalence)
+- `[16]` acceleration (Δ²valence)
+- `[17]` historical_valence (Qdrant)
+- `[18]` topic_resonance (Qdrant)
+- `[19]` volatility
+- `[20]` current_valence
+- `[21]` message_length
+- `[22]` latency_ms
+
+Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` (7), `VADER_KEYS` (4), `CDM_STATES` (7).
 
 ---
 
 ## Trajectory LSTM
 
 - **Input per step**: 67-dim tensor — GoEmotions(28) + BERT(7) + VADER(4) + EmojiNet(28)
-- **Built in**: `central_responder_service/trajectory/inference.py:build_feature_vector`
+- **Architecture**: `central_responder_service/trajectory/model.py:ConversationLSTM`
+- **Inference**: `central_responder_service/trajectory/inference.py` — reads `input_dim` from `trajectory_config.json`
 - **Model files**: `central_responder_service/models/trajectory_lstm.pt` + `trajectory_config.json`
 - **Purpose**: predicts the emotional direction of the next message in a conversation
 - The model is optional — inference degrades gracefully if the file is missing
@@ -74,33 +91,37 @@ Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` 
 
 The trainer runs as a background thread inside `central_responder_service`.
 
-- **Entry**: `central_responder_service/trainer/runner.py:start_trainer_thread`
-- **Feature building**: `trainer/preprocessor.py:build_fv` (must match inference exactly)
-- **Analyzers**: `trainer/analyzers.py` — loads VADER, BERT, GoEmotions transiently, then unloads
-- **Data**: fetched from PostgreSQL via `trainer/data_fetcher.py`
+- **Entry**: `central_responder_service/trainer.py:start_trainer_thread`
+- **Feature building**: `trainer.py` (must match inference in `meta_learner.py` exactly)
+- **Data**: fetched from PostgreSQL
 - **Output**: `central_responder_service/models/meta_weights.pkl` (+ `.sha256`, `_meta.json`, `.ready`)
 - **Gate**: new model only hot-reloaded if test accuracy ≥ `ACCURACY_GATE` (default 0.40)
 - **Interval**: `RETRAIN_INTERVAL_SECONDS` (default 1800)
 
-Key invariant: `trainer/preprocessor.py:build_fv` and `ml/predictor.py:build_feature_vector` must produce identical feature vectors. A mismatch causes `X has N features but StandardScaler expecting M` errors. Guarded by `central_responder_service/training/test_feature_parity.py` (run via `python -m pytest`, and as a pre-launch gate in `start.sh`).
-
-The trainer trains GoEmotions samples on **neutral context** (`avg_valence=0.0`, `prev_emotion="neutral"`) — they're independent utterances with no conversation history. Real sequential context comes only from live-augmented DB samples (`data_fetcher.py` LAG window).
+Key invariant: `trainer.py` feature building and `meta_learner.py:build_feature_vector` must produce identical 62-dim vectors. A mismatch causes `X has N features but StandardScaler expecting M` errors.
 
 ---
 
-## Central Responder Internals (module layout)
+## Central Responder Internals
 
-`main.py` is a **thin entrypoint**: loads the model (`ml/loader.py`, SHA-256 verified), wires hot-reload via a mutable holder + `get_meta_learner()` callable, starts the trainer thread + Prometheus server, loads the trajectory LSTM, then hands off to the consumer loop. All fusion logic is modular:
+`main.py` bootstraps the meta-learner, wires hot-reload, starts the background trainer + Prometheus metrics server (:9090), loads the trajectory LSTM, and runs the Redis consumer loop inline.
 
-- `core/stream_consumer.py` — Redis consumer loop; accumulates the 3 ML partials per message, dispatches aggregation, runs the timeout sweeper.
-- `core/aggregator.py` — single source of truth for fusion: feature vector → meta-learner (or rule-based fallback) → emoji override → context-engine enrichment → trajectory step → publish.
-- `ml/predictor.py` — `build_feature_vector`, `predict_with_meta_learner` (incl. active sarcasm label override when `sarcasm_score > 0.4`), `rule_based_predict`.
-- `ml/loader.py`, `ml/conflict_detector.py`, `ml/impact_calculator.py`, `ml/features.py` (shared derived block).
+- **`meta_learner.py`** — all ML logic: `build_feature_vector`, `predict_with_meta_learner`, `calculate_feature_impacts`, `apply_context_correction`, `load_meta_learner`.
+- **`trainer.py`** — background retraining daemon: `start_trainer_thread`.
+- **`trajectory/inference.py`** — trajectory LSTM step; reads `input_dim` from config file.
+- **`ml/conflict_detector.py`**, **`ml/loader.py`** — model loading + conflict detection helpers.
+- **`shared/module_registry.py`** — dynamic registry of required/optional stream modules; enables the context engine to be optional without code changes.
 
-**Reliability:**
-- **Rule-based fallback**: when no model is loaded or `predict` fails, `rule_based_predict` picks GoEmotions→BERT→VADER argmax (not all-neutral). `pipeline_log["decision_mode"]` is `"meta-learner"` or `"rule-based"`.
-- **DLQ**: aggregation failures and model-timeout drops are written to `failed_aggregation_stream` (mirrors `persistence_service`'s DLQ) so messages aren't lost silently.
-- **Timeout sweeper**: a background task DLQs messages whose 3 partials don't all arrive within `AGGREGATION_TIMEOUT_MS` (15s), before the 30s pending-key TTL expires.
+**Aggregation flow**:
+1. Accumulate partial results in `pending_aggregations` dict keyed by `message_id`
+2. Once all required models arrive, start `OPTIONAL_TIMEOUT_MS` timer for optional modules
+3. If optional (context_engine) arrives in time, cancel timer and aggregate immediately
+4. `aggregate_and_publish` builds feature vector, runs meta-learner, publishes to `emotion_stream`
+
+**Reliability**:
+- **Rule-based fallback**: `predict_with_meta_learner` falls back to GoEmotions→BERT→VADER argmax when no model loaded
+- **Late-arrival deduplication**: `_completed_ids` deque prevents re-processing after aggregation completes
+- **Stale cleanup**: messages with no aggregation after 60s are evicted with a warning log
 
 ---
 
@@ -139,6 +160,7 @@ ACCURACY_GATE=0.40
 MAX_SAMPLES=2500
 LLM_PROVIDER=RULE_BASED         # or OPENAI, GROQ
 ADMIN_USERNAME=admin
+OPTIONAL_TIMEOUT_MS=1000        # ms to wait for context_engine after required models arrive
 ```
 
 ---
@@ -163,14 +185,14 @@ docker compose ps
 
 ## Key Invariants & Gotchas
 
-- **Feature vector parity**: `ml/predictor.py` and `trainer/preprocessor.py` must produce the same 103-dim vector. Whenever you change one, update the other.
-- **Trajectory input**: always 67-dim (GoE+BERT+VADER+Emoji). The trajectory model was trained with this layout — changing it requires retraining the LSTM.
-- **Emoji scores flow**: `goemotions_service` computes emoji scores and attaches them to its result. `central_responder_service/core/stream_consumer.py` carries `emoji_scores` through to the pending packet, and `core/aggregator.py` parses it into `model_outputs["emojinet"]` before calling `build_feature_vector`.
+- **Feature vector parity**: `meta_learner.py:build_feature_vector` and `trainer.py` must produce the same 62-dim vector. Mismatch → `X has N features but StandardScaler expecting M` error.
+- **Trajectory input**: always 67-dim (GoE+BERT+VADER+Emoji). Input dim is read from `trajectory_config.json` via `config.get("input_dim", 67)` — do NOT hardcode it.
+- **CDM context vector**: `shared/constants.py` is the single source of truth for `CONTEXT_DIM=23` and named index constants (e.g. `CTX_HIST_VALENCE`). Context engine and meta_learner both import from here.
 - **CSS import**: `main.jsx` imports `index-v2.css`, not `index.css`. Edits to `index.css` have no effect on the running app.
 - **Model files on host**: `central_responder_service/models/` is bind-mounted into the container. Model files saved by the trainer are immediately visible to the running service without a rebuild.
 - **Frontend rebuild required**: CSS and JSX changes require `docker compose up --build frontend_service -d` — the container serves a static Vite build.
-- **`trainer/` package**: `central_responder_service/trainer/__init__.py` must exist so the `trainer/` package imports cleanly (the legacy `trainer.py` monolith has been removed).
-- **Absolute imports in central_responder**: `main.py` runs as a top-level script (CWD = service dir), so `core/`, `ml/`, `trainer/`, and `trajectory/` use **absolute** imports rooted at the service dir (`from ml.predictor import ...`), never relative (`from ..ml import ...`). Relative imports break under `python main.py`.
+- **Absolute imports in central_responder**: `main.py` runs as a top-level script (CWD = service dir), so imports use absolute paths rooted at the service dir (`from meta_learner import ...`, `from trainer import ...`). Relative imports break under `python main.py`.
+- **Module registry**: `shared/module_registry.py` determines which models are "required" vs "optional". Context engine is optional — if it doesn't arrive within `OPTIONAL_TIMEOUT_MS`, aggregation proceeds with a zero context vector.
 
 ---
 
@@ -193,13 +215,6 @@ docker compose logs | grep <message_id>
 
 In **TEXT** mode the fields render as a trailing `[message_id=... conversation_id=... user_id=...]` suffix. In **JSON** mode they're top-level keys (parseable with `jq`).
 
-The bind helper is composable — add per-block fields without losing the base context:
-
-```python
-mlog = logger.bind(message_id=mid, conversation_id=cid)
-mlog.info("done", extra={"event": "model_done", "latency_ms": elapsed})
-```
-
 ### Log level contract
 
 | Level | Use for |
@@ -212,8 +227,6 @@ mlog.info("done", extra={"event": "model_done", "latency_ms": elapsed})
 
 ### Standard `event=` field values
 
-These are the structured event names used across the stack. Grep one to find every occurrence:
-
 | Event | Emitter | Meaning |
 |---|---|---|
 | `ingest_accepted` | ingestion | Message written to `message_stream` |
@@ -224,21 +237,14 @@ These are the structured event names used across the stack. Grep one to find eve
 | `aggregation_done` | aggregation_service | Conversation state updated |
 | `ws_message_received` | api_service | Client sent a message over WebSocket |
 | `ws_broadcast` | api_service | Emotion event broadcast to N recipients |
-| `persist_batch_done` / `persistence_failed` | persistence_service | DB batch outcome (failed includes `message_ids` for replay) |
+| `persist_batch_done` / `persistence_failed` | persistence_service | DB batch outcome |
 | `dlq_write_failed` | persistence_service | A DLQ entry itself couldn't be written |
 | `user_registered` / `user_login` | api_service auth | Audit success events; `email_hash` only, never raw email |
-| `login_failed` (`reason=user_not_found\|account_inactive\|password_mismatch`) | api_service auth | Audit failure events |
-| `ws_auth_failed` (`reason=missing_cookie\|user_mismatch\|decode_error`) | api_service WS | Audit failure events |
-| `admin_action` (`action=update_user\|delete_user`) | api_service admin | Records `actor` + `target` |
-| `trainer_phase` (`phase=data_load\|feature_extract_*\|live_aug\|filter\|train\|eval`) | trainer | Each phase end with `duration_ms` |
-| `trainer_gate_decision` | trainer | `test_acc`, `threshold`, `delta`, `deployed` |
-| `trainer_cycle_complete` | trainer | Total duration + deployed bool |
-| `trainer_heartbeat` | trainer | Once per minute between cycles — proves the loop is alive |
+| `login_failed` | api_service auth | Audit failure events |
+| `ws_auth_failed` | api_service WS | Audit failure events |
+| `admin_action` | api_service admin | Records `actor` + `target` |
 | `model_hot_reload` | central_responder | Logs the prev_acc → new_acc transition |
-| `emoji_scores_parse_failed` | central_responder | Structured fields only — raw bytes never logged |
-| `meta_inference` (with `decision_mode=meta-learner\|rule-based`) | central_responder | Per-message prediction; `rule-based` = fallback path |
-| `aggregation_timeout` | central_responder | Message's 3 ML partials didn't all arrive in time → routed to `failed_aggregation_stream` |
-| `analyzer_load_failed` (`stage=vader\|bert\|goemotions\|emoji_scorer`) | trainer | Transient analyzer load threw; cycle retries next interval |
+| `meta_inference` (with `decision_mode=meta-learner\|rule-based`) | central_responder | Per-message prediction |
 
 ### Log rotation
 
