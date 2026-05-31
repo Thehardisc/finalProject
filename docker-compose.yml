@@ -1,3 +1,11 @@
+# Bound container log size — prevents unbounded disk growth on long-running deploys.
+# Each service references this via `logging: *log-rotation`.
+x-log-rotation: &log-rotation
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   redis:
     image: redis:7-alpine
@@ -11,6 +19,8 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+    logging: *log-rotation
     networks:
       - emotion_net
 
@@ -31,6 +41,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
+    logging: *log-rotation
 
   ingestion_service:
     build:
@@ -44,6 +56,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -52,6 +65,9 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost}
+    restart: unless-stopped
+    logging: *log-rotation
 
   preprocessing_service:
     build:
@@ -63,11 +79,14 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+    restart: unless-stopped
+    logging: *log-rotation
 
   vader_service:
     build:
@@ -80,11 +99,14 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+    restart: unless-stopped
+    logging: *log-rotation
 
   goemotions_service:
     build:
@@ -96,6 +118,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -103,6 +126,9 @@ services:
       REDIS_PORT: 6379
     volumes:
       - hf_cache:/root/.cache/huggingface
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *log-rotation
 
 
   bert_service:
@@ -115,6 +141,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -122,11 +149,17 @@ services:
       REDIS_PORT: 6379
     volumes:
       - hf_cache:/root/.cache/huggingface
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *log-rotation
 
   central_responder_service:
     build:
       context: .
       dockerfile: central_responder_service/Dockerfile
+    # Prometheus /metrics scrape endpoint
+    ports:
+      - "9090:9090"
     depends_on:
       redis:
         condition: service_healthy
@@ -135,6 +168,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -148,6 +182,9 @@ services:
     volumes:
       - ./central_responder_service/models:/app/models # use host directory directly
       - hf_cache:/root/.cache/huggingface
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *log-rotation
 
   llm_reasoning_service:
     build:
@@ -159,12 +196,15 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       LLM_PROVIDER: ${LLM_PROVIDER:-RULE_BASED}
+    restart: unless-stopped
+    logging: *log-rotation
 
   aggregation_service:
     build:
@@ -176,11 +216,14 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+    restart: unless-stopped
+    logging: *log-rotation
 
   persistence_service:
     build:
@@ -194,6 +237,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -202,6 +246,8 @@ services:
       DB_HOST: db
     volumes:
       - ./central_responder_service/models:/app/models:ro # Read-only access to readiness marker
+    restart: unless-stopped
+    logging: *log-rotation
 
   api_service:
     build:
@@ -223,6 +269,7 @@ services:
     networks:
       - emotion_net
     environment:
+      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -239,8 +286,11 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost,http://127.0.0.1,http://127.0.0.1:5173}
     volumes:
       - ./central_responder_service/models:/app/models:ro
+    restart: unless-stopped
+    logging: *log-rotation
 
 
   frontend_service:
@@ -249,9 +299,12 @@ services:
     ports:
       - "5173:80"
     depends_on:
-      - api_service
+      api_service:
+        condition: service_started
     networks:
       - emotion_net
+    restart: unless-stopped
+    logging: *log-rotation
 
   qdrant:
     image: qdrant/qdrant:v1.7.0
@@ -259,20 +312,27 @@ services:
       - "6333:6333"
     networks:
       - emotion_net
+    # qdrant images ship without curl; bash's /dev/tcp probe works on any base image
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+    restart: unless-stopped
+    logging: *log-rotation
 
   context_engine_service:
     build:
       context: .
       dockerfile: context_engine_service/Dockerfile
     environment:
-      - REDIS_HOST=redis
-      - QDRANT_HOST=qdrant
+      TZ: ${TZ}
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      QDRANT_HOST: qdrant
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
     depends_on:
       redis:
         condition: service_healthy
@@ -286,6 +346,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    restart: unless-stopped
+    logging: *log-rotation
 
 networks:
   emotion_net:

@@ -58,8 +58,6 @@ async def ingest_message(msg: MessageInput, api_key: str = Depends(validate_api_
         logger.warning(f"Rate limit exceeded for api_key: {api_key[:8]}..., conv={msg.conversation_id}")
         raise HTTPException(status_code=429, detail="Too Many Requests: Rate limit exceeded")
     
-    logger.debug(f"Received ingestion request: conv={msg.conversation_id}, user={msg.user_id}, len={len(msg.text)}")
-    
     event = MessageEvent(
         conversation_id=msg.conversation_id,
         user_id=msg.user_id,
@@ -68,14 +66,20 @@ async def ingest_message(msg: MessageInput, api_key: str = Depends(validate_api_
         message_id=str(uuid.uuid4()),
         metadata=msg.metadata
     )
-    
+
+    mlog = logger.bind(
+        message_id=event.message_id,
+        conversation_id=event.conversation_id,
+        user_id=event.user_id,
+    )
+    mlog.debug("ingest_request", extra={"event": "ingest_request", "text_len": len(msg.text)})
+
     try:
-        # write to stream
         await redis_client.publish_event("message_stream", event.dict())
-        logger.info(f"Successfully ingested message {event.message_id} [conv={event.conversation_id}]")
+        mlog.info("ingest_accepted", extra={"event": "ingest_accepted", "text_len": len(msg.text)})
         return {"status": "accepted", "message_id": event.message_id}
     except Exception as e:
-        logger.log_exception("CRITICAL INGESTION FAILURE", e)
+        mlog.log_exception("ingest_publish_failed", e)
         raise HTTPException(status_code=500, detail="Service Unavailable: Failed to persist event stream")
 
 @app.get("/health")

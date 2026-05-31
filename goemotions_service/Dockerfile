@@ -8,10 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy shared code
 COPY shared/ /app/shared/
 
-# Pre-download models
-ENV TRANSFORMERS_CACHE=/app/model_cache
-RUN python shared/download_models.py
-
 # Copy service code
 COPY goemotions_service/ /app/goemotions_service/
 

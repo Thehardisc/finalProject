@@ -58,6 +58,10 @@ async def main():
             if messages:
                 for stream, msgs in messages:
                     for message_id, data in msgs:
+                        mid  = data.get("message_id", "")
+                        cid  = data.get("conversation_id", "")
+                        uid  = data.get("user_id", "")
+                        mlog = logger.bind(message_id=mid, conversation_id=cid, user_id=uid)
                         try:
                             conversation_id = data.get("conversation_id")
                             original_text   = data.get("original_text", "")
@@ -66,8 +70,11 @@ async def main():
                             emotions_map = {}
                             try:
                                 emotions_map = json.loads(data.get("emotions", "{}"))
-                            except json.JSONDecodeError:
-                                pass
+                            except json.JSONDecodeError as e:
+                                mlog.warning(
+                                    "emotions_parse_failed",
+                                    extra={"event": "emotions_parse_failed", "error": str(e)},
+                                )
 
                             dom_emo = data.get("dominant_emotion")
                             if dom_emo:
@@ -81,11 +88,17 @@ async def main():
                                     user_id=user_id,
                                 )
                                 elapsed = (time.time() - t0) * 1000
-                                logger.debug(
-                                    f"Aggregation for {conversation_id} took {elapsed:.2f}ms"
+                                mlog.info(
+                                    "aggregation_done",
+                                    extra={
+                                        "event":      "aggregation_done",
+                                        "latency_ms": round(elapsed, 2),
+                                        "dominant":   dom_emo or "unknown",
+                                        "avg_val":    round(float(updated_state.get("average_valence", 0.0)), 4) if updated_state else 0.0,
+                                    },
                                 )
                             else:
-                                logger.warning(f"No conversation_id for msg {message_id}, skipping state update.")
+                                mlog.warning("no_conversation_id", extra={"event": "no_conversation_id"})
                                 updated_state = {}
 
                             output_event = data.copy()
@@ -94,14 +107,18 @@ async def main():
                             await r.xack(STREAM_KEY, GROUP_NAME, message_id)
 
                         except Exception as msg_err:
-                            logger.error(
-                                f"[AGGREGATION] Failed to process {message_id}: {msg_err}. "
-                                "ACKing to prevent infinite requeue."
+                            mlog.error(
+                                "aggregation_failed",
+                                extra={
+                                    "event":       "aggregation_failed",
+                                    "error_class": type(msg_err).__name__,
+                                    "error":       str(msg_err),
+                                },
                             )
                             try:
                                 await r.xack(STREAM_KEY, GROUP_NAME, message_id)
-                            except Exception:
-                                pass
+                            except Exception as ack_err:
+                                mlog.warning("xack_failed", extra={"event": "xack_failed", "error": str(ack_err)})
 
         except Exception as e:
             logger.log_exception(

@@ -1,160 +1,251 @@
-# CLAUDE.md
+# CLAUDE.md — InnerLink Emotion Analysis System
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## Project Summary
+InnerLink is a real-time emotion analysis chat application. Messages flow through an ML pipeline of parallel NLP analyzers, a meta-learner that fuses their outputs, and a trajectory LSTM that predicts emotional direction. The frontend displays live emotion scores alongside each message.
 
-## Running the System
+---
 
-**Prerequisites:** Docker Desktop running, `.env` file created from `.env-template`:
-```bash
-cp .env.example .env
-# Edit .env: set INTERNAL_KEY, JWT_SECRET, ADMIN_USERNAME
-```
+## Service Map
 
-**Start (auto-detects GPU):**
-```bash
-bash start.sh          # macOS/Linux
-start.bat              # Windows
-```
+| Service | Port | Purpose |
+|---|---|---|
+| `ingestion_service` | 8000 | REST entry point — accepts messages, publishes to Redis `message_stream` |
+| `preprocessing_service` | — | Normalizes text (with debouncer), publishes to `preprocessed_stream` |
+| `vader_service` | — | Lexicon sentiment (4 scores) |
+| `bert_service` | — | 7-class Ekman emotion via `j-hartmann/emotion-english-distilroberta-base` |
+| `goemotions_service` | — | 28-class GoEmotions via `bhadresh-savani/bert-base-go-emotion` + emoji scoring |
+| `central_responder_service` | — | Fuses all model outputs → meta-learner inference + background retraining |
+| `aggregation_service` | — | Conversation state tracking (valence, mood trajectory) |
+| `llm_reasoning_service` | — | Optional LLM reasoning layer (default: RULE_BASED) |
+| `context_engine_service` | — | CDM (Conversation Dynamics Machine) + episodic memory via Qdrant |
+| `persistence_service` | — | Writes to PostgreSQL |
+| `api_service` | 8001 | WebSocket + REST API for frontend |
+| `frontend_service` | 5173 | React app served via Nginx |
+| `qdrant` | 6333 | Vector DB for context engine |
+| `redis` | 6379 | Message bus (Streams) + state (Hashes) |
+| `db` (postgres) | 5432 | Long-term storage |
 
-**Start with explicit GPU:**
-```bash
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
-```
+---
 
-**Start CPU-only:**
-```bash
-docker compose up --build
-```
-
-**Rebuild a single service:**
-```bash
-docker compose up --build <service_name>
-# e.g. docker compose up --build central_service
-```
-
-**View logs:**
-```bash
-docker compose logs -f <service_name>
-docker compose logs -f central_service
-```
-
-## Service Endpoints
-
-| Service | URL |
-|---|---|
-| Frontend (React) | http://localhost:5173 |
-| API (REST + WebSocket) | http://localhost:8001 |
-| Ingestion | http://localhost:8000 |
-
-## Architecture
-
-**Eleven services** connected by **Redis Streams** (not direct HTTP calls):
+## Redis Stream Pipeline
 
 ```
-[User] → Frontend(5173) → API(8001) → ingestion(8000)
-                                           ↓
-                                     [redis: message_stream]
-                                           ↓
-                                    preprocessing_service
-                                           ↓
-                              [redis: preprocessed_stream]
-                           ↙          ↓          ↘
-                    vader_service  bert_service  gpt_service
-                                  └─────────────────────────────────
-                                                   ↓
-                                [redis: partial_analysis_stream]
-                                                   ↓
-                                      central_service_service
-                                     (+ context_service_service)
-                                                   ↓
-                                     [redis: emotion_stream]
-                                                   ↓
-                              ┌───────────────────────────┐
-                       aggregation_service        llm_reasoning_service
-                              ↓
-                [redis: conversation_update_stream]
-                         ↙              ↘
-             persist_service        api_service → WebSocket → Frontend
+message_stream
+  → preprocessed_stream
+      → partial_analysis_stream   (vader, basic_bert, go_emotions — all parallel)
+                                  (context_engine — optional, CDM vector)
+          → emotion_stream
+              → conversation_update_stream
 ```
 
-## Critical Architecture Rules
+`goemotions_service` computes emoji scores (via `emoji.demojize` → GoEmotions model) and includes them in its `partial_analysis_stream` event as `emoji_scores`. These are forwarded but not currently incorporated into the meta-learner feature vector.
 
-**The central_service_service** is the most complex service. It:
-1. Waits for **three** services to report to `partial_analysis_stream`: `vader`, `bert`, `gpt`
-2. Builds a **87-dim feature vector**: `[0:4]` VADER + `[4:11]` BERT + `[11:39]` GOT + `[39:87]` Context Engine
-3. Runs a **sklearn LogisticRegression pipeline** (the "meta-learner") on this vector
-4. Also runs an optional **LSTM trajectory model** for next-emotion prediction
-5. Contains a **background thread** that retrains the meta-learner on new data every 1800s
+`context_engine_service` publishes a 23-dim CDM context vector as `model_name=context_engine`. The central responder waits for all required models, then optionally uses the context vector if it arrived within `OPTIONAL_TIMEOUT_MS`.
 
-**context_engine_service** is separate and also reads from `preprocessed_stream`. It publishes a 48-dim vector to `partial_analysis_stream` with `model_name=context_engine`. The central_service waits for the 3 required models, then optionally uses the context vector if it arrived.
+---
 
-**The 48-dim context vector layout** (from `context_engine_service/main.py`):
-- `[0]` = historical_valence (from Vdb vector search)
-- `[1]` = topic_resonance (from Vdb)
-- `[2]` = volatility (exponential moving average)
-- `[3]` = current_valence (from redis)
-- `[4]` = message length
-- `[5]` = latency_ms
-- `[6:48]` = SentenceTransformer embedding[:42] (model: `all-MiniLM-L6-2`)
+## Feature Vector (62 dimensions)
 
-**The meta-learner model** lives at `central_service_service/models/meta_weights.pkl`. If it doesn't exist or doesn't match the current feature dimensions (87), the service falls back to rule-based logic. Deleting this file forces retraining on the next startup.
+`central_responder_service/meta_learner.py:build_feature_vector` (inference) and `central_responder_service/trainer.py` (training) MUST produce the same layout.
 
-**[Shared constants](central_service_service/shared/constants.py)** is the single source of truth for feature dimensions:
-- `FEATURE_DIM = 87` (must match the model and all feature-building code)
-- `FEATURE_DIM = 48` (context engine)
-- `FEATURE_DIM = 39` (meta-learner)
+| Block | Indices | Source | Size |
+|---|---|---|---|
+| VADER | [0:4] | `vader_neg, vader_neu, vader_pos, vader_compound` | 4 |
+| BERT Ekman | [4:11] | 7 Ekman labels from `BERT_LABELS` | 7 |
+| GoEmotions | [11:39] | 28 labels from `EMOTION_LABELS` | 28 |
+| CDM Context | [39:62] | 23-dim Conversation Dynamics Machine vector | 23 |
 
-If you change any of these, you must also delete `meta_weights.pkl` and `dataset_features_cache.pkl` to force a full retrain.
+**CDM context vector layout** (23 dims, from `shared/constants.py`):
+- `[0:7]` CDM state one-hot (7 latent states)
+- `[7]` state_residency
+- `[8:11]` transition_path (last 3 state indices / 7)
+- `[11]` entry_abruptness
+- `[12]` topic_coherence
+- `[13]` emotion_entropy
+- `[14]` speaker_divergence
+- `[15]` velocity (Δvalence)
+- `[16]` acceleration (Δ²valence)
+- `[17]` historical_valence (Qdrant)
+- `[18]` topic_resonance (Qdrant)
+- `[19]` volatility
+- `[20]` current_valence
+- `[21]` message_length
+- `[22]` latency_ms
 
-## Key Files
+Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` (7), `VADER_KEYS` (4), `CDM_STATES` (7).
 
-| File | Purpose |
-|---|---|
-| `central_service_service/meta_learner.py` | Feature vector construction + sklearn inference |
-| `central_service_service/main.py` | Main stream processing loop + aggregation |
-| `central_service_service/trainer.py` | Background retraining logic |
-| `central_service_service/trajectory/inference.py` | LSTM trajectory model |
-| `context_engine_service/main.py` | 48-dim context vector builder |
-| `shared/constants.py` | Feature dimensions and label lists |
-| `api_service/main.py` | REST endpoints + WebSocket server |
-| `api_service/websocket/listener.py` | Redis → WebSocket bridge |
+---
 
-## Data Storage
+## Trajectory LSTM
 
-- **Redis** (`redis:6379`): All inter-service messaging (streams), session state, rate limiting
-- **PostgreSQL** (`db:5432`): Persisted messages, emotion results, user accounts
-- **Qddb** (`qddb:6333`): Long-term semantic memory (used by context_engine_service)
+- **Input per step**: 67-dim tensor — GoEmotions(28) + BERT(7) + VADER(4) + EmojiNet(28)
+- **Architecture**: `central_responder_service/trajectory/model.py:ConversationLSTM`
+- **Inference**: `central_responder_service/trajectory/inference.py` — reads `input_dim` from `trajectory_config.json`
+- **Model files**: `central_responder_service/models/trajectory_lstm.pt` + `trajectory_config.json`
+- **Purpose**: predicts the emotional direction of the next message in a conversation
+- The model is optional — inference degrades gracefully if the file is missing
 
-Redis streams used (in order):
-1. `message_stream`
-2. `preprocessed_stream`
-3. `partial_analysis_stream`
-4. `emotion_stream`
-5. `conversation_update_stream`
-6. `conversation_update_stream`
+---
 
-## Auth
+## Meta-Learner Retraining
 
-The system uses two auth mechanisms:
-- **API key** (`X-API-Key` header): Required for the ingestion endpoint. Set via `INTERNAL_API_KEY` env var.
-- **JWT**: Used for user-facing routes on the API. Set via `JWT_SECRET` env var.
+The trainer runs as a background thread inside `central_responder_service`.
+
+- **Entry**: `central_responder_service/trainer.py:start_trainer_thread`
+- **Feature building**: `trainer.py` (must match inference in `meta_learner.py` exactly)
+- **Data**: fetched from PostgreSQL
+- **Output**: `central_responder_service/models/meta_weights.pkl` (+ `.sha256`, `_meta.json`, `.ready`)
+- **Gate**: new model only hot-reloaded if test accuracy ≥ `ACCURACY_GATE` (default 0.40)
+- **Interval**: `RETRAIN_INTERVAL_SECONDS` (default 1800)
+
+Key invariant: `trainer.py` feature building and `meta_learner.py:build_feature_vector` must produce identical 62-dim vectors. A mismatch causes `X has N features but StandardScaler expecting M` errors.
+
+---
+
+## Central Responder Internals
+
+`main.py` bootstraps the meta-learner, wires hot-reload, starts the background trainer + Prometheus metrics server (:9090), loads the trajectory LSTM, and runs the Redis consumer loop inline.
+
+- **`meta_learner.py`** — all ML logic: `build_feature_vector`, `predict_with_meta_learner`, `calculate_feature_impacts`, `apply_context_correction`, `load_meta_learner`.
+- **`trainer.py`** — background retraining daemon: `start_trainer_thread`.
+- **`trajectory/inference.py`** — trajectory LSTM step; reads `input_dim` from config file.
+- **`ml/conflict_detector.py`**, **`ml/loader.py`** — model loading + conflict detection helpers.
+- **`shared/module_registry.py`** — dynamic registry of required/optional stream modules; enables the context engine to be optional without code changes.
+
+**Aggregation flow**:
+1. Accumulate partial results in `pending_aggregations` dict keyed by `message_id`
+2. Once all required models arrive, start `OPTIONAL_TIMEOUT_MS` timer for optional modules
+3. If optional (context_engine) arrives in time, cancel timer and aggregate immediately
+4. `aggregate_and_publish` builds feature vector, runs meta-learner, publishes to `emotion_stream`
+
+**Reliability**:
+- **Rule-based fallback**: `predict_with_meta_learner` falls back to GoEmotions→BERT→VADER argmax when no model loaded
+- **Late-arrival deduplication**: `_completed_ids` deque prevents re-processing after aggregation completes
+- **Stale cleanup**: messages with no aggregation after 60s are evicted with a warning log
+
+---
+
+## Auth & Users
+
+- JWT-based auth in `api_service/auth_utils.py`
+- Registration creates a user in PostgreSQL; the username matching `ADMIN_USERNAME` env var gets admin role
+- Routes: `api_service/routes/auth.py`, `users.py`, `conversations.py`, `messages.py`, `analytics.py`, `admin.py`
+- `JWT_SECRET`, `JWT_EXPIRY_HOURS`, `ADMIN_USERNAME` configured in `.env`
+
+---
 
 ## Frontend
 
-- **React + Vite** in `frontend_service/`
-- WebSocket connection in `src/hooks/useWebSocket.js`
-- The "status wall" system waits for `systems_ready` before allowing chat
-- Zero dark mode: all color comes from emotion values, never from a dark background
-- Emotional colors are defined in `src/components/EmotionPalette.js`
+- **Framework**: React (Vite build, served by Nginx in Docker)
+- **Entry point**: `frontend_service/src/main.jsx` — imports `index-v2.css` (NOT `index.css`)
+- **CSS**: `index-v2.css` (base styles) + `glass/CrystalGlass-v2.css` (design system, `.crystal-shell`)
+- **Main app shell**: `App.jsx` wraps everything in `<div className="crystal-shell">`
+- **Main view**: `src/pages/IGDashboard.jsx` — Instagram-style layout with sidebar + chat area
+- **Scroll rule**: body and `.crystal-shell` are `overflow: hidden`. Only the messages container (`ref={messagesContainerRef}`) scrolls. Use `el.scrollTop = el.scrollHeight` to scroll to bottom — do NOT use `scrollIntoView` (it picks the wrong scroll ancestor).
+- **Flex layout**: chat area needs `minHeight: 0` to constrain the flex column; messages div needs `minHeight: 0` for `overflowY: auto` to activate.
 
-## Model Files
+---
 
-Model files in `central_service_service/models/`:
-- `meta_weights.pkl` — the trained sklearn pipeline (87-dim input)
-- `meta_weights_meta.json` — training metadata
-- `dataset_features_cache.pkl` — cached features from GOT (with `feature_dim` key for validation)
-- `.ready` — sentinel file; presence means a valid model is loaded
-- `trajectory_lstm.pt` — optional LSTM model
-- `trajectory_config.json` — LSTM architecture config
+## Environment (.env)
 
-None of these are committed to git. They are generated at runtime.
+Key variables (all in `.env`, applied to containers via `docker-compose.yml`):
+
+```
+TZ=Asia/Jerusalem               # Container timezone for log timestamps
+INTERNAL_API_KEY=...            # X-API-Key header required on all endpoints
+JWT_SECRET=...                  # Change in production
+REDIS_PASSWORD=                 # Leave empty for no auth (dev)
+RETRAIN_INTERVAL_SECONDS=1800
+ACCURACY_GATE=0.40
+MAX_SAMPLES=2500
+LLM_PROVIDER=RULE_BASED         # or OPENAI, GROQ
+ADMIN_USERNAME=admin
+OPTIONAL_TIMEOUT_MS=1000        # ms to wait for context_engine after required models arrive
+```
+
+---
+
+## Common Commands
+
+```bash
+# Start everything
+docker compose up --build -d
+
+# Rebuild a single service after code changes
+docker compose up --build <service_name> -d
+
+# Watch logs for a service
+docker logs -f projects-final-central_responder_service-1
+
+# Check all running services
+docker compose ps
+```
+
+---
+
+## Key Invariants & Gotchas
+
+- **Feature vector parity**: `meta_learner.py:build_feature_vector` and `trainer.py` must produce the same 62-dim vector. Mismatch → `X has N features but StandardScaler expecting M` error.
+- **Trajectory input**: always 67-dim (GoE+BERT+VADER+Emoji). Input dim is read from `trajectory_config.json` via `config.get("input_dim", 67)` — do NOT hardcode it.
+- **CDM context vector**: `shared/constants.py` is the single source of truth for `CONTEXT_DIM=23` and named index constants (e.g. `CTX_HIST_VALENCE`). Context engine and meta_learner both import from here.
+- **CSS import**: `main.jsx` imports `index-v2.css`, not `index.css`. Edits to `index.css` have no effect on the running app.
+- **Model files on host**: `central_responder_service/models/` is bind-mounted into the container. Model files saved by the trainer are immediately visible to the running service without a rebuild.
+- **Frontend rebuild required**: CSS and JSX changes require `docker compose up --build frontend_service -d` — the container serves a static Vite build.
+- **Absolute imports in central_responder**: `main.py` runs as a top-level script (CWD = service dir), so imports use absolute paths rooted at the service dir (`from meta_learner import ...`, `from trainer import ...`). Relative imports break under `python main.py`.
+- **Module registry**: `shared/module_registry.py` determines which models are "required" vs "optional". Context engine is optional — if it doesn't arrive within `OPTIONAL_TIMEOUT_MS`, aggregation proceeds with a zero context vector.
+
+---
+
+## Logging
+
+All services log via `shared/utils/logger.py:get_logger(name)`. Two env vars control format:
+
+- **`LOG_LEVEL`**: `DEBUG | INFO | WARNING | ERROR | CRITICAL` — default `INFO`.
+- **`LOG_FORMAT`**: `TEXT | JSON` — default `TEXT`. Invalid values fall back to `TEXT` with a stderr warning.
+
+Both are set on every service via `docker-compose.yml` and can be overridden per-service in `.env`.
+
+### Correlation IDs
+
+Every per-message handler binds `message_id`, `conversation_id`, and `user_id` once at the top of its loop, so every subsequent log line carries those fields. Follow a single message across the stack with:
+
+```bash
+docker compose logs | grep <message_id>
+```
+
+In **TEXT** mode the fields render as a trailing `[message_id=... conversation_id=... user_id=...]` suffix. In **JSON** mode they're top-level keys (parseable with `jq`).
+
+### Log level contract
+
+| Level | Use for |
+|---|---|
+| `DEBUG` | Dev-only verbosity (per-message dispatch lines, intermediate computations). Off in prod. |
+| `INFO` | Normal traffic + structured audit events (`user_login`, `meta_inference`, etc). |
+| `WARNING` | Recoverable degradation (parse failures, fallback paths, rate limits, NOGROUP recovery). |
+| `ERROR` | Data loss, repeated retry exhaustion, transaction rollback, unhandled exceptions. |
+| `CRITICAL` | Pageable — service can no longer make forward progress. |
+
+### Standard `event=` field values
+
+| Event | Emitter | Meaning |
+|---|---|---|
+| `ingest_accepted` | ingestion | Message written to `message_stream` |
+| `preprocess_done` | preprocessing | Text normalized and republished |
+| `model_done` (with `model=`) | vader/bert/goemotions | Per-model inference complete |
+| `model_failed` | vader/bert/goemotions | Per-model inference threw |
+| `aggregate_start` / `meta_inference` | central_responder | Per-message aggregation + prediction |
+| `aggregation_done` | aggregation_service | Conversation state updated |
+| `ws_message_received` | api_service | Client sent a message over WebSocket |
+| `ws_broadcast` | api_service | Emotion event broadcast to N recipients |
+| `persist_batch_done` / `persistence_failed` | persistence_service | DB batch outcome |
+| `dlq_write_failed` | persistence_service | A DLQ entry itself couldn't be written |
+| `user_registered` / `user_login` | api_service auth | Audit success events; `email_hash` only, never raw email |
+| `login_failed` | api_service auth | Audit failure events |
+| `ws_auth_failed` | api_service WS | Audit failure events |
+| `admin_action` | api_service admin | Records `actor` + `target` |
+| `model_hot_reload` | central_responder | Logs the prev_acc → new_acc transition |
+| `meta_inference` (with `decision_mode=meta-learner\|rule-based`) | central_responder | Per-message prediction |
+
+### Log rotation
+
+Every service in `docker-compose.yml` uses the `x-log-rotation` YAML anchor: `json-file` driver, `max-size: 10m`, `max-file: 3`. Bounded ~30 MB per container in any long-running deploy.

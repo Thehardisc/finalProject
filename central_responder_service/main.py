@@ -23,6 +23,9 @@ from trainer import start_trainer_thread
 
 from trajectory.inference import load_trajectory_model, run_trajectory_step
 
+import metrics as METRICS  # noqa: F401  (kept so the module is imported once at startup)
+from prometheus_client import start_http_server as _start_metrics_server
+
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.constants import (
@@ -383,6 +386,12 @@ async def main():
     except Exception as e:
         if "BUSYGROUP" not in str(e):
             logger.error(f"Error creating group: {e}")
+
+    try:
+        _start_metrics_server(9090)
+        logger.info("Prometheus metrics server listening on :9090/metrics")
+    except OSError as e:
+        logger.warning(f"Could not start metrics server on :9090: {e}")
 
     logger.info(
         f"Central Responder started.  "

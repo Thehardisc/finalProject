@@ -35,6 +35,25 @@ echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
 echo "──────────────────────────────────────────────────────────"
 echo ""
 
+# Feature-vector parity is the #1 invariant (CLAUDE.md): the inference builder and
+# the training builder must produce identical 103-dim vectors. Catch drift here —
+# before spending minutes on a build — but degrade gracefully if the host lacks the
+# Python test deps (the test only needs numpy + pytest, no ML runtime).
+echo "[Invariant] Checking feature-vector parity (inference vs trainer)..."
+if command -v python3 &> /dev/null && python3 -c "import pytest, numpy" &> /dev/null; then
+    if python3 -m pytest central_responder_service/training/test_feature_parity.py -q &> /tmp/parity_check.log; then
+        echo "   [OK] Feature-vector parity holds."
+    else
+        echo "   [FAIL] Feature-vector parity VIOLATION — inference and trainer disagree."
+        echo "          Launch aborted; fix build_feature_vector / build_fv before starting."
+        echo "          Details:"; tail -20 /tmp/parity_check.log | sed 's/^/          /'
+        exit 1
+    fi
+else
+    echo "   [SKIP] python3 + pytest/numpy not on host — parity not checked (runs in CI)."
+fi
+echo ""
+
 echo "[Search] Detecting host environment..."
 
 if command -v nvidia-smi &> /dev/null; then
@@ -45,14 +64,27 @@ else
     COMPOSE_CMD="docker compose up -d --build"
 fi
 
-echo ""
-$COMPOSE_CMD
-echo ""
-
-# Setup logging — create timestamped run directory
+# Setup logging — create timestamped run directory BEFORE launch so we can
+# capture the docker build/up output (pull, build, create, start) as it happens.
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGDIR="logs/run_${TIMESTAMP}"
 mkdir -p "${LOGDIR}"
+STARTUP_LOG="${LOGDIR}/docker_startup.log"
+
+echo ""
+echo "[Launch] ${COMPOSE_CMD}"
+echo "[Launch] Capturing startup output to ${STARTUP_LOG}"
+echo ""
+# tee so the operator still sees build/startup progress live while we record it.
+# PIPESTATUS preserves compose's exit code through the pipe (tee would mask it).
+$COMPOSE_CMD 2>&1 | tee "${STARTUP_LOG}"
+COMPOSE_RC=${PIPESTATUS[0]}
+if [ "${COMPOSE_RC}" -ne 0 ]; then
+    echo ""
+    echo "   [Fail] docker compose exited with code ${COMPOSE_RC}. See ${STARTUP_LOG}"
+    exit "${COMPOSE_RC}"
+fi
+echo ""
 
 # Write init log: capture the config + launch summary to a file
 INIT_LOG="${LOGDIR}/init.log"
@@ -74,6 +106,11 @@ INIT_LOG="${LOGDIR}/init.log"
     echo "──────────────────────────────────────────────────────────"
     echo ""
     echo "[Hardware] Compose command: ${COMPOSE_CMD}"
+    echo ""
+    echo "=============================================================="
+    echo "[Docker Startup] build / create / start output"
+    echo "=============================================================="
+    cat "${STARTUP_LOG}"
     echo ""
 } > "${INIT_LOG}"
 
@@ -132,6 +169,7 @@ echo ""
 echo "[Health] Running service health checks..."
 PASS=0
 FAIL=0
+FAILED_CHECKS=""   # accumulates the name+reason of every failed check for the init report
 
 # Helper function
 check_service() {
@@ -152,6 +190,7 @@ check_service() {
 
     echo "   [Fail] $name - NOT responding at $url"
     FAIL=$((FAIL + 1))
+    FAILED_CHECKS="${FAILED_CHECKS}   - ${name}: no response at ${url} after ${max_retries} tries"$'\n'
     return 1
 }
 
@@ -162,6 +201,7 @@ if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; the
 else
     echo "   [Fail] Redis - not responding"
     FAIL=$((FAIL + 1))
+    FAILED_CHECKS="${FAILED_CHECKS}   - Redis: ping did not return PONG"$'\n'
 fi
 
 # Check PostgreSQL
@@ -171,6 +211,7 @@ if docker compose exec -T db pg_isready -U user -d emotion_db 2>/dev/null | grep
 else
     echo "   [Fail] PostgreSQL - not ready"
     FAIL=$((FAIL + 1))
+    FAILED_CHECKS="${FAILED_CHECKS}   - PostgreSQL: not accepting connections"$'\n'
 fi
 
 # Check HTTP services
@@ -185,24 +226,35 @@ if docker compose logs central_responder_service 2>/dev/null | grep -q "Running 
 else
     echo "   [Fail] Meta-Learner - not loaded (check central_responder_service logs)"
     FAIL=$((FAIL + 1))
+    FAILED_CHECKS="${FAILED_CHECKS}   - Meta-Learner: 'Running in META-LEARNER mode' not found in central_responder_service logs"$'\n'
 fi
 
 echo "[Test] Running end-to-end pipeline test..."
 
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:8000/messages \
-    -H "Content-Type: application/json" \
-    -H "X-API-Key: $API_KEY" \
-    -d '{"conversation_id": "healthcheck", "user_id": "system", "text": "I am happy!"}' 2>/dev/null)
-
-HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-BODY=$(echo "$RESPONSE" | head -1)
+# Retry like the other HTTP checks — ingestion can still be warming up right
+# after the container reports "running", so a single shot races the cold start.
+PIPE_RETRIES=10
+PIPE_ATTEMPT=0
+HTTP_CODE=""
+while [ $PIPE_ATTEMPT -lt $PIPE_RETRIES ]; do
+    RESPONSE=$(curl -s -w "\n%{http_code}" --max-time 5 -X POST http://localhost:8000/messages \
+        -H "Content-Type: application/json" \
+        -H "X-API-Key: $API_KEY" \
+        -d '{"conversation_id": "healthcheck", "user_id": "system", "text": "I am happy!"}' 2>/dev/null)
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -1)
+    [ "$HTTP_CODE" = "200" ] && break
+    PIPE_ATTEMPT=$((PIPE_ATTEMPT + 1))
+    sleep 2
+done
 
 if [ "$HTTP_CODE" = "200" ]; then
     echo "   [OK] Pipeline test - message accepted (HTTP 200)"
     PASS=$((PASS + 1))
 else
-    echo "   [Fail] Pipeline test - failed (HTTP $HTTP_CODE)"
+    echo "   [Fail] Pipeline test - failed (HTTP ${HTTP_CODE:-no-response}) after ${PIPE_RETRIES} tries"
     FAIL=$((FAIL + 1))
+    FAILED_CHECKS="${FAILED_CHECKS}   - Pipeline test: POST /messages returned HTTP ${HTTP_CODE:-no-response} (body: ${BODY:-empty})"$'\n'
 fi
 
 # Print summary
@@ -212,6 +264,9 @@ if [ $FAIL -eq 0 ]; then
     echo "    [Yay]  ALL CHECKS PASSED ($PASS/$PASS)"
 else
     echo "    [Warn]   $PASS passed, $FAIL failed"
+    echo ""
+    echo "    Failed checks:"
+    printf '%s' "${FAILED_CHECKS}"
 fi
 echo "=============================================================="
 echo ""
@@ -220,7 +275,8 @@ echo "    [API]  API:          http://localhost:8001"
 echo "    [In]   Ingestion:    http://localhost:8000"
 echo ""
 echo "    [Logs] Directory:    ${LOGDIR}/"
-echo "    [Log]  Init report:  ${LOGDIR}/init.log              (config + health checks)"
+echo "    [Log]  Init report:  ${LOGDIR}/init.log              (config + docker startup + health + container logs)"
+echo "    [Log]  Docker boot:  ${LOGDIR}/docker_startup.log     (build / create / start output)"
 echo "    [Log]  Errors only:  ${LOGDIR}/errors.log            (ERROR/WARN/CRITICAL)"
 echo "    [Log]  Brain only:   ${LOGDIR}/important.log         (no health pings)"
 echo "    [Log]  Responder:    ${LOGDIR}/central_responder_service.log"
@@ -239,7 +295,13 @@ echo "=============================================================="
     if [ $FAIL -eq 0 ]; then
         echo "   Result : ALL CHECKS PASSED"
     else
-        echo "   Result : ${FAIL} check(s) FAILED — see errors.log for details"
+        echo "   Result : ${FAIL} check(s) FAILED"
+        echo ""
+        echo "   Failed checks:"
+        printf '%s' "${FAILED_CHECKS}"
+        echo "   (Note: failed health checks are NOT container log errors —"
+        echo "    errors.log only captures ERROR/WARN/CRITICAL lines emitted by"
+        echo "    the services. Check all.log / the per-service logs above.)"
     fi
     echo ""
     echo "[URLs]"
@@ -248,9 +310,16 @@ echo "=============================================================="
     echo "   Ingestion : http://localhost:8000"
     echo ""
     echo "[Log Files]"
+    echo "   ${LOGDIR}/docker_startup.log"
     echo "   ${LOGDIR}/errors.log"
     echo "   ${LOGDIR}/important.log"
     echo "   ${LOGDIR}/all.log"
+    echo ""
+    echo "=============================================================="
+    echo "[Container Startup Logs] snapshot since launch (all services)"
+    echo "=============================================================="
+    docker compose logs --since "${LAUNCH_TIME}" 2>&1
+    echo ""
 } >> "${INIT_LOG}"
 
 echo ""
