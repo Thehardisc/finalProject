@@ -153,7 +153,9 @@ def main():
     # ── Deploy to central_responder_service/models/ ───────────────────────────
     best_ckpt = CKPT_DIR / "best_model.pt"
     if best_ckpt.exists():
-        deploy_dir = Path(__file__).parent.parent / "central_responder_service" / "models"
+        import os as _os
+        _env_model = _os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")
+        deploy_dir = Path(_env_model).parent
         deploy_dir.mkdir(parents=True, exist_ok=True)
 
         import shutil
