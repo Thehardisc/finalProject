@@ -1,10 +1,10 @@
 """
 context_engine_service/main.py — Context Engine Service (CDM v4.0 edition).
 
-Listens to preprocessed_stream, builds a 38-dim context vector per message,
+Listens to preprocessed_stream, builds a 40-dim context vector per message,
 and publishes it to partial_analysis_stream for the central_responder_service.
 
-Context vector layout (38 dims — must match shared/constants.py CONTEXT_DIM):
+Context vector layout (40 dims — must match shared/constants.py CDM_CTX_DIM=40):
   [0:15]   CDM intent one-hot (15 intent states — HMM argmax)
   [15]     state_residency         (consecutive messages in current state, normalised)
   [16:19]  transition_path         (last 3 state indices / N_CDM_STATES)
@@ -14,17 +14,19 @@ Context vector layout (38 dims — must match shared/constants.py CONTEXT_DIM):
   [22]     speaker_divergence      (std of per-speaker EMA valences)
   [23]     velocity                (Δvalence vs previous message)
   [24]     acceleration            (Δ²valence — is the shift intensifying?)
-  [25]     historical_valence      (Qdrant episodic memory, weighted by topic similarity)
-  [26]     topic_resonance         (Qdrant average cosine score)
-  [27]     volatility              (EMA of variance, user working-memory window)
-  [28]     current_valence         (EMA valence of whole conversation)
-  [29]     message_length          (char count)
-  [30]     latency_ms              (time since previous message)
-  [31]     hmm_posterior_confidence (max of α forward variable)
-  [32]     hmm_state_entropy        (H(α))
-  [33]     hmm_emission_logprob     (log P(obs|state), normalised to [0,1])
-  [34:37]  hmm_top3_next_probs      (top-3 P(s_{t+1}|s_t) from learned transmat)
-  [37]     intent_stability         (consecutive messages in same intent / 10)
+  [25]     historical_pos          (Qdrant episodic memory, positive valence weight)
+  [26]     historical_neu          (Qdrant episodic memory, neutral valence weight)
+  [27]     historical_neg          (Qdrant episodic memory, negative valence weight)
+  [28]     topic_resonance         (Qdrant average cosine score)
+  [29]     volatility              (EMA of variance, user working-memory window)
+  [30]     current_valence         (EMA valence of whole conversation)
+  [31]     message_length          (char count)
+  [32]     latency_ms              (time since previous message)
+  [33]     hmm_posterior_confidence (max of α forward variable)
+  [34]     hmm_state_entropy        (H(α))
+  [35]     hmm_emission_logprob     (log P(obs|state), normalised to [0,1])
+  [36:39]  hmm_top3_next_probs      (top-3 P(s_{t+1}|s_t) from learned transmat)
+  [39]     intent_stability         (consecutive messages in same intent / 10)
 """
 
 import asyncio
@@ -42,7 +44,7 @@ from cdm import CDM, N_CDM_STATES, reload_hmm as _cdm_reload_hmm
 import train_cdm_hmm
 from shared.module_registry import register_module
 from shared.constants import (
-    CONTEXT_DIM, N_CDM_STATES as _N,
+    CDM_CTX_DIM, N_CDM_STATES as _N,
     CTX_CDM_PROBS,
     CTX_HIST_POS, CTX_HIST_NEU, CTX_HIST_NEG, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
     CTX_RESIDENCY, CTX_TRANSITION, CTX_ABRUPTNESS, CTX_COHERENCE,
@@ -432,16 +434,16 @@ class ContextEngineService:
         new_stab_cnt = prev_stab_cnt + 1 if current_state_idx == prev_state_idx else 1
         intent_stability = min(new_stab_cnt / 10.0, 1.0)
 
-        await self.redis.set(cdm_state_key, str(current_state_idx), ex=86400 * 7)
-        await self.redis.lpush(state_hist_key, str(current_state_idx))
-        await self.redis.ltrim(state_hist_key, 0, 9)
-        await self.redis.expire(state_hist_key, 86400 * 7)
-        await asyncio.gather(
-            self.redis.set(hmm_alpha_key,   json.dumps([float(a) for a in diag.hmm_alpha_next]), ex=86400 * 7),
-            self.redis.set(intent_stab_key, str(new_stab_cnt), ex=86400 * 7),
-        )
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.set(cdm_state_key,  str(current_state_idx), ex=86400 * 7)
+            pipe.lpush(state_hist_key, str(current_state_idx))
+            pipe.ltrim(state_hist_key, 0, 9)
+            pipe.expire(state_hist_key, 86400 * 7)
+            pipe.set(hmm_alpha_key,   json.dumps([float(a) for a in diag.hmm_alpha_next]), ex=86400 * 7)
+            pipe.set(intent_stab_key, str(new_stab_cnt), ex=86400 * 7)
+            await pipe.execute()
 
-        ctx = np.zeros(CONTEXT_DIM, dtype=np.float64)
+        ctx = np.zeros(CDM_CTX_DIM, dtype=np.float64)
         ctx[CTX_CDM_PROBS]      = cdm_vec           # [0:15]
         ctx[CTX_RESIDENCY]      = state_residency
         ctx[CTX_TRANSITION]     = transition_path[:3]
@@ -548,7 +550,7 @@ class ContextEngineService:
         hmm_ent          = float(-np.sum(hmm_alpha * np.log(hmm_alpha + 1e-12)))
         top3_next        = CDM.get_next_probs(current_state)
 
-        ctx = np.zeros(CONTEXT_DIM, dtype=np.float64)
+        ctx = np.zeros(CDM_CTX_DIM, dtype=np.float64)
         ctx[CTX_CDM_PROBS]      = cdm_vec           # [0:15]
         ctx[CTX_RESIDENCY]      = state_residency
         ctx[CTX_TRANSITION]     = transition_path[:3]
@@ -635,12 +637,62 @@ async def startup_event():
     )
     
     asyncio.create_task(redis_listener())
-    
+    asyncio.create_task(_dlq_drainer())
+
     if os.getenv("TRAIN_HMM_ON_STARTUP", "false").lower() == "true":
         asyncio.create_task(_background_hmm_training())
         logger.info("HMM training started in background (TRAIN_HMM_ON_STARTUP=True).")
     else:
         logger.info("Skipping HMM training (TRAIN_HMM_ON_STARTUP is disabled).")
+
+
+async def _dlq_drainer():
+    """
+    Drain preprocessed_stream_dlq: log every failed message at ERROR level then ACK it.
+
+    The DLQ is populated by redis_listener when context vector build fails.
+    Without this consumer the queue grows unboundedly and failed messages are silent.
+    """
+    dlq_name   = "preprocessed_stream_dlq"
+    group_name = "context_engine_dlq_group"
+    client_id  = f"dlq_drainer_{uuid.uuid4().hex[:6]}"
+
+    try:
+        await context_engine.redis.xgroup_create(dlq_name, group_name, mkstream=True)
+    except Exception as e:
+        if "BUSYGROUP" not in str(e):
+            logger.warning(f"DLQ group create: {e}")
+
+    logger.info("DLQ drainer started — monitoring preprocessed_stream_dlq.")
+
+    while True:
+        try:
+            messages = await context_engine.redis.xreadgroup(
+                group_name, client_id, {dlq_name: ">"}, count=10, block=5000
+            )
+            if messages:
+                for _, msgs in messages:
+                    for msg_id, data in msgs:
+                        try:
+                            raw   = json.loads(data.get("raw_data", "{}"))
+                            mid   = raw.get("message_id", "?")
+                            cid   = raw.get("conversation_id", "?")
+                            error = data.get("error", "unknown")
+                        except Exception:
+                            mid, cid, error = "?", "?", data.get("error", "unknown")
+                        logger.error(
+                            "dlq_message_drained",
+                            extra={
+                                "event":           "dlq_message_drained",
+                                "message_id":      mid,
+                                "conversation_id": cid,
+                                "error":           error,
+                            },
+                        )
+                        await context_engine.redis.xack(dlq_name, group_name, msg_id)
+        except Exception as e:
+            logger.warning(f"DLQ drainer loop error: {e}")
+            await asyncio.sleep(5)
 
 
 async def redis_listener():
@@ -735,9 +787,9 @@ async def redis_listener():
                             except asyncio.TimeoutError:
                                 logger.warning(
                                     f"build_context_vector timed out for {raw_msg_id} "
-                                    f"— publishing zero {CONTEXT_DIM}-dim vector"
+                                    f"— publishing zero {CDM_CTX_DIM}-dim vector"
                                 )
-                                context_vector = [0.0] * CONTEXT_DIM
+                                context_vector = [0.0] * CDM_CTX_DIM
 
                             # Use queue instead of creating unbounded tasks
                             try:

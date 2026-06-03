@@ -40,39 +40,54 @@ message_stream
 
 `goemotions_service` computes emoji scores (via `emoji.demojize` → GoEmotions model) and includes them in its `partial_analysis_stream` event as `emoji_scores`. These are forwarded but not currently incorporated into the meta-learner feature vector.
 
-`context_engine_service` publishes a 23-dim CDM context vector as `model_name=context_engine`. The central responder waits for all required models, then optionally uses the context vector if it arrived within `OPTIONAL_TIMEOUT_MS`.
+`context_engine_service` publishes a 40-dim CDM context vector (`CDM_CTX_DIM`) as `model_name=context_engine`. The central responder waits for all required models, then optionally uses the context vector if it arrived within `OPTIONAL_TIMEOUT_MS`.
+
+`trajectory/inference.py` saves the LSTM's `predicted_next` (28-dim GoEmotions distribution) to Redis key `trajectory:{conv_id}:prior` after each step. `aggregate_and_publish` reads this prior before calling `build_feature_vector` so the next message gets the trajectory prediction as an additional input block.
 
 ---
 
-## Feature Vector (62 dimensions)
+## Feature Vector (107 dimensions)
 
 `central_responder_service/meta_learner.py:build_feature_vector` (inference) and `central_responder_service/trainer.py` (training) MUST produce the same layout.
 
-| Block | Indices | Source | Size |
-|---|---|---|---|
-| VADER | [0:4] | `vader_neg, vader_neu, vader_pos, vader_compound` | 4 |
-| BERT Ekman | [4:11] | 7 Ekman labels from `BERT_LABELS` | 7 |
-| GoEmotions | [11:39] | 28 labels from `EMOTION_LABELS` | 28 |
-| CDM Context | [39:62] | 23-dim Conversation Dynamics Machine vector | 23 |
+| Block | Indices | Source | Size | Constant |
+|---|---|---|---|---|
+| VADER | [0:4] | `vader_neg, vader_neu, vader_pos, vader_compound` | 4 | — |
+| BERT Ekman | [4:11] | 7 Ekman labels from `BERT_LABELS` | 7 | — |
+| GoEmotions | [11:39] | 28 labels from `EMOTION_LABELS` | 28 | `ML_DIM=39` |
+| CDM Context | [39:79] | context_engine CDM+HMM+scalars | 40 | `CDM_CTX_DIM=40` |
+| Trajectory Prior | [79:107] | LSTM `predicted_next` from previous message | 28 | `PRIOR_DIM=28` |
 
-**CDM context vector layout** (23 dims, from `shared/constants.py`):
-- `[0:7]` CDM state one-hot (7 latent states)
-- `[7]` state_residency
-- `[8:11]` transition_path (last 3 state indices / 7)
-- `[11]` entry_abruptness
-- `[12]` topic_coherence
-- `[13]` emotion_entropy
-- `[14]` speaker_divergence
-- `[15]` velocity (Δvalence)
-- `[16]` acceleration (Δ²valence)
-- `[17]` historical_valence (Qdrant)
-- `[18]` topic_resonance (Qdrant)
-- `[19]` volatility
-- `[20]` current_valence
-- `[21]` message_length
-- `[22]` latency_ms
+`CONTEXT_DIM = CDM_CTX_DIM + PRIOR_DIM = 68` — this is the full context block that `GatingEnsembleNet` processes as `x_c = x[:, ML_DIM:FEATURE_DIM]`.
 
-Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` (7), `VADER_KEYS` (4), `CDM_STATES` (7).
+**CDM context vector layout** (40 dims — indices are *within* the CDM block, i.e. offset from 39):
+- `[0:15]` CDM intent one-hot (15 states — `N_CDM_STATES=15`)
+- `[15]` state_residency
+- `[16:19]` transition_path (last 3 state indices / N_CDM_STATES)
+- `[19]` entry_abruptness
+- `[20]` topic_coherence
+- `[21]` emotion_entropy
+- `[22]` speaker_divergence
+- `[23]` velocity (Δvalence)
+- `[24]` acceleration (Δ²valence)
+- `[25]` hist_valence_pos (Qdrant, positive component)
+- `[26]` hist_valence_neu (Qdrant, neutral component)
+- `[27]` hist_valence_neg (Qdrant, negative component)
+- `[28]` topic_resonance
+- `[29]` volatility
+- `[30]` current_valence
+- `[31]` message_length
+- `[32]` latency_ms
+- `[33]` hmm_conf (`CTX_HMM_CONF` — drives ctx_weight in GatingEnsembleNet)
+- `[34]` hmm_entropy
+- `[35]` hmm_emission_logprob
+- `[36:39]` hmm_top3_next_probs
+- `[39]` intent_stability
+
+**Trajectory Prior block** (28 dims, [79:107]): GoEmotions distribution predicted by the LSTM for this message, fetched from Redis `trajectory:{conv_id}:prior`. Zeros on first message or when trajectory model is absent.
+
+Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` (7), `VADER_KEYS` (4), `CDM_STATES` (15).
+Named index constants (`CTX_*`) must be used instead of hardcoded integers.
 
 ---
 
@@ -82,8 +97,9 @@ Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` 
 - **Architecture**: `central_responder_service/trajectory/model.py:ConversationLSTM`
 - **Inference**: `central_responder_service/trajectory/inference.py` — reads `input_dim` from `trajectory_config.json`
 - **Model files**: `central_responder_service/models/trajectory_lstm.pt` + `trajectory_config.json`
-- **Purpose**: predicts the emotional direction of the next message in a conversation
-- The model is optional — inference degrades gracefully if the file is missing
+- **Purpose**: predicts the 28-dim GoEmotions distribution for the *next* message in a conversation
+- **Trajectory prior feedback**: after each step, `inference.py` writes `predicted_next` to Redis `trajectory:{conv_id}:prior` (TTL = `HIDDEN_TTL`). `aggregate_and_publish` reads this before calling `build_feature_vector`, so the prediction becomes part of the feature vector for message T+1 (indices [79:107]).
+- The model is optional — inference degrades gracefully if the file is missing; prior defaults to zeros.
 
 ---
 
@@ -98,7 +114,7 @@ The trainer runs as a background thread inside `central_responder_service`.
 - **Gate**: new model only hot-reloaded if test accuracy ≥ `ACCURACY_GATE` (default 0.40)
 - **Interval**: `RETRAIN_INTERVAL_SECONDS` (default 1800)
 
-Key invariant: `trainer.py` feature building and `meta_learner.py:build_feature_vector` must produce identical 62-dim vectors. A mismatch causes `X has N features but StandardScaler expecting M` errors.
+Key invariant: `trainer.py` feature building and `meta_learner.py:build_feature_vector` must produce identical 107-dim vectors. A mismatch causes `X has N features but StandardScaler expecting M` errors.
 
 ---
 
@@ -185,9 +201,10 @@ docker compose ps
 
 ## Key Invariants & Gotchas
 
-- **Feature vector parity**: `meta_learner.py:build_feature_vector` and `trainer.py` must produce the same 62-dim vector. Mismatch → `X has N features but StandardScaler expecting M` error.
+- **Feature vector parity**: `meta_learner.py:build_feature_vector` and `trainer.py` must produce the same 107-dim vector. Mismatch → `X has N features but StandardScaler expecting M` error.
 - **Trajectory input**: always 67-dim (GoE+BERT+VADER+Emoji). Input dim is read from `trajectory_config.json` via `config.get("input_dim", 67)` — do NOT hardcode it.
-- **CDM context vector**: `shared/constants.py` is the single source of truth for `CONTEXT_DIM=23` and named index constants (e.g. `CTX_HIST_VALENCE`). Context engine and meta_learner both import from here.
+- **Dimension constants**: `shared/constants.py` is the single source of truth. Key values: `ML_DIM=39`, `CDM_CTX_DIM=40`, `PRIOR_DIM=28`, `CONTEXT_DIM=68`, `FEATURE_DIM=107`, `N_CDM_STATES=15`. Use `CTX_*` named index constants — never hardcode integers. `context_engine_service` uses `CDM_CTX_DIM`; `GatingEnsembleNet` uses `CONTEXT_DIM` (the full 68-dim block).
+- **Trajectory prior Redis key**: `trajectory:{conv_id}:prior` — 28-dim JSON list. Written by `trajectory/inference.py`, read by `aggregate_and_publish` in `central_responder/main.py`. Missing key → zeros (safe).
 - **CSS import**: `main.jsx` imports `index-v2.css`, not `index.css`. Edits to `index.css` have no effect on the running app.
 - **Model files on host**: `central_responder_service/models/` is bind-mounted into the container. Model files saved by the trainer are immediately visible to the running service without a rebuild.
 - **Frontend rebuild required**: CSS and JSX changes require `docker compose up --build frontend_service -d` — the container serves a static Vite build.

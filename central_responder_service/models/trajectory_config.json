@@ -2,6 +2,6 @@
   "hidden_dim": 128,
   "num_layers": 2,
   "dropout": 0.2,
-  "input_dim": 67,
+  "input_dim": 79,
   "output_dim": 28
 }
