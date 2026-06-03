@@ -150,12 +150,17 @@ async def main():
                                     "error":           str(e)[:500],
                                     "timestamp":       time.time(),
                                 }, maxlen=5000, approximate=True)
+                                # Only ACK after a successful DLQ write — the message is
+                                # safely recorded even if DB persistence failed.
+                                to_ack.append((stream, message_id))
                             except Exception as dlq_err:
-                                mlog.warning(
+                                # DLQ write also failed: leave the message in the PEL so
+                                # xautoclaim retries it after 30 s.  Do NOT ACK here —
+                                # ACKing would permanently lose data with no record.
+                                mlog.error(
                                     "dlq_write_failed",
                                     extra={"event": "dlq_write_failed", "stream": stream, "error": str(dlq_err)},
                                 )
-                            to_ack.append((stream, message_id))
                         finally:
                             session.close()
 
