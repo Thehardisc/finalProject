@@ -147,30 +147,36 @@ async def _model_reload_listener() -> None:
     Subscribe to 'model_reload_signal' and hot-swap META_LEARNER from disk.
     Used when TRAINER_EXTERNAL=true (trainer runs in its own container).
     The trainer publishes to this channel after saving a new pkl.
+    Reconnects automatically on Redis connection loss.
     """
-    pubsub = redis_client.redis.pubsub()
-    await pubsub.subscribe("model_reload_signal")
-    logger.info("[ModelReload] Subscribed to 'model_reload_signal' (TRAINER_EXTERNAL=true).")
-    async for message in pubsub.listen():
-        if message["type"] != "message":
-            continue
+    while True:
         try:
-            payload  = json.loads(message["data"])
-            new_model = load_meta_learner()
-            if new_model is not None:
-                on_model_reload(new_model)
-                logger.info(
-                    "model_hot_reload",
-                    extra={
-                        "event":         "model_hot_reload",
-                        "test_accuracy": payload.get("test_accuracy"),
-                        "trained_at":    payload.get("trained_at"),
-                    },
-                )
-            else:
-                logger.warning("[ModelReload] Reload signal received but load_meta_learner() returned None.")
-        except Exception as e:
-            logger.warning(f"[ModelReload] Failed to process reload signal: {e}")
+            pubsub = redis_client.redis.pubsub()
+            await pubsub.subscribe("model_reload_signal")
+            logger.info("[ModelReload] Subscribed to 'model_reload_signal' (TRAINER_EXTERNAL=true).")
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                try:
+                    payload   = json.loads(message["data"])
+                    new_model = load_meta_learner()
+                    if new_model is not None:
+                        on_model_reload(new_model)
+                        logger.info(
+                            "model_hot_reload",
+                            extra={
+                                "event":         "model_hot_reload",
+                                "test_accuracy": payload.get("test_accuracy"),
+                                "trained_at":    payload.get("trained_at"),
+                            },
+                        )
+                    else:
+                        logger.warning("[ModelReload] Signal received but load_meta_learner() returned None.")
+                except Exception as e:
+                    logger.warning(f"[ModelReload] Failed to process reload signal: {e}")
+        except Exception as conn_err:
+            logger.warning(f"[ModelReload] Pub/sub connection lost ({conn_err}), reconnecting in 5s...")
+            await asyncio.sleep(5)
 
 
 async def _registry_refresh_loop(registry: ModuleRegistry) -> None:

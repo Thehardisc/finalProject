@@ -271,20 +271,11 @@ class ContextEngineService:
         if not user_id:
             return 0.0
 
-        now = time.time()
-        window_cutoff = now - self.window_size_seconds
-        keys = [f"context:user:{user_id}:valence_window", 
-                f"context:user:{user_id}:linguistic_window", 
-                f"context:user:{user_id}:state"]
-        
-        args = [
-            window_cutoff, 
-            now, 
-            current_valence, 
-            self.decay_factor, 
-            str(uuid.uuid4()), 
-            json.dumps(linguistic_markers)
-        ]
+        now            = time.time()
+        window_cutoff  = now - self.window_size_seconds
+        valence_key    = f"context:user:{user_id}:valence_window"
+        linguistic_key = f"context:user:{user_id}:linguistic_window"
+        state_key      = f"context:user:{user_id}:state"
 
         try:
             # Ensure current_valence is a plain Python float before it enters
@@ -306,15 +297,18 @@ class ContextEngineService:
             current_variance = float(np.var(recent_valences)) if len(recent_valences) > 1 else 0.0
             prev_volatility  = float(prev_state.get("current_volatility", 0.0))
             new_volatility   = float(self.decay_factor * prev_volatility + (1 - self.decay_factor) * current_variance)
+            baseline_valence = float(np.mean(recent_valences)) if recent_valences else _valence
 
-            await self.redis.hset(state_key, mapping={
-                "current_volatility": new_volatility,
-                "last_message_ts":    float(now),
-                "baseline_valence":   float(np.mean(recent_valences)) if recent_valences else _valence,
-            })
+            async with self.redis.pipeline(transaction=True) as pipe2:
+                pipe2.hset(state_key, mapping={
+                    "current_volatility": new_volatility,
+                    "last_message_ts":    float(now),
+                    "baseline_valence":   baseline_valence,
+                })
+                await pipe2.execute()
             return new_volatility
         except Exception as e:
-            logger.error(f"Redis memory update failed (Lua script): {e}", exc_info=True)
+            logger.error(f"Redis working-memory update failed: {e}", exc_info=True)
             return 0.0
 
     async def _store_embedding(self, key: str, embedding: List[float]):
@@ -419,7 +413,7 @@ class ContextEngineService:
         state_hist_raw = await self.redis.lrange(state_hist_key, 0, 2)
         state_hist     = [int(x) for x in state_hist_raw]
 
-        residency = 0
+        residency = 1  # count message T itself
         for s in state_hist:
             if s == current_state_idx:
                 residency += 1
@@ -655,7 +649,9 @@ async def _dlq_drainer():
     """
     dlq_name   = "preprocessed_stream_dlq"
     group_name = "context_engine_dlq_group"
-    client_id  = f"dlq_drainer_{uuid.uuid4().hex[:6]}"
+    # Fixed consumer name: avoids leaking dead consumers into the group on restarts.
+    # xautoclaim reclaims any PEL from a prior run of this same consumer name.
+    client_id  = "dlq_drainer_1"
 
     try:
         await context_engine.redis.xgroup_create(dlq_name, group_name, mkstream=True)
@@ -667,9 +663,21 @@ async def _dlq_drainer():
 
     while True:
         try:
-            messages = await context_engine.redis.xreadgroup(
-                group_name, client_id, {dlq_name: ">"}, count=10, block=5000
-            )
+            # Reclaim own PEL messages idle >30 s (covers crash-before-ACK).
+            try:
+                _, stale, _ = await context_engine.redis.xautoclaim(
+                    dlq_name, group_name, client_id,
+                    min_idle_time=30_000, start_id="0-0", count=10,
+                )
+                messages = [(dlq_name, stale)] if stale else None
+            except Exception:
+                messages = None
+
+            if not messages:
+                messages = await context_engine.redis.xreadgroup(
+                    group_name, client_id, {dlq_name: ">"}, count=10, block=5000
+                )
+
             if messages:
                 for _, msgs in messages:
                     for msg_id, data in msgs:
@@ -763,9 +771,15 @@ async def redis_listener():
                             )
                             embedding = raw_emb.tolist()
 
+                            # Inter-message latency: time since aggregation_service wrote the last update.
+                            # Falls back to 0 on the first message (no last_updated yet).
+                            _now = time.time()
+                            _last_ts = float(state.get("last_updated", 0.0) or 0.0) if state else 0.0
+                            inter_msg_latency_ms = (_now - _last_ts) * 1000.0 if _last_ts > 0 else 0.0
+
                             linguistic_markers = {
                                 "length":     len(text),
-                                "latency_ms": float(msg_data.get("latency_ms", 0)),
+                                "latency_ms": inter_msg_latency_ms,
                             }
 
                             top_emotion = max(last_emotions, key=last_emotions.get) if last_emotions else "neutral"
