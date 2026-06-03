@@ -1,14 +1,15 @@
 """
-Feature-vector sanity test for the current 62-dim CDM architecture.
+Feature-vector sanity test for the 107-dim architecture.
+
+Layout: VADER(4) + BERT(7) + GoE(28) + CDM_CTX(40) + TRAJ_PRIOR(28) = 107
 
 Both inference (meta_learner.py:build_feature_vector) and training
 (trainer.py) share the same build_feature_vector from meta_learner.py,
 so this test verifies:
   1. The function produces a (1, FEATURE_DIM) array with the right shape.
   2. VADER / BERT / GoEmotions values land in the correct index blocks.
-  3. The context vector (CDM, 23-dim) is appended correctly, defaulting to
-     zeros when missing or wrong-length.
-  4. FEATURE_DIM, CONTEXT_DIM, and label-list lengths match the constants.
+  3. CDM context and trajectory prior default to zeros when missing.
+  4. FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM match constants.
 
 Run from project root:
     python -m pytest central_responder_service/training/test_feature_parity.py -v
@@ -28,7 +29,7 @@ for p in (_PROJECT_ROOT, _SVC_ROOT):
 from meta_learner import build_feature_vector
 from shared.constants import (
     EMOTION_LABELS, BERT_LABELS, VADER_KEYS,
-    FEATURE_DIM, ML_DIM, CONTEXT_DIM,
+    FEATURE_DIM, ML_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM,
 )
 
 
@@ -45,20 +46,29 @@ def _model_outputs(neg=0.0, neu=0.0, pos=0.0, compound=0.0, bert=None, goe=None)
     }
 
 
-def _ctx(length=CONTEXT_DIM, value=0.0):
+def _ctx(length=CDM_CTX_DIM, value=0.0):
+    return [value] * length
+
+def _prior(length=PRIOR_DIM, value=0.0):
     return [value] * length
 
 
 # ── Constant layout checks ────────────────────────────────────────────────────
 
-def test_feature_dim_is_62():
-    assert FEATURE_DIM == 62
+def test_feature_dim_is_107():
+    assert FEATURE_DIM == 107
 
 def test_ml_dim_is_39():
     assert ML_DIM == 39
 
-def test_context_dim_is_23():
-    assert CONTEXT_DIM == 23
+def test_cdm_ctx_dim_is_40():
+    assert CDM_CTX_DIM == 40
+
+def test_prior_dim_is_28():
+    assert PRIOR_DIM == 28
+
+def test_context_dim_is_68():
+    assert CONTEXT_DIM == 68
 
 def test_ml_plus_context_equals_feature():
     assert ML_DIM + CONTEXT_DIM == FEATURE_DIM
@@ -76,7 +86,7 @@ def test_output_shape_no_context():
     assert fv.shape == (1, FEATURE_DIM)
 
 def test_output_shape_with_context():
-    fv = build_feature_vector(_model_outputs(), context_vector=_ctx())
+    fv = build_feature_vector(_model_outputs(), context_vector=_ctx(), trajectory_prior=_prior())
     assert fv.shape == (1, FEATURE_DIM)
 
 def test_output_dtype_is_float32():
@@ -108,18 +118,27 @@ def test_goemotions_block():
     expected = [goe[k] for k in EMOTION_LABELS]
     np.testing.assert_allclose(fv[11:39], expected, atol=1e-6)
 
-def test_context_block_zeros_when_missing():
+def test_cdm_block_zeros_when_missing():
     fv = build_feature_vector(_model_outputs(), context_vector=None).flatten()
-    np.testing.assert_array_equal(fv[39:62], [0.0] * CONTEXT_DIM)
+    np.testing.assert_array_equal(fv[39:79], [0.0] * CDM_CTX_DIM)
 
-def test_context_block_zeros_when_wrong_length():
+def test_cdm_block_zeros_when_wrong_length():
     fv = build_feature_vector(_model_outputs(), context_vector=[0.5] * 10).flatten()
-    np.testing.assert_array_equal(fv[39:62], [0.0] * CONTEXT_DIM)
+    np.testing.assert_array_equal(fv[39:79], [0.0] * CDM_CTX_DIM)
 
-def test_context_block_used_when_correct_length():
-    ctx = [float(i) / 100 for i in range(CONTEXT_DIM)]
+def test_cdm_block_used_when_correct_length():
+    ctx = [float(i) / 100 for i in range(CDM_CTX_DIM)]
     fv = build_feature_vector(_model_outputs(), context_vector=ctx).flatten()
-    np.testing.assert_allclose(fv[39:62], ctx, atol=1e-6)
+    np.testing.assert_allclose(fv[39:79], ctx, atol=1e-6)
+
+def test_prior_block_zeros_when_missing():
+    fv = build_feature_vector(_model_outputs(), trajectory_prior=None).flatten()
+    np.testing.assert_array_equal(fv[79:107], [0.0] * PRIOR_DIM)
+
+def test_prior_block_used_when_correct_length():
+    prior = [float(i) / 100 for i in range(PRIOR_DIM)]
+    fv = build_feature_vector(_model_outputs(), trajectory_prior=prior).flatten()
+    np.testing.assert_allclose(fv[79:107], prior, atol=1e-6)
 
 
 # ── Missing keys default to zero ──────────────────────────────────────────────

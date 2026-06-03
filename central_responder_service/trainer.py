@@ -56,7 +56,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, f1_score
 
-from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM, ML_DIM, N_CDM_STATES
+from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, ML_DIM, N_CDM_STATES
 from meta_learner import build_feature_vector, GatingEnsembleNet, GatingNetworkWrapper, D_MODEL, DROPOUT
 
 # ── Label → likely CDM intent state (primary, secondary, tertiary) ───────────────
@@ -229,6 +229,7 @@ def build_synthetic_context_vector(
          hmm_emit,                 # [35]
         ] + top3_next +            # [36:39]
         [intent_stab]              # [39]
+        + [0.0] * PRIOR_DIM        # [40:68] trajectory prior — zeros for static single-turn data
     )
 
     # Per-feature dropout: 15% of features zeroed on each training sample
@@ -544,6 +545,7 @@ def extract_empathetic_dialogues_features(
         hmm_alpha   = np.ones(n_states, dtype=np.float64) / n_states
         val_hist    = []
         prev_val    = 0.0
+        prev_goe_out: dict = {}  # GoEmotions from the previous turn — used as trajectory prior
 
         for i, turn in enumerate(turns_sorted):
             text = str(turn.get('utterance', '')).strip()
@@ -576,7 +578,8 @@ def extract_empathetic_dialogues_features(
             stab_count  = sum(1 for _ in range(min(i, 5)) if i > 0)  # approximate
             intent_stab = min(stab_count / 10.0, 1.0)
 
-            # Build context vector (38-dim)
+            # Build context vector (CDM_CTX_DIM=40 + PRIOR_DIM=28 = CONTEXT_DIM=68)
+            prior_block = [float(prev_goe_out.get(e, 0.0)) for e in EMOTION_LABELS]
             ctx = (
                 cdm_onehot +
                 [min(i / 10.0, 1.0)] +   # residency
@@ -587,7 +590,9 @@ def extract_empathetic_dialogues_features(
                  0.0,         # speaker divergence (single speaker)
                  float(np.clip(velocity, -1, 1)),
                  float(np.clip(acceleration, -1, 1)),
-                 _EMPATHETIC_VALENCE.get(conv_emotion, 0.0),  # hist valence from conv emotion
+                 max(0.0, _EMPATHETIC_VALENCE.get(conv_emotion, 0.0)),          # hist_pos [25]
+                 float(0.5 - abs(_EMPATHETIC_VALENCE.get(conv_emotion, 0.0)) * 0.4),  # hist_neu [26]
+                 max(0.0, -_EMPATHETIC_VALENCE.get(conv_emotion, 0.0)),         # hist_neg [27]
                  0.5,         # topic resonance
                  0.2,         # volatility
                  float(np.clip(cur_val, -1, 1)),
@@ -598,6 +603,7 @@ def extract_empathetic_dialogues_features(
                  0.7 if hmm_conf > 0.5 else 0.3,  # emission approx
                 ] + top3_next +
                 [intent_stab]
+                + prior_block  # [40:68] previous turn's GoEmotions distribution
             )
 
             if len(ctx) != CONTEXT_DIM:
@@ -618,6 +624,8 @@ def extract_empathetic_dialogues_features(
 
             features.append(fv)
             labels.append(goemo_label)
+
+            prev_goe_out = goe_out  # carry GoEmotions forward as trajectory prior for next turn
 
             # Update HMM for next turn
             obs        = _empathetic_obs(conv_emotion)
@@ -779,7 +787,8 @@ def fetch_live_data(vader, bert, goe) -> tuple:
             ctx = build_synthetic_context_vector(mode="cold")
             fv  = build_feature_vector(
                 {"vader": vs, "basic_bert": bs, "go_emotions": gs},
-                context_vector=ctx,
+                context_vector=ctx[:CDM_CTX_DIM],
+                trajectory_prior=ctx[CDM_CTX_DIM:],
             )
             X.append(fv.flatten())
             y.append(label)
@@ -792,7 +801,10 @@ def fetch_live_data(vader, bert, goe) -> tuple:
 
 # ── Main training cycle ─────────────────────────────────────────────────────────
 
-def run_one_cycle(reload_callback) -> None:
+RELOAD_CHANNEL = "model_reload_signal"
+
+
+def run_one_cycle(reload_callback=None) -> None:
     """
     Full build → filter → train → gate → deploy cycle.
 
@@ -878,7 +890,8 @@ def run_one_cycle(reload_callback) -> None:
                 X.append(
                     build_feature_vector(
                         {"vader": vs, "basic_bert": bs, "go_emotions": gs},
-                        context_vector=ctx,
+                        context_vector=ctx[:CDM_CTX_DIM],
+                        trajectory_prior=ctx[CDM_CTX_DIM:],
                     ).flatten()
                 )
                 y.append(label)
@@ -1047,7 +1060,8 @@ def run_one_cycle(reload_callback) -> None:
                 },
             }, f, indent=2)
 
-        reload_callback(wrapper)
+        if reload_callback is not None:
+            reload_callback(wrapper)
 
         ready_marker = MODEL_PATH.parent / ".ready"
         ready_marker.touch()
@@ -1076,8 +1090,13 @@ def run_one_cycle(reload_callback) -> None:
             }
             _r.hset("model:stats", mapping=_stats)
             _r.expire("model:stats", 86400 * 7)
+            _r.publish(RELOAD_CHANNEL, json.dumps({
+                "model_path":    str(MODEL_PATH),
+                "test_accuracy": round(test_acc, 4),
+                "trained_at":    datetime.datetime.utcnow().isoformat() + "Z",
+            }))
         except Exception as _re:
-            logger.debug(f"Could not write model stats to Redis: {_re}")
+            logger.debug(f"Could not write model stats / publish reload signal to Redis: {_re}")
 
         if not hasattr(start_trainer_thread, '_initial_trained'):
             logger.info("Training complete. Opening system gates.")
@@ -1131,3 +1150,26 @@ def start_trainer_thread(reload_callback) -> threading.Thread:
     t = threading.Thread(target=_loop, name="trainer", daemon=True)
     t.start()
     return t
+
+
+# ── Standalone entry point (TRAINER_EXTERNAL=true mode) ────────────────────────
+
+if __name__ == "__main__":
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+    logger.info("Trainer running in standalone container mode (reload via Redis pub/sub).")
+    logger.log_stats("Trainer Configuration", {
+        "RETRAIN_INTERVAL_SECONDS": RETRAIN_INTERVAL,
+        "ACCURACY_GATE":            ACCURACY_GATE,
+        "MAX_SAMPLES":              MAX_SAMPLES,
+        "MODEL_PATH":               str(MODEL_PATH),
+        "RELOAD_CHANNEL":           RELOAD_CHANNEL,
+    })
+    while True:
+        try:
+            run_one_cycle(reload_callback=None)
+        except Exception as e:
+            logger.error(f"Standalone trainer cycle failed: {e}")
+            traceback.print_exc()
+        logger.info(f"Sleeping {RETRAIN_INTERVAL}s until next cycle...")
+        time.sleep(RETRAIN_INTERVAL)

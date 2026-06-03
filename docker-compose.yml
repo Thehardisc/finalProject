@@ -132,6 +132,8 @@ services:
         condition: service_healthy
       context_engine_service:
         condition: service_healthy
+      trainer_service:
+        condition: service_started
     networks:
       - emotion_net
     environment:
@@ -140,13 +142,41 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-      # ── Periodic retraining (background thread inside this container) ────
+      MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
+      # Trainer runs as its own container — reload via Redis pub/sub
+      TRAINER_EXTERNAL: "true"
+    volumes:
+      - ./central_responder_service/models:/app/models
+      - hf_cache:/root/.cache/huggingface
+
+  trainer_service:
+    build:
+      context: .
+      dockerfile: central_responder_service/Dockerfile
+    command: ["python", "central_responder_service/trainer.py"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
       RETRAIN_INTERVAL_SECONDS: ${RETRAIN_INTERVAL_SECONDS:-1800}
       ACCURACY_GATE: ${ACCURACY_GATE:-0.40}
       MAX_SAMPLES: ${MAX_SAMPLES:-2500}
       MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
+      DB_HOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-emotion_db}
     volumes:
-      - ./central_responder_service/models:/app/models # use host directory directly
+      - ./central_responder_service/models:/app/models
       - hf_cache:/root/.cache/huggingface
 
   llm_reasoning_service:

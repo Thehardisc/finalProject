@@ -3,14 +3,15 @@ meta_learner.py v2.0 — Attention-based Mixture-of-Experts Meta-Learner.
 
 Architecture: GatingEnsembleNet
   Three NLP expert encoders (VADER, BERT, GoEmotions) are independently
-  projected to a shared d-dimensional space. The 23-dim context vector
-  drives a learned soft gate α ∈ ℝ³ that routes attention over the experts.
-  An additive context residual ensures context contributes beyond routing.
-  No hardcoded thresholds — all gating is learned end-to-end.
+  projected to a shared d-dimensional space. The 68-dim context block
+  (CDM_CTX_DIM=40 + PRIOR_DIM=28) drives a learned soft gate α ∈ ℝ³ that
+  routes attention over the experts. An additive context residual ensures
+  context contributes beyond routing. No hardcoded thresholds — all gating
+  is learned end-to-end.
 
 Public API (unchanged from v1):
   load_meta_learner()          → GatingNetworkWrapper | sklearn Pipeline | None
-  build_feature_vector()       → np.ndarray [1, 62]
+  build_feature_vector()       → np.ndarray [1, 107]
   predict_with_meta_learner()  → (emotion, confidence, scores, sarcasm, conflict)
   calculate_feature_impacts()  → {block: attribution}
   apply_context_correction()   → passthrough stub (superseded by native gating)
@@ -30,7 +31,7 @@ from sklearn.preprocessing import StandardScaler
 from shared.utils.logger import get_logger
 from shared.constants import (
     EMOTION_LABELS, VADER_KEYS, BERT_LABELS,
-    FEATURE_DIM, CONTEXT_DIM, ML_DIM, CTX_HMM_CONF,
+    FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, ML_DIM, CTX_HMM_CONF,
 )
 
 logger = get_logger("meta_learner")
@@ -323,15 +324,17 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
 def build_feature_vector(
     model_outputs: dict,
     context_vector: list = None,
+    trajectory_prior: list = None,
 ) -> np.ndarray:
     """
-    Assemble a fixed 62-dim float32 feature vector.
+    Assemble a fixed 107-dim float32 feature vector.
 
     Layout:
-      [0:4]   VADER (4)
-      [4:11]  BERT Ekman (7)
-      [11:39] GoEmotions (28)
-      [39:62] Context Engine (23)
+      [0:4]    VADER (4)
+      [4:11]   BERT Ekman (7)
+      [11:39]  GoEmotions (28)
+      [39:79]  CDM Context — context_engine output (40)
+      [79:107] Trajectory Prior — predicted_next from previous message (28)
     """
     vader_scores      = model_outputs.get("vader",       {})
     bert_scores       = model_outputs.get("basic_bert",  {})
@@ -345,12 +348,17 @@ def build_feature_vector(
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    ctx = (
+    cdm = (
         context_vector
-        if (context_vector and len(context_vector) == CONTEXT_DIM)
-        else [0.0] * CONTEXT_DIM
+        if (context_vector and len(context_vector) == CDM_CTX_DIM)
+        else [0.0] * CDM_CTX_DIM
     )
-    vec.extend(ctx)
+    prior = (
+        trajectory_prior
+        if (trajectory_prior and len(trajectory_prior) == PRIOR_DIM)
+        else [0.0] * PRIOR_DIM
+    )
+    vec.extend(cdm + prior)
 
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
@@ -364,7 +372,7 @@ def predict_with_meta_learner(
 
     Args:
         model:          GatingNetworkWrapper or sklearn Pipeline
-        feature_vector: [1, 62] from build_feature_vector()
+        feature_vector: [1, 107] from build_feature_vector()
 
     Returns:
         (dominant_emotion, confidence, all_scores, sarcasm_score, conflict_desc, gate_alpha)

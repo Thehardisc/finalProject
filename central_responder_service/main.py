@@ -29,7 +29,7 @@ from prometheus_client import start_http_server as _start_metrics_server
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.constants import (
-    CONTEXT_DIM, N_CDM_STATES,
+    CDM_CTX_DIM, PRIOR_DIM, N_CDM_STATES,
     CTX_HIST_POS, CTX_HIST_NEU, CTX_HIST_NEG,
     CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
     CTX_RESIDENCY, CTX_ABRUPTNESS,
@@ -48,6 +48,10 @@ AGGREGATION_TIMEOUT_MS = 5000
 # How long to wait for optional modules after all required have arrived.
 # Tunable via env: set higher (e.g. 100 ms) if context_engine latency is >50 ms p50.
 OPTIONAL_TIMEOUT_MS = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "1000"))
+
+# When true, the trainer runs in its own container (trainer_service) and signals
+# reloads via Redis pub/sub.  When false (default), trainer runs as a daemon thread.
+TRAINER_EXTERNAL = os.environ.get("TRAINER_EXTERNAL", "false").lower() == "true"
 
 # ── Module registry — populated in main() after Redis connects ──────────────────
 REGISTRY: Optional[ModuleRegistry] = None
@@ -76,8 +80,11 @@ else:
             pass
     logger.info("No valid model found. Missing ready file.")
 
-start_trainer_thread(on_model_reload)
-logger.info("Background meta-learner retraining daemon is ACTIVATED.")
+if TRAINER_EXTERNAL:
+    logger.info("TRAINER_EXTERNAL=true — trainer runs in its own container; listening for reload signals.")
+else:
+    start_trainer_thread(on_model_reload)
+    logger.info("Background meta-learner retraining daemon is ACTIVATED.")
 
 _model_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
 TRAJECTORY_MODEL = load_trajectory_model(
@@ -135,6 +142,37 @@ async def _optional_timeout(msg_id: str, r) -> None:
         await _do_aggregation(msg_id, info, r)
 
 
+async def _model_reload_listener() -> None:
+    """
+    Subscribe to 'model_reload_signal' and hot-swap META_LEARNER from disk.
+    Used when TRAINER_EXTERNAL=true (trainer runs in its own container).
+    The trainer publishes to this channel after saving a new pkl.
+    """
+    pubsub = redis_client.redis.pubsub()
+    await pubsub.subscribe("model_reload_signal")
+    logger.info("[ModelReload] Subscribed to 'model_reload_signal' (TRAINER_EXTERNAL=true).")
+    async for message in pubsub.listen():
+        if message["type"] != "message":
+            continue
+        try:
+            payload  = json.loads(message["data"])
+            new_model = load_meta_learner()
+            if new_model is not None:
+                on_model_reload(new_model)
+                logger.info(
+                    "model_hot_reload",
+                    extra={
+                        "event":         "model_hot_reload",
+                        "test_accuracy": payload.get("test_accuracy"),
+                        "trained_at":    payload.get("trained_at"),
+                    },
+                )
+            else:
+                logger.warning("[ModelReload] Reload signal received but load_meta_learner() returned None.")
+        except Exception as e:
+            logger.warning(f"[ModelReload] Failed to process reload signal: {e}")
+
+
 async def _registry_refresh_loop(registry: ModuleRegistry) -> None:
     """
     Background task: re-reads module_registry Hash every 30 s.
@@ -172,7 +210,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         else:
             model_outputs[model_name] = res.get("scores", {})
 
-    ce_available = context_vector is not None and len(context_vector) == CONTEXT_DIM
+    ce_available = context_vector is not None and len(context_vector) == CDM_CTX_DIM
     _nz2 = sum(1 for v in context_vector if v != 0.0) if context_vector else 0
     logger.debug(
         f"[DIAG-2] CE parse msg={message_id} "
@@ -184,9 +222,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         if received_dim > 0:
             logger.warning(
                 f"[SCHEMA MISMATCH] context_vector dim={received_dim}, "
-                f"expected {CONTEXT_DIM}. Injecting zeros."
+                f"expected {CDM_CTX_DIM}. Injecting zeros."
             )
-        context_vector = [0.0] * CONTEXT_DIM
+        context_vector = [0.0] * CDM_CTX_DIM
 
     conv_id     = original_data.get("conversation_id", "conv-1")
     prev_emotion = "neutral"
@@ -197,7 +235,19 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     except Exception as e:
         logger.warning(f"Failed to fetch prev_emotion for {conv_id}: {e}")
 
-    fv = build_feature_vector(model_outputs, context_vector=context_vector)
+    # Load trajectory prior: predicted_next from the previous message in this conversation.
+    # Zeros on first message or if trajectory model is not running.
+    traj_prior = [0.0] * PRIOR_DIM
+    try:
+        raw_prior = await r.get(f"trajectory:{conv_id}:prior")
+        if raw_prior:
+            parsed = json.loads(raw_prior)
+            if len(parsed) == PRIOR_DIM:
+                traj_prior = parsed
+    except Exception as _tpe:
+        logger.debug(f"Could not load trajectory prior for {conv_id}: {_tpe}")
+
+    fv = build_feature_vector(model_outputs, context_vector=context_vector, trajectory_prior=traj_prior)
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc, gate_alpha = \
         predict_with_meta_learner(META_LEARNER, fv)
 
@@ -385,6 +435,9 @@ async def main():
     await REGISTRY.refresh()
     REGISTRY.log_state(logger)
     asyncio.create_task(_registry_refresh_loop(REGISTRY))
+
+    if TRAINER_EXTERNAL:
+        asyncio.create_task(_model_reload_listener())
 
     try:
         await r.xgroup_create(INPUT_STREAM, GROUP_NAME, mkstream=True)

@@ -36,8 +36,9 @@ N_CDM_STATES = len(CDM_STATES)  # 15
 
 # ── Feature vector layout ─────────────────────────────────────────────────────
 #
-#   ML_DIM      [0:39]   = VADER(4) + BERT(7) + GoEmotions(28)
-#   CONTEXT_DIM [39:77]  = CDM one-hot(15) + 16 scalars + 7 HMM-derived
+#   ML_DIM         [0:39]    = VADER(4) + BERT(7) + GoEmotions(28)
+#   CDM_CTX_DIM    [39:79]   = CDM one-hot(15) + 16 scalars + 7 HMM-derived
+#   PRIOR_DIM      [79:107]  = trajectory LSTM predicted_next (28 GoEmotions labels)
 #
 # Context vector internal layout (38 dims):
 #   [0:15]   CDM intent one-hot (15 states — exactly one 1.0)
@@ -64,8 +65,10 @@ N_CDM_STATES = len(CDM_STATES)  # 15
 #   [39]     intent_stability         (consecutive messages in same intent / 10)
 
 ML_DIM      = 39    # VADER(4) + BERT(7) + GoE(28)
-CONTEXT_DIM = 40    # CDM one-hot(15) + 18 scalars + 7 HMM
-FEATURE_DIM = 79    # ML_DIM(39) + CONTEXT_DIM(40)
+CDM_CTX_DIM = 40    # context_engine_service output: CDM one-hot(15) + 18 scalars + 7 HMM
+PRIOR_DIM   = 28    # trajectory LSTM predicted_next distribution (one per GoEmotions label)
+CONTEXT_DIM = CDM_CTX_DIM + PRIOR_DIM  # = 68  (full context block in feature vector)
+FEATURE_DIM = ML_DIM + CONTEXT_DIM     # = 107
 
 # Named index map — import these instead of hardcoding integers.
 # Any layout change must update both these constants AND context_engine_service/main.py.

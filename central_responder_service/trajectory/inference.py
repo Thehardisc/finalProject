@@ -39,6 +39,9 @@ HIDDEN_TTL        = 7200         # 2 hours of inactivity — beyond that, state 
 LOCK_PREFIX       = "trajectory:lock:"
 LOCK_TTL          = 5            # lock auto-expires if holder crashes
 
+# Must match shared/constants.py CDM_CTX_DIM — kept local to avoid import-path complexity
+CDM_CTX_DIM = 40
+
 # Atomic lock-release script: only deletes the key if the stored token matches ours
 _RELEASE_SCRIPT = """
 if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -53,8 +56,10 @@ end
 
 def build_feature_vector(model_outputs: dict, context_vector: list = None) -> torch.Tensor:
     """
-    Convert central_responder model_outputs dict → [1, 1, 77] float tensor.
+    Convert central_responder model_outputs dict → [1, 1, 79] float tensor.
     model_outputs keys: go_emotions, basic_bert, vader
+
+    Layout: GoEmotions(28) + BERT(7) + VADER(4) + CDM context(40) = 79
     """
     go    = model_outputs.get("go_emotions", {})
     bert  = model_outputs.get("basic_bert",  {})
@@ -64,10 +69,10 @@ def build_feature_vector(model_outputs: dict, context_vector: list = None) -> to
     bert_vec  = [float(bert.get(e,  0.0)) for e in BERT_LABELS_7]       # 7
     vader_vec = [float(vader.get(k, 0.0)) for k in VADER_KEYS_4]        # 4
 
-    ce_vec = context_vector if (context_vector and len(context_vector) == 38) else [0.0] * 38
+    ce_vec = context_vector if (context_vector and len(context_vector) == CDM_CTX_DIM) else [0.0] * CDM_CTX_DIM
 
-    vec = go_vec + bert_vec + vader_vec + ce_vec   # 77
-    return torch.tensor(vec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, 77]
+    vec = go_vec + bert_vec + vader_vec + ce_vec   # 79
+    return torch.tensor(vec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, 79]
 
 
 # ── Redis hidden state I/O ────────────────────────────────────────────────────
@@ -177,6 +182,16 @@ async def run_trajectory_step(
         await save_hidden_state(conv_id, h_n, c_n, redis)
 
         scores = next_emotions.cpu().tolist()
+        # Persist full 28-dim distribution as trajectory prior for the next message.
+        # central_responder reads this before meta-learner inference on message T+1.
+        try:
+            await redis.set(
+                f"trajectory:{conv_id}:prior",
+                json.dumps(scores),
+                ex=HIDDEN_TTL,
+            )
+        except Exception as _pe:
+            logger.warning(f"Failed to save trajectory prior for {conv_id}: {_pe}")
         emotion_scores = dict(zip(EMOTION_LABELS_28, scores))
         top5 = sorted(emotion_scores.items(), key=lambda kv: kv[1], reverse=True)[:5]
         top5_dict = {k: round(float(v), 4) for k, v in top5}
@@ -222,8 +237,9 @@ def load_trajectory_model(model_path: str, config_path: str):
         num_layers = config.get("num_layers", 1)
         dropout    = config.get("dropout",    0.1)
 
+        input_dim = config.get("input_dim", 79)
         model = ConversationLSTM(
-            input_dim=77,
+            input_dim=input_dim,
             hidden_dim=hidden_dim,
             num_layers=num_layers,
             output_dim=28,
