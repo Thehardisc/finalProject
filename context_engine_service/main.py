@@ -584,7 +584,7 @@ class ContextEngineService:
                     points=[
                         models.PointStruct(
                             id=str(uuid.uuid4()),
-                            vector=current_embedding,
+                            vector=embedding,
                             payload={
                                 "user_id":          user_id,
                                 "timestamp":        time.time(),
