@@ -48,6 +48,11 @@ STREAMS = {
 }
 CONSUMER_NAME = "worker_1"
 
+# After this many failed attempts a message is force-written to the DLQ and
+# ACK'd regardless — prevents permanently-broken records from looping forever.
+MAX_DELIVERY_ATTEMPTS = 5
+RETRY_COUNTER_TTL     = 86400  # 24 h — counter auto-expires for completed conversations
+
 
 async def main():
     print("[persistence_service] main() loop starting", flush=True)
@@ -141,26 +146,68 @@ async def main():
                                 },
                                 exc_info=True,
                             )
+
+                            # Increment per-message attempt counter so permanently-broken
+                            # records don't retry forever inside the PEL.
+                            retry_key = f"persistence:attempts:{stream}:{message_id}"
+                            attempt = 1
                             try:
-                                await r.xadd(DLQ_STREAM, {
-                                    "original_stream": stream,
-                                    "original_id":     message_id,
-                                    "message_id":      biz_mid or "",
-                                    "error_class":     type(e).__name__,
-                                    "error":           str(e)[:500],
-                                    "timestamp":       time.time(),
-                                }, maxlen=5000, approximate=True)
-                                # Only ACK after a successful DLQ write — the message is
-                                # safely recorded even if DB persistence failed.
-                                to_ack.append((stream, message_id))
-                            except Exception as dlq_err:
-                                # DLQ write also failed: leave the message in the PEL so
-                                # xautoclaim retries it after 30 s.  Do NOT ACK here —
-                                # ACKing would permanently lose data with no record.
+                                attempt = int(await r.incr(retry_key))
+                                await r.expire(retry_key, RETRY_COUNTER_TTL)
+                            except Exception:
+                                pass  # if Redis is down, we'll retry on next xautoclaim
+
+                            if attempt >= MAX_DELIVERY_ATTEMPTS:
+                                # Permanently broken: best-effort DLQ then always ACK.
+                                # Keeping in PEL forever is worse than accepting data loss
+                                # after MAX_DELIVERY_ATTEMPTS documented attempts.
                                 mlog.error(
-                                    "dlq_write_failed",
-                                    extra={"event": "dlq_write_failed", "stream": stream, "error": str(dlq_err)},
+                                    "max_retries_exceeded",
+                                    extra={
+                                        "event":       "max_retries_exceeded",
+                                        "attempt":     attempt,
+                                        "error_class": type(e).__name__,
+                                        "error":       str(e)[:500],
+                                    },
                                 )
+                                try:
+                                    await r.xadd(DLQ_STREAM, {
+                                        "original_stream": stream,
+                                        "original_id":     message_id,
+                                        "message_id":      biz_mid or "",
+                                        "error_class":     type(e).__name__,
+                                        "error":           str(e)[:500],
+                                        "timestamp":       time.time(),
+                                        "attempt":         attempt,
+                                        "force_dlq":       "true",
+                                    }, maxlen=5000, approximate=True)
+                                except Exception:
+                                    pass  # best-effort: log already captures the loss
+                                to_ack.append((stream, message_id))
+                                try:
+                                    await r.delete(retry_key)
+                                except Exception:
+                                    pass
+                            else:
+                                # Transient failure: write to DLQ and ACK if write succeeds;
+                                # leave in PEL if DLQ also fails (xautoclaim will retry).
+                                try:
+                                    await r.xadd(DLQ_STREAM, {
+                                        "original_stream": stream,
+                                        "original_id":     message_id,
+                                        "message_id":      biz_mid or "",
+                                        "error_class":     type(e).__name__,
+                                        "error":           str(e)[:500],
+                                        "timestamp":       time.time(),
+                                        "attempt":         attempt,
+                                    }, maxlen=5000, approximate=True)
+                                    to_ack.append((stream, message_id))
+                                except Exception as dlq_err:
+                                    mlog.error(
+                                        "dlq_write_failed",
+                                        extra={"event": "dlq_write_failed", "stream": stream, "error": str(dlq_err)},
+                                    )
+                                    # Do NOT ACK — stays in PEL for xautoclaim retry
                         finally:
                             session.close()
 
