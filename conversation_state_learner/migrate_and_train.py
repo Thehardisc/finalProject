@@ -15,7 +15,7 @@ Run inside the trainer_service container (or any env with PyTorch):
 Or from project root:
     docker compose run --rm trainer_service python conversation_state_learner/migrate_and_train.py
 """
-import sys, json, pickle, shutil
+import sys, os, json, pickle, shutil
 import numpy as np
 from pathlib import Path
 
@@ -25,7 +25,10 @@ sys.path.insert(0, str(_HERE.parent))
 
 FEATURES_DIR = _HERE / "features"
 CKPT_DIR     = _HERE / "models" / "checkpoints"
-DEPLOY_DIR   = _HERE.parent / "central_responder_service" / "models"
+# The bind mount in docker-compose maps host ./central_responder_service/models → /app/models
+# Write directly to /app/models so the host sees the new files immediately.
+_env_model_path = os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")
+DEPLOY_DIR   = Path(_env_model_path).parent
 
 OLD_DIM = 77   # 28+7+4+38
 NEW_DIM = 79   # 28+7+4+40

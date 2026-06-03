@@ -13,6 +13,9 @@ COPY shared/ /app/shared/
 # Copy service code
 COPY central_responder_service/ /app/central_responder_service/
 
+# Copy LSTM training pipeline (used by trainer_service to retrain ConversationLSTM)
+COPY conversation_state_learner/ /app/conversation_state_learner/
+
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
