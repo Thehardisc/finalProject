@@ -1090,13 +1090,19 @@ def run_one_cycle(reload_callback=None) -> None:
             }
             _r.hset("model:stats", mapping=_stats)
             _r.expire("model:stats", 86400 * 7)
+        except Exception as _re:
+            logger.debug(f"Could not write model stats to Redis: {_re}")
+
+        # Publish reload signal in a separate try so a stats-write failure never
+        # suppresses the signal — central_responder must reload regardless.
+        try:
             _r.publish(RELOAD_CHANNEL, json.dumps({
                 "model_path":    str(MODEL_PATH),
                 "test_accuracy": round(test_acc, 4),
                 "trained_at":    datetime.datetime.utcnow().isoformat() + "Z",
             }))
-        except Exception as _re:
-            logger.debug(f"Could not write model stats / publish reload signal to Redis: {_re}")
+        except Exception as _pe:
+            logger.warning(f"Could not publish model_reload_signal to Redis: {_pe}")
 
         if not hasattr(start_trainer_thread, '_initial_trained'):
             logger.info("Training complete. Opening system gates.")
