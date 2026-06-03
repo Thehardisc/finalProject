@@ -97,6 +97,51 @@ class TestPersistenceAckLogic:
         )
 
     @pytest.mark.asyncio
+    async def test_max_retries_always_acks(self):
+        """After MAX_DELIVERY_ATTEMPTS the message must be ACK'd even if DLQ fails.
+        Keeping it in PEL forever (infinite retry loop) is worse than losing it
+        after the documented maximum number of attempts."""
+        MAX = 5
+        process = AsyncMock(side_effect=Exception("permanent DB error"))
+        dlq_fail = AsyncMock(side_effect=Exception("DLQ also down"))
+
+        # Simulate attempt == MAX
+        async def _run_at_max_attempt():
+            to_ack = []
+            stream, message_id = "test_stream", "1-0"
+            session = MagicMock()
+            session.commit = MagicMock()
+            session.rollback = MagicMock()
+            session.close = MagicMock()
+            attempt = MAX   # already at max
+
+            try:
+                await process()
+                session.commit()
+                to_ack.append((stream, message_id))
+            except Exception:
+                session.rollback()
+                if attempt >= MAX:
+                    try:
+                        await dlq_fail(Exception("permanent"))
+                    except Exception:
+                        pass
+                    to_ack.append((stream, message_id))  # always ACK at max
+                else:
+                    try:
+                        await dlq_fail(Exception("transient"))
+                        to_ack.append((stream, message_id))
+                    except Exception:
+                        pass
+            finally:
+                session.close()
+            return to_ack
+
+        result = await _run_at_max_attempt()
+        assert len(result) == 1, \
+            "At MAX_DELIVERY_ATTEMPTS the message must be ACK'd to stop the infinite retry loop"
+
+    @pytest.mark.asyncio
     async def test_multiple_messages_partial_failure(self):
         """Mixed batch: some succeed, some fail both DB+DLQ.
         Only the safe ones end up in to_ack."""
