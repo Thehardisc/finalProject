@@ -783,6 +783,14 @@ async def redis_listener():
                             }
 
                             top_emotion = max(last_emotions, key=last_emotions.get) if last_emotions else "neutral"
+
+                            # Read T-1's embedding BEFORE build_context_vector queues
+                            # the write of T's embedding.  This guarantees we get T-1's
+                            # vector to pair with T-1's emotional labels in Qdrant.
+                            _prev_embed_raw = await context_engine.redis.get(
+                                f"conv:{conversation_id}:last_embed"
+                            )
+
                             try:
                                 context_vector = await asyncio.wait_for(
                                     context_engine.build_context_vector(
@@ -805,17 +813,22 @@ async def redis_listener():
                                 )
                                 context_vector = [0.0] * CDM_CTX_DIM
 
-                            # Use queue instead of creating unbounded tasks
-                            try:
-                                context_engine.qdrant_write_queue.put_nowait({
-                                    "user_id": user_id,
-                                    "text": text,
-                                    "valence": prev_valence,
-                                    "embedding": embedding,
-                                    "dominant_emotion": prev_emotion
-                                })
-                            except asyncio.QueueFull:
-                                logger.warning(f"Qdrant write queue full for msg {raw_msg_id}, dropping memory.")
+                            # Episodic memory: save T-1's embedding with T-1's emotional
+                            # outcome.  Saving T's embedding with T-1's labels (the
+                            # original bug) caused Qdrant to store mismatched text↔emotion
+                            # pairs, corrupting hist_pos/hist_neg for future queries.
+                            # Skip on the first message (no previous embedding yet).
+                            if _prev_embed_raw:
+                                try:
+                                    context_engine.qdrant_write_queue.put_nowait({
+                                        "user_id":          user_id,
+                                        "text":             "",   # T-1's text not recoverable here
+                                        "valence":          prev_valence,
+                                        "embedding":        json.loads(_prev_embed_raw),
+                                        "dominant_emotion": prev_emotion,
+                                    })
+                                except asyncio.QueueFull:
+                                    logger.warning(f"Qdrant write queue full for msg {raw_msg_id}, dropping episodic memory.")
 
                             _nz = sum(1 for v in context_vector if v != 0.0)
                             logger.debug(
