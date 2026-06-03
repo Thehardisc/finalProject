@@ -150,6 +150,32 @@ def main():
         with open(CKPT_DIR / "model_config.json", "w") as fh:
             json.dump(config, fh, indent=2)
 
+    # ── Deploy to central_responder_service/models/ ───────────────────────────
+    best_ckpt = CKPT_DIR / "best_model.pt"
+    if best_ckpt.exists():
+        deploy_dir = Path(__file__).parent.parent / "central_responder_service" / "models"
+        deploy_dir.mkdir(parents=True, exist_ok=True)
+
+        import shutil
+        shutil.copy(best_ckpt, deploy_dir / "trajectory_lstm.pt")
+
+        # Write trajectory_config.json with the trained architecture
+        deploy_cfg = {
+            "input_dim":  config["input_dim"],
+            "hidden_dim": config["hidden_dim"],
+            "num_layers": config["num_layers"],
+            "output_dim": config["output_dim"],
+            "dropout":    config["dropout"],
+        }
+        with open(deploy_dir / "trajectory_config.json", "w") as fh:
+            json.dump(deploy_cfg, fh, indent=2)
+
+        print(f"\n✅ Deployed to {deploy_dir}/")
+        print(f"   trajectory_lstm.pt      (input_dim={config['input_dim']})")
+        print(f"   trajectory_config.json")
+    else:
+        print("\n⚠  No checkpoint found — model not deployed.")
+
     print(f"\n=== DONE — checkpoint saved to {CKPT_DIR}/ ===")
 
 

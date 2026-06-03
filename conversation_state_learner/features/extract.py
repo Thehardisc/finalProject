@@ -26,6 +26,7 @@ from typing import List, Dict, Tuple, Optional
 from features.schema import (
     EMOTION_LABELS_28, BERT_LABELS_7, VADER_KEYS_4,
     MSG_DIM, WINDOW_SIZE, WIN_BASE_DIM, DERIVED_DIM, WINDOW_DIM, N_EMOTIONS,
+    CDM_CTX_DIM,
 )
 
 DEFAULT_JSONL  = Path(__file__).parent.parent / "training_data" / "conversations.jsonl"
@@ -54,12 +55,16 @@ def msg_to_vec(pipeline: dict) -> np.ndarray:
     vader_vec = np.array([vader.get(k, 0.0) for k in VADER_KEYS_4],      dtype=np.float32)
 
     cv_raw = ce.get("context_vector")
-    if cv_raw and isinstance(cv_raw, list) and len(cv_raw) == 38:
+    if cv_raw and isinstance(cv_raw, list) and len(cv_raw) == CDM_CTX_DIM:
         ce_vec = np.array(cv_raw, dtype=np.float32)
+    elif cv_raw and isinstance(cv_raw, list) and len(cv_raw) == 38:
+        # Backward compat: pad old 38-dim vectors to CDM_CTX_DIM with zeros
+        ce_vec = np.zeros(CDM_CTX_DIM, dtype=np.float32)
+        ce_vec[:38] = cv_raw
     else:
-        ce_vec = np.zeros(38, dtype=np.float32)
+        ce_vec = np.zeros(CDM_CTX_DIM, dtype=np.float32)
 
-    return np.concatenate([go_vec, bert_vec, vader_vec, ce_vec])  # 77
+    return np.concatenate([go_vec, bert_vec, vader_vec, ce_vec])  # 79
 
 
 # ── Derived window features (9 dims) ──────────────────────────────────────────
