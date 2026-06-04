@@ -636,6 +636,97 @@ def extract_empathetic_dialogues_features(
             labels)
 
 
+# ── MELD conversation-context training data ────────────────────────────────────
+
+# MELD 7 labels → GoEmotions 28 (direct matches)
+_MELD_TO_GOEMOTION: dict = {
+    "anger":    "anger",
+    "disgust":  "disgust",
+    "fear":     "fear",
+    "joy":      "joy",
+    "neutral":  "neutral",
+    "sadness":  "sadness",
+    "surprise": "surprise",
+}
+
+_MELD_VALENCE: dict = {
+    "joy":      0.80,
+    "surprise": 0.15,
+    "neutral":  0.00,
+    "anger":   -0.75,
+    "disgust": -0.70,
+    "fear":    -0.65,
+    "sadness": -0.70,
+}
+
+
+def extract_meld_features(
+    vader_analyzer,
+    bert_analyzer,
+    goe_analyzer,
+    max_utterances: int = 5000,
+) -> tuple:
+    """
+    Build (X [N, FEATURE_DIM], y [N]) from MELD for meta-learner training.
+
+    MELD has 13,708 utterances from Friends TV across 7 emotion classes that
+    map directly to GoEmotions labels.  CDM context is synthetic (same noise
+    as GoEmotions training samples) since there is no live pipeline data.
+    """
+    try:
+        from datasets import load_dataset
+        meld = load_dataset("declare-lab/MELD")
+    except Exception as e:
+        logger.warning(f"MELD load failed: {e} — skipping.")
+        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
+
+    features, labels = [], []
+    n_processed = 0
+
+    for split in ("train", "validation"):
+        if split not in meld:
+            continue
+        for row in meld[split]:
+            if n_processed >= max_utterances:
+                break
+            text = str(row.get("Utterance", "")).strip()
+            if not text:
+                continue
+
+            goemo_label = _MELD_TO_GOEMOTION.get(
+                row.get("Emotion", "neutral").lower(), "neutral"
+            )
+
+            try:
+                vs  = {f"vader_{k}": v
+                       for k, v in _vader(vader_analyzer, text).items()}
+                bs  = _run(bert_analyzer, text)
+                gs  = _run(goe_analyzer,  text)
+            except Exception:
+                continue
+
+            # Synthetic context — same augmentation as GoEmotions training
+            ctx = build_synthetic_context_vector(label=goemo_label, mode="train")
+            fv  = build_feature_vector(
+                {"vader": vs, "basic_bert": bs, "go_emotions": gs},
+                context_vector=ctx[:CDM_CTX_DIM],
+                trajectory_prior=ctx[CDM_CTX_DIM:],
+            )
+            features.append(fv.flatten())
+            labels.append(goemo_label)
+            n_processed += 1
+
+        if n_processed >= max_utterances:
+            break
+
+    logger.info(f"  [MELD] Extracted {len(features)} utterances.")
+    return (
+        np.array(features, dtype=np.float32) if features
+        else np.empty((0, FEATURE_DIM), dtype=np.float32),
+        labels,
+    )
+
+
 # ── Reporting ───────────────────────────────────────────────────────────────────
 
 def _bar(value: float, width: int = 25) -> str:
@@ -925,7 +1016,7 @@ def run_one_cycle(reload_callback=None) -> None:
             f"  [Trainer] Augmented with {len(X_live)} live samples (weight={weight})"
         )
 
-    # ── EmpatheticDialogues: real conversation context augmentation ────────────
+    # ── EmpatheticDialogues + MELD: conversation-context augmentation ───────────
     # Only on fresh build (analyzers still in RAM) to avoid re-running every cycle.
     if _fresh_build:
         logger.info("  [EmpDialogues] Extracting conversation-context features...")
@@ -936,13 +1027,25 @@ def run_one_cycle(reload_callback=None) -> None:
             max_conversations=2000,
         )
         if len(X_emp) > 0:
-            # Mix 40% EmpatheticDialogues with 60% GoEmotions in training set
-            emp_weight = 2  # each EmpDialogues sample counts twice vs GoEmotions
+            emp_weight = 2
             X_tr.extend([row for row in X_emp] * emp_weight)
             y_tr.extend(y_emp * emp_weight)
-            # Set gold-label confidence=1.0 so filter_outliers keeps these samples
             gs_tr.extend([{label: 1.0} for label in y_emp] * emp_weight)
-            logger.info(f"  [EmpDialogues] Added {len(X_emp)*emp_weight} conv-context samples to training set.")
+            logger.info(f"  [EmpDialogues] Added {len(X_emp)*emp_weight} conv-context samples.")
+
+        logger.info("  [MELD] Extracting MELD utterance features...")
+        X_meld, y_meld = extract_meld_features(
+            vader_analyzer=vader,
+            bert_analyzer=bert,
+            goe_analyzer=goe,
+            max_utterances=5000,
+        )
+        if len(X_meld) > 0:
+            # MELD has clean single-label per utterance → weight=1 (same as GoEmotions)
+            X_tr.extend([row for row in X_meld])
+            y_tr.extend(y_meld)
+            gs_tr.extend([{label: 1.0} for label in y_meld])
+            logger.info(f"  [MELD] Added {len(X_meld)} utterance samples.")
 
     del vader, bert, goe
     gc.collect()

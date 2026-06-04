@@ -77,9 +77,10 @@ print("=== Step 2: Retrain ConversationLSTM (input_dim=79) ===\n")
 
 import torch
 from models.lstm    import ConversationLSTM
-from models.dataset import load_sequence_dataset, make_loaders
+from models.dataset import load_sequence_dataset, make_loaders, ConversationDataset
 from models.trainer import train, eval_epoch, top_k_accuracy
 from features.schema import MSG_DIM, N_EMOTIONS
+from features.meld   import load_meld_sequences
 
 assert MSG_DIM == NEW_DIM, f"schema.py MSG_DIM={MSG_DIM}, expected {NEW_DIM}"
 
@@ -87,7 +88,81 @@ train_ds, val_ds, test_ds = load_sequence_dataset(FEATURES_DIR)
 n_train = len(train_ds)
 n_val   = len(val_ds)   if val_ds   else 0
 n_test  = len(test_ds)  if test_ds  else 0
-print(f"  Train: {n_train}  Val: {n_val}  Test: {n_test} conversations")
+print(f"  Live pipeline sequences — Train: {n_train}  Val: {n_val}  Test: {n_test}")
+
+# ── Augment with MELD (1,433 dialogues from Friends TV) ───────────────────────
+print("\n  Loading NLP models for MELD extraction...")
+import os as _os
+_os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+_os.environ.setdefault("HF_DATASETS_OFFLINE",  "0")   # MELD needs network on first run
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _VSA
+from transformers import pipeline as _hfpipe
+import torch as _torch
+
+_device = 0 if _torch.cuda.is_available() else -1
+_vader = _VSA()
+_bert  = _hfpipe("text-classification",
+                  model="j-hartmann/emotion-english-distilroberta-base",
+                  return_all_scores=True, device=_device)
+_goe   = _hfpipe("text-classification",
+                  model="bhadresh-savani/bert-base-go-emotion",
+                  top_k=None, device=_device)
+
+def _vader_fn(text):
+    s = _vader.polarity_scores(text)
+    return {"vader_neg": s["neg"], "vader_neu": s["neu"],
+            "vader_pos": s["pos"], "vader_compound": s["compound"]}
+
+def _bert_fn(text):
+    try:
+        return {r["label"]: r["score"] for r in _bert(text[:512])[0]}
+    except Exception:
+        return {}
+
+def _goe_fn(text):
+    try:
+        return {r["label"]: r["score"] for r in _goe(text[:512])[0]}
+    except Exception:
+        return {}
+
+meld_seqs, meld_tgts = load_meld_sequences(
+    vader_fn=_vader_fn,
+    bert_fn=_bert_fn,
+    goe_fn=_goe_fn,
+    max_dialogues=1200,   # train+val splits → ~1,000 dialogues
+)
+
+# Free models before training
+del _bert, _goe, _vader
+import gc; gc.collect()
+print(f"  MELD sequences: {len(meld_seqs)} dialogues loaded")
+
+# Merge: first 80 % of MELD into train, remainder into val
+_meld_split = int(len(meld_seqs) * 0.8)
+meld_train_seqs, meld_train_tgts = meld_seqs[:_meld_split],  meld_tgts[:_meld_split]
+meld_val_seqs,   meld_val_tgts   = meld_seqs[_meld_split:],  meld_tgts[_meld_split:]
+
+# Wrap in ConversationDataset and merge with live-pipeline data
+from torch.utils.data import ConcatDataset
+
+if meld_train_seqs:
+    meld_train_ds = ConversationDataset(
+        meld_train_seqs, meld_train_tgts,
+        ["meld"] * len(meld_train_seqs),
+    )
+    train_ds = ConcatDataset([train_ds, meld_train_ds]) if train_ds is not None else meld_train_ds
+
+if meld_val_seqs:
+    meld_val_ds = ConversationDataset(
+        meld_val_seqs, meld_val_tgts,
+        ["meld"] * len(meld_val_seqs),
+    )
+    val_ds = ConcatDataset([val_ds, meld_val_ds]) if val_ds is not None else meld_val_ds
+
+n_train = len(train_ds) if train_ds is not None else 0
+n_val   = len(val_ds)   if val_ds   is not None else 0
+n_test  = len(test_ds)  if test_ds  is not None else 0
+print(f"  Combined — Train: {n_train}  Val: {n_val}  Test: {n_test} conversations")
 
 if n_train == 0:
     print("ERROR: No training data found.")
