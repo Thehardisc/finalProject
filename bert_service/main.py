@@ -30,9 +30,9 @@ class BasicBertAnalyzer:
         # Using a small, fast model for basic emotions (Ekman)
         # "j-hartmann/emotion-english-distilroberta-base" covers:
         # anger, disgust, fear, joy, neutral, sadness, surprise
-        self.classifier = pipeline("text-classification", 
-                                   model="j-hartmann/emotion-english-distilroberta-base", 
-                                   return_all_scores=True,
+        self.classifier = pipeline("text-classification",
+                                   model="j-hartmann/emotion-english-distilroberta-base",
+                                   top_k=None,
                                    device=device)
     
     def analyze(self, text: str) -> dict:

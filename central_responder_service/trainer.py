@@ -837,10 +837,6 @@ def print_report(
 def _get_analyzers(device: int):
     logger.info("Loading analyzers transiently into RAM...")
     torch.set_num_threads(1)
-    # Prevent HuggingFace from doing network version-check calls on every load.
-    # Models are already cached after first download; offline mode avoids hangs.
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     from transformers import pipeline as hf_pipeline
 
@@ -848,13 +844,13 @@ def _get_analyzers(device: int):
     bert  = hf_pipeline(
         "text-classification",
         model="j-hartmann/emotion-english-distilroberta-base",
-        return_all_scores=True,
+        top_k=None,
         device=device,
     )
     goe   = hf_pipeline(
         "text-classification",
         model="SamLowe/roberta-base-go_emotions",
-        return_all_scores=True,
+        top_k=None,
         device=device,
     )
     logger.info("Analyzers fully loaded.")
