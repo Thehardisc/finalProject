@@ -141,10 +141,12 @@ class GatingEnsembleNet(nn.Module):
         self.ctx_residual = nn.Linear(d, d)
 
         # Bayesian combination parameters (all learnable)
-        # ctx_weight = sigmoid(ctx_alpha * hmm_conf - ctx_bias)
-        # defaults: hmm_conf=0 → sigmoid(-2)≈0.12, hmm_conf=1 → sigmoid(1)≈0.73
-        self.ctx_alpha = nn.Parameter(torch.tensor(3.0))
-        self.ctx_bias  = nn.Parameter(torch.tensor(2.0))
+        # ctx_weight = sigmoid(ctx_alpha * hmm_conf - ctx_bias).clamp(max=0.50)
+        # defaults: hmm_conf=0 → sigmoid(-2.5)≈0.08, hmm_conf=1 → sigmoid(-0.5)≈0.38
+        # Previous defaults (3.0/2.0) gave ctx_weight≈0.73 at hmm_conf=1 — too high,
+        # caused context to override clear NLP signals (e.g. "hello" → "love").
+        self.ctx_alpha = nn.Parameter(torch.tensor(2.0))
+        self.ctx_bias  = nn.Parameter(torch.tensor(2.5))
         self.nlp_temp  = nn.Parameter(torch.tensor(1.5))
 
     @staticmethod
@@ -177,24 +179,38 @@ class GatingEnsembleNet(nn.Module):
         x_c = x[:, ML_DIM:FEATURE_DIM]
 
         # HMM confidence — drives context vs NLP balance
+        # Hard cap at 0.50: NLP models always get at least 50% say regardless of
+        # how confident the HMM is — prevents context from overriding clear NLP signals.
         hmm_conf   = x_c[:, CTX_HMM_CONF].unsqueeze(1).clamp(0.0, 1.0)  # [B, 1]
         ctx_weight = torch.sigmoid(
-            self.ctx_alpha.clamp(0.5, 6.0) * hmm_conf
-            - self.ctx_bias.clamp(0.5, 4.0)
-        )  # [B, 1]
+            self.ctx_alpha.clamp(0.5, 4.0) * hmm_conf
+            - self.ctx_bias.clamp(1.0, 4.0)
+        ).clamp(max=0.50)  # [B, 1]
+
+        # Context availability mask: 1.0 when real context is present, 0.0 when absent.
+        # Without this, enc_context(zeros) produces a non-zero vector from learned biases,
+        # which then contaminates the NLP gate and residual — causing the model to predict
+        # the "average EmpatheticDialogues emotion" (love/joy) for every zero-context message.
+        ctx_available = (x_c.abs().sum(dim=1, keepdim=True) > 0.01).float()  # [B, 1]
 
         # Context path
         c_h              = self.enc_context(x_c)
         e_c              = self.enc_ctx_expert(x_c)
         ctx_prior_logits = self.ctx_prior_head(e_c)           # [B, n_classes]
 
-        # NLP path
+        # NLP path — gate and residual are zeroed when no real context is present,
+        # so the NLP experts (vader/bert/goe) are weighted uniformly and no context
+        # bias leaks into the NLP representation.
         e_v       = self.enc_vader(x_v)
         e_b       = self.enc_bert(x_b)
         e_g       = self.enc_goe(x_g)
-        alpha_nlp = F.softmax(self.gate_nlp(c_h), dim=-1)    # [B, 3]
+        # When context is absent, force equal 1/3 weights on vader/bert/goe so the
+        # gate_nlp learned biases (trained on zero-context EmpatheticDialogues samples
+        # that were mostly love/joy) do not influence the no-context prediction.
+        ctx_gate  = F.softmax(self.gate_nlp(c_h * ctx_available), dim=-1)    # [B, 3]
+        alpha_nlp = ctx_gate * ctx_available + (1.0 - ctx_available) / 3.0   # [B, 3]
         nlp_mix   = (alpha_nlp.unsqueeze(-1) * torch.stack([e_v, e_b, e_g], dim=1)).sum(dim=1)
-        nlp_repr  = nlp_mix + 0.3 * self.ctx_residual(c_h)
+        nlp_repr  = nlp_mix + 0.3 * ctx_available * self.ctx_residual(c_h)
         nlp_logits = self.nlp_head(nlp_repr) / self.nlp_temp.clamp(0.5, 3.0)  # [B, n_classes]
 
         # Bayesian logit averaging — equivalent to geometric mean of distributions
@@ -424,6 +440,72 @@ def predict_with_meta_learner(
                 f"[DIAG-3] Model type={type(model).__name__} — NOT GatingNetworkWrapper; "
                 f"no gate α available (stale pkl?)"
             )
+
+        # ── NLP confidence guard ──────────────────────────────────────────────
+        # Two-stage guard: GoEmotions first (28-class, fine-grained), then BERT
+        # as a fallback (7 Ekman classes, more reliable for strong emotions).
+        # Fires when any NLP model is highly confident but meta-learner disagrees.
+        # Common causes: context gate over-weighting history (e.g. "hello" → "love"),
+        # or GoEmotions model failure (e.g. "furious" → "approval").
+        goe_raw = feature_vector[0, 11:ML_DIM]   # [28] raw GoEmotions scores
+        goe_max = float(goe_raw.max())
+        goe_top = EMOTION_LABELS[int(goe_raw.argmax())]
+
+        bert_raw = feature_vector[0, 4:11]        # [7] BERT Ekman scores
+        bert_max = float(bert_raw.max())
+        bert_top = BERT_LABELS[int(bert_raw.argmax())]
+        # All 7 BERT Ekman labels exist directly in EMOTION_LABELS
+        bert_goe_label = bert_top if bert_top in EMOTION_LABELS else None
+
+        if goe_max >= 0.75 and pred_label != goe_top:
+            # GoEmotions is highly confident — blend its 28-class distribution in.
+            blend      = min(goe_max * 0.80, 0.65)
+            target_dist = {e: float(goe_raw[i]) for i, e in enumerate(EMOTION_LABELS)}
+            old_pred   = pred_label
+            blended    = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target_dist[e]
+                          for e in EMOTION_LABELS}
+            pred_label = max(blended, key=blended.get)
+            confidence = blended[pred_label]
+            all_scores = blended
+            logger.warning(
+                f"[NLP-guard/GoE] GoEmotions={goe_top}({goe_max:.2f}) but meta={old_pred}. "
+                f"Blended (α={blend:.2f}) → {pred_label} ({confidence:.2f})"
+            )
+
+        elif bert_goe_label and bert_max >= 0.80 and pred_label != bert_goe_label:
+            # GoEmotions was uncertain but BERT is highly confident (e.g. "furious"
+            # → GoE says "approval" at 43%, but BERT says "anger" at 99%).
+            #
+            # CRITICAL: BERT has only 7 Ekman classes — "joy" covers love/admiration/
+            # excitement/gratitude etc. Don't fire if meta's prediction is a valid
+            # GoEmotions sub-type of BERT's coarser label (e.g. meta=love, BERT=joy
+            # → love is correct, BERT is just too coarse to distinguish it).
+            _bert_subtypes = {
+                "joy":     {"joy", "amusement", "excitement", "admiration", "love",
+                            "approval", "caring", "gratitude", "optimism", "pride",
+                            "desire", "relief"},
+                "sadness": {"sadness", "grief", "remorse", "disappointment"},
+                "anger":   {"anger", "annoyance", "disapproval"},
+                "fear":    {"fear", "nervousness"},
+                "neutral": {"neutral", "realization"},
+                "surprise":{"surprise", "realization", "confusion"},
+                "disgust": {"disgust", "disapproval"},
+            }
+            if pred_label in _bert_subtypes.get(bert_top, {bert_goe_label}):
+                pass   # meta is a valid fine-grained sub-type — BERT is just coarser
+            else:
+                blend       = min(bert_max * 0.70, 0.55)
+                target_dist = {e: (1.0 if e == bert_goe_label else 0.0) for e in EMOTION_LABELS}
+                old_pred    = pred_label
+                blended     = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target_dist[e]
+                               for e in EMOTION_LABELS}
+                pred_label  = max(blended, key=blended.get)
+                confidence  = blended[pred_label]
+                all_scores  = blended
+                logger.warning(
+                    f"[NLP-guard/BERT] BERT={bert_top}({bert_max:.2f}) but meta={old_pred}. "
+                    f"Blended (α={blend:.2f}) → {pred_label} ({confidence:.2f})"
+                )
 
         sarcasm_score, conflict_desc = detect_emotional_conflicts(feature_vector)
         return pred_label, confidence, all_scores, sarcasm_score, conflict_desc, gate_alpha
