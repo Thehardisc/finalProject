@@ -103,7 +103,7 @@ _device = 0 if _torch.cuda.is_available() else -1
 _vader = _VSA()
 _bert  = _hfpipe("text-classification",
                   model="j-hartmann/emotion-english-distilroberta-base",
-                  return_all_scores=True, device=_device)
+                  top_k=None, device=_device)
 _goe   = _hfpipe("text-classification",
                   model="bhadresh-savani/bert-base-go-emotion",
                   top_k=None, device=_device)
