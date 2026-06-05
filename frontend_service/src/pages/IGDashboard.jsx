@@ -242,7 +242,6 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
       }}
     >
       <div style={{
-        maxWidth: '70%',
         padding: '10px 14px',
         borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
         background: dark 
@@ -551,11 +550,13 @@ export default function IGDashboard({
   const [selectedMsg, setSelectedMsg]         = useState(null);
   const [memberPanelOpen, setMemberPanelOpen] = useState(false);
   const [memberError, setMemberError]         = useState('');
-  const messagesEndRef = useRef(null);
-  const inputRef       = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const messagesEndRef       = useRef(null);
+  const inputRef             = useRef(null);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+    const el = messagesContainerRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
 
   useEffect(() => {
@@ -1007,7 +1008,7 @@ export default function IGDashboard({
             )}
 
             {/* Messages */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 4 }}>
               {messages.length === 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 12, color: '#9ca3af' }}>
                   <Avatar name={activeLabel} size={72} rgb={activeRgb} />
@@ -1028,11 +1029,12 @@ export default function IGDashboard({
 
                 return (
                   <div key={msg.id ?? idx} style={{
-                    display: 'flex', flexDirection: 'column',
-                    alignItems: isOwn ? 'flex-end' : 'flex-start',
+                    display: 'flex',
+                    justifyContent: isOwn ? 'flex-end' : 'flex-start',
                     marginTop: (!prev || prev.sender !== msg.sender) ? 12 : 2,
                     position: 'relative',
                   }}>
+                    <div style={{ maxWidth: '70%', display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
                     {showName && (
                       <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, marginBottom: 2 }}>
                         <Avatar name={msg.senderName || activeLabel} size={26} rgb={activeRgb} />
@@ -1060,6 +1062,7 @@ export default function IGDashboard({
                           className="regen-btn"
                         >↺</button>
                       )}
+                    </div>
                     </div>
                   </div>
                 );

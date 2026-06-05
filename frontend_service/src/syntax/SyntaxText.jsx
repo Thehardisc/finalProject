@@ -27,10 +27,9 @@ export default function SyntaxText({ text, theme = 'prism', dark = false }) {
             onMouseLeave={() => setHoveredIdx(null)}
             style={{
               position: 'relative',
-              display: 'inline-block',
+              display: 'inline',
               cursor: 'default',
-              padding: '0 2px',
-              margin: '0 -2px',
+              padding: '0 1px',
               borderRadius: '4px',
               color: color,
               backgroundColor: isHovered ? tint : 'transparent',

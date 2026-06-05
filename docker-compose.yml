@@ -189,6 +189,7 @@ services:
       HF_DATASETS_OFFLINE: "0"
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: trainer_service
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - ./central_responder_service/models:/app/models
       - ./conversation_state_learner/training_data:/app/training_data:ro

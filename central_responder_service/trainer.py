@@ -472,14 +472,14 @@ _EMPATHETIC_TO_GOEMOTION: dict = {
     'terrified':   'fear',       'joyful':       'joy',
     'angry':       'anger',      'sad':          'sadness',
     'jealous':     'disapproval','grateful':     'gratitude',
-    'prepared':    'optimism',   'embarrassed':  'embarrassment',
+    'embarrassed':  'embarrassment',
     'excited':     'excitement', 'annoyed':      'annoyance',
     'lonely':      'sadness',    'surprised':    'surprise',
     'furious':     'anger',      'disappointed': 'disappointment',
     'caring':      'caring',     'trusting':     'approval',
-    'disgusted':   'disgust',    'anticipating': 'optimism',
-    'anxious':     'nervousness','nostalgic':    'realization',
-    'confident':   'pride',      'content':      'relief',
+    'disgusted':   'disgust',    'anticipating': 'desire',          # anticipating→desire (wanting something to happen)
+    'anxious':     'nervousness','nostalgic':    'curiosity',       # nostalgic→curiosity (wondering about the past)
+    'confident':   'pride',
     'devastated':  'grief',      'hopeful':      'optimism',
     'guilty':      'remorse',    'impressed':    'admiration',
     'apprehensive':'nervousness','touched':      'caring',
@@ -587,9 +587,9 @@ def extract_empathetic_dialogues_features(
 
         text        = str(row.get('situation', '')).strip()
         raw_emotion = str(row.get('emotion', 'neutral')).lower()
-        goemo_label = _EMPATHETIC_TO_GOEMOTION.get(raw_emotion, 'neutral')
+        goemo_label = _EMPATHETIC_TO_GOEMOTION.get(raw_emotion)
 
-        if not text:
+        if not text or goemo_label is None:
             continue
         try:
             vader_out = vader_analyzer(text) if callable(vader_analyzer) else {}
@@ -612,6 +612,167 @@ def extract_empathetic_dialogues_features(
     logger.info(
         f"  [EmpDialogues] Extracted {len(features)} samples ({split}) "
         f"in {elapsed:.0f}s ({len(features)/elapsed:.1f} samples/s)."
+    )
+    empty = np.empty((0, FEATURE_DIM), dtype=np.float32)
+    return (
+        np.array(features, dtype=np.float32) if features else empty,
+        labels,
+        gs_list,
+    )
+
+
+# ── Synthetic sentence generation for missing GoEmotions classes ──────────────
+
+# Per-class target counts — exactly replace what was removed from EmpatheticDialogues:
+#   neutral:     prepared(584) + ashamed(485 fallback) = 1069 removed
+#   relief:      content(568) = 568 removed
+#   amusement / confusion / realization: never in ED → use 568 as baseline (matches relief)
+_SYNTHETIC_COUNTS: dict = {
+    "neutral":     1069,
+    "relief":       568,
+    "amusement":    568,
+    "confusion":    568,
+    "realization":  568,
+}
+_SYNTHETIC_CLASSES = list(_SYNTHETIC_COUNTS.keys())
+_BATCH_SIZE        = 250   # max sentences per Claude API call (fits in 4096 tokens)
+
+
+def _generate_synthetic_sentences() -> dict:
+    """
+    Call Claude Haiku to generate synthetic training sentences for each missing class.
+    Loops in batches of _BATCH_SIZE until the per-class target in _SYNTHETIC_COUNTS is met.
+    """
+    import anthropic
+    client    = anthropic.Anthropic()
+    result    = {}
+    total_all = sum(_SYNTHETIC_COUNTS.values())
+    done_all  = 0
+
+    for label, target in _SYNTHETIC_COUNTS.items():
+        sentences: list = []
+        n_batches = -(-target // _BATCH_SIZE)  # ceil division
+        logger.info(
+            f"  [Synthetic] '{label}': target={target} sentences "
+            f"({n_batches} batch{'es' if n_batches > 1 else ''} of ≤{_BATCH_SIZE})"
+        )
+        batch_num = 0
+        while len(sentences) < target:
+            batch_num += 1
+            needed = min(_BATCH_SIZE, target - len(sentences))
+            logger.info(
+                f"  [Synthetic]   batch {batch_num}/{n_batches} for '{label}' "
+                f"— requesting {needed} sentences..."
+            )
+            prompt = (
+                f"Generate {needed} diverse first-person situational sentences "
+                f"expressing the emotion '{label}'. "
+                "Style: EmpatheticDialogues 'situation' field — 1-2 sentences describing "
+                "a real-life context where someone feels this emotion. "
+                "Vary the settings: work, relationships, hobbies, discovery, everyday moments. "
+                "One situation per line. No numbering, no bullets."
+            )
+            msg   = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            batch = [l.strip() for l in msg.content[0].text.splitlines() if l.strip()]
+            sentences.extend(batch)
+            logger.info(
+                f"  [Synthetic]   batch {batch_num}/{n_batches} done — "
+                f"got {len(batch)}, total so far: {len(sentences)}/{target}"
+            )
+        result[label] = sentences[:target]
+        done_all     += len(result[label])
+        logger.info(
+            f"  [Synthetic] '{label}' complete: {len(result[label])}/{target} sentences "
+            f"[overall {done_all}/{total_all}]"
+        )
+    return result
+
+
+def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer) -> tuple:
+    """
+    Load (or auto-generate) synthetic sentences for the 5 missing GoEmotions classes
+    and process them through the same NLP pipeline as EmpatheticDialogues.
+    Stored in MODEL_PATH.parent/synthetic_sentences.json (bind-mounted, persists rebuilds).
+    """
+    json_path = MODEL_PATH.parent / "synthetic_sentences.json"
+
+    if not json_path.exists() or json_path.stat().st_size == 0:
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if not api_key:
+            logger.warning(
+                "[Synthetic] ANTHROPIC_API_KEY is not set — cannot generate synthetic sentences. "
+                "Add ANTHROPIC_API_KEY to .env and rebuild to cover: "
+                f"{_SYNTHETIC_CLASSES}. Training will proceed with 23/28 classes."
+            )
+            return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+
+        total_needed = sum(_SYNTHETIC_COUNTS.values())
+        logger.info(
+            f"[Synthetic] synthetic_sentences.json not found — generating {total_needed} sentences "
+            f"across {len(_SYNTHETIC_CLASSES)} classes via Claude Haiku: {_SYNTHETIC_COUNTS}"
+        )
+        try:
+            data = _generate_synthetic_sentences()
+            with open(json_path, "w") as f:
+                json.dump(data, f, indent=2)
+            saved = sum(len(v) for v in data.values())
+            logger.info(f"[Synthetic] Saved {saved} sentences → {json_path}")
+        except Exception as e:
+            logger.warning(f"[Synthetic] Generation failed: {e} — training with 23/28 classes.")
+            return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+    else:
+        with open(json_path) as f:
+            data = json.load(f)
+        loaded = {k: len(v) for k, v in data.items()}
+        logger.info(f"[Synthetic] Loaded existing synthetic_sentences.json: {loaded}")
+
+    features, labels, gs_list = [], [], []
+    total_sentences = sum(len(v) for v in data.values() if isinstance(v, list))
+    processed       = 0
+    t0_syn          = time.time()
+
+    for goemo_label, sentences in data.items():
+        if goemo_label not in EMOTION_LABELS:
+            logger.warning(f"[Synthetic] Unknown label '{goemo_label}' in JSON — skipping.")
+            continue
+        class_start = len(features)
+        for text in sentences:
+            try:
+                vader_out = vader_analyzer(text) if callable(vader_analyzer) else {}
+                bert_out  = bert_analyzer(text)  if callable(bert_analyzer)  else {}
+                goe_out   = goe_analyzer(text)   if callable(goe_analyzer)   else {}
+            except Exception:
+                continue
+            ctx = build_synthetic_context_vector(label=goemo_label, mode="train")
+            fv  = build_feature_vector(
+                {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
+                context_vector=ctx[:CDM_CTX_DIM],
+                trajectory_prior=ctx[CDM_CTX_DIM:],
+            )
+            features.append(fv.flatten())
+            labels.append(goemo_label)
+            gs_list.append(goe_out)
+            processed += 1
+            if processed % 250 == 0:
+                elapsed = time.time() - t0_syn
+                rate    = processed / elapsed if elapsed > 0 else 0
+                logger.info(
+                    f"  [Synthetic] NLP processing: {processed} done "
+                    f"({rate:.1f} samples/s)..."
+                )
+        class_ok = len(features) - class_start
+        logger.info(
+            f"  [Synthetic] '{goemo_label}': {class_ok}/{len(sentences)} sentences → features"
+        )
+
+    elapsed_syn = time.time() - t0_syn
+    logger.info(
+        f"[Synthetic] NLP complete — {len(features)} feature vectors in {elapsed_syn:.0f}s "
+        f"({len(features)/elapsed_syn:.1f} samples/s)"
     )
     empty = np.empty((0, FEATURE_DIM), dtype=np.float32)
     return (
@@ -1002,13 +1163,18 @@ def run_one_cycle(reload_callback=None) -> None:
         CACHE_PATH = MODEL_PATH.parent / "dataset_features_cache.pkl"
         DATASET_ID = "empathetic_dialogues_v1"
 
+        _va = lambda t: {f"vader_{k}": v for k, v in _vader(vader, t).items()}
+        _ba = lambda t: _run(bert, t)
+        _ga = lambda t: _run(goe,  t)
+
         if CACHE_PATH.exists():
             logger.info("Loading cached bootstrap features...")
             try:
                 with open(CACHE_PATH, "rb") as f:
                     cached = pickle.load(f)
                 if (cached.get("dataset_id") != DATASET_ID or
-                        cached.get("feature_dim") != FEATURE_DIM):
+                        cached.get("feature_dim") != FEATURE_DIM or
+                        cached.get("n_train_cap") != MAX_EMPATHETIC_SAMPLES):
                     logger.warning("Cache stale (dataset_id or feature_dim mismatch). Rebuilding.")
                     CACHE_PATH.unlink(missing_ok=True)
                     del vader, bert, goe
@@ -1032,10 +1198,6 @@ def run_one_cycle(reload_callback=None) -> None:
                 f"No model found — bootstrapping from EmpatheticDialogues "
                 f"(MAX_EMPATHETIC_SAMPLES={MAX_EMPATHETIC_SAMPLES})..."
             )
-            _va = lambda t: {f"vader_{k}": v for k, v in _vader(vader, t).items()}
-            _ba = lambda t: _run(bert, t)
-            _ga = lambda t: _run(goe,  t)
-
             X_tr, y_tr, gs_tr = extract_empathetic_dialogues_features(_va, _ba, _ga, split="train")
             X_v,  y_v,  _     = extract_empathetic_dialogues_features(_va, _ba, _ga, split="val")
             X_te, y_te, _     = extract_empathetic_dialogues_features(_va, _ba, _ga, split="test")
@@ -1054,6 +1216,7 @@ def run_one_cycle(reload_callback=None) -> None:
                 pickle.dump({
                     "dataset_id":  DATASET_ID,
                     "feature_dim": FEATURE_DIM,
+                    "n_train_cap": MAX_EMPATHETIC_SAMPLES,
                     "train": (list(X_tr), y_tr, gs_tr),
                     "val":   (list(X_v),  y_v,  None),
                     "test":  (list(X_te), y_te, None),
@@ -1063,6 +1226,18 @@ def run_one_cycle(reload_callback=None) -> None:
             X_tr, X_v, X_te = list(X_tr), list(X_v), list(X_te)
 
         has_cdm_tr: list = [False] * len(X_tr)
+
+        # ── Synthetic augmentation for the 5 missing GoEmotions classes ────────
+        X_syn, y_syn, gs_syn = load_synthetic_features(_va, _ba, _ga)
+        if len(X_syn) > 0:
+            X_tr       = list(X_tr) + list(X_syn)
+            y_tr       = y_tr + y_syn
+            gs_tr      = gs_tr + gs_syn
+            has_cdm_tr = has_cdm_tr + [False] * len(y_syn)
+            logger.info(
+                f"Bootstrap: +{len(X_syn)} synthetic samples "
+                f"({_SYNTHETIC_CLASSES}) → {len(X_tr)} total train"
+            )
 
     else:
         # ── Continuous learning from database ──────────────────────────────────
@@ -1099,9 +1274,16 @@ def run_one_cycle(reload_callback=None) -> None:
     dist_before = Counter(y_tr).most_common(5)
     logger.log_stats("Pre-Filter Distribution (Top 5)", dict(dist_before))
 
-    n_before                      = len(X_tr)
-    X_tr, y_tr, n_out, has_cdm_tr = filter_outliers(X_tr, y_tr, gs_tr, has_cdm_tr)
-    logger.info(f"  Layer 2 (outlier): removed {n_out}")
+    n_before = len(X_tr)
+    if is_bootstrap:
+        # EmpatheticDialogues is a curated dataset — trust its labels; skip outlier filter
+        # (GoEmotions model disagrees with ~50% of ED labels due to different annotation
+        # guidelines, which would remove half the bootstrap data for no good reason)
+        logger.info("  Layer 2 (outlier): skipped for bootstrap (curated dataset)")
+        n_out = 0
+    else:
+        X_tr, y_tr, n_out, has_cdm_tr = filter_outliers(X_tr, y_tr, gs_tr, has_cdm_tr)
+        logger.info(f"  Layer 2 (outlier): removed {n_out}")
     X_tr, y_tr, has_cdm_tr        = filter_balance(X_tr, y_tr, has_cdm_tr)
     n_filtered                    = n_before - len(X_tr)
 

@@ -32,6 +32,7 @@ from shared.utils.logger import get_logger
 from shared.constants import (
     EMOTION_LABELS, VADER_KEYS, BERT_LABELS,
     FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, ML_DIM, CTX_HMM_CONF,
+    CTX_MSG_LENGTH, CTX_LATENCY_MS, CTX_HMM_EMISSION,
 )
 
 logger = get_logger("meta_learner")
@@ -348,11 +349,19 @@ def build_feature_vector(
     for k in EMOTION_LABELS:
         vec.append(float(goemotions_scores.get(k, 0.0)))
 
-    cdm = (
+    cdm = list(
         context_vector
         if (context_vector and len(context_vector) == CDM_CTX_DIM)
         else [0.0] * CDM_CTX_DIM
     )
+    # Normalize large-valued CDM scalars so they don't overwhelm the context encoder.
+    # The scaler is fit on bootstrap data where these are all zeros; raw values at
+    # inference (e.g. message_length=200, latency_ms=3000) would produce ctx_L2 in
+    # the millions and cause the gate to over-weight context to ~52%.
+    cdm[CTX_MSG_LENGTH]  = min(float(cdm[CTX_MSG_LENGTH])  / 500.0,  3.0)
+    cdm[CTX_LATENCY_MS]  = min(float(cdm[CTX_LATENCY_MS])  / 2000.0, 3.0)
+    cdm[CTX_HMM_EMISSION] = max(float(cdm[CTX_HMM_EMISSION]) / 50.0, -3.0)
+
     prior = (
         trajectory_prior
         if (trajectory_prior and len(trajectory_prior) == PRIOR_DIM)
