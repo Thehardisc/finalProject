@@ -2,7 +2,7 @@
 shared/utils/logger.py — Central logger factory used by every service.
 
 What this module gives you:
-  - get_logger(name)              → a CustomLogger writing to stdout
+  - get_logger(name)              → a CustomLogger writing to stdout (and optionally a file)
   - CustomLogger.bind(**fields)   → a child logger carrying structured fields
                                     merged into every log call (visible in
                                     TEXT mode as "[k=v ...]" suffix and as
@@ -13,8 +13,10 @@ What this module gives you:
 Env vars:
   LOG_LEVEL  = DEBUG | INFO | WARNING | ERROR | CRITICAL   (default INFO)
   LOG_FORMAT = TEXT | JSON                                  (default TEXT)
+  LOG_DIR    = /path/to/log/dir   (optional — enables rotating file logs)
 """
 import logging
+import logging.handlers
 import os
 import sys
 import json
@@ -22,13 +24,20 @@ from datetime import datetime
 
 _VALID_FORMATS = ("TEXT", "JSON")
 
+# Ensure stdout is line-buffered even in non-TTY environments (e.g. Docker).
+# This prevents logs from being silently lost on crashes due to buffering.
+try:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
+
 
 def _resolve_log_format() -> str:
     """Return a validated LOG_FORMAT value. Falls back to TEXT on bad input."""
     raw = os.environ.get("LOG_FORMAT", "TEXT")
     fmt = (raw or "TEXT").upper()
     if fmt not in _VALID_FORMATS:
-        # Use stderr directly — the logging system isn't fully configured yet.
         sys.stderr.write(
             f"[logger] LOG_FORMAT={raw!r} is not one of {_VALID_FORMATS}; "
             f"falling back to TEXT\n"
@@ -64,7 +73,6 @@ class _BoundFieldsFormatter(logging.Formatter):
         extra = getattr(record, "extra_data", None)
         if not extra:
             return base
-        # Compact "k=v k=v" form. repr() ensures str values with spaces stay parseable.
         suffix = " ".join(f"{k}={_short_repr(v)}" for k, v in extra.items())
         return f"{base} [{suffix}]"
 
@@ -92,6 +100,10 @@ def _short_repr(v) -> str:
     if isinstance(v, str):
         return v if (v and " " not in v and "=" not in v) else json.dumps(v)
     return json.dumps(v, default=str)
+
+
+class _OurHandler(logging.StreamHandler):
+    """Marker class so we can detect our own handler in a pre-populated root logger."""
 
 
 class CustomLogger:
@@ -130,7 +142,6 @@ class CustomLogger:
     def log_stats(self, title: str, stats: dict, level: int = logging.INFO):
         """Boxed table in TEXT mode, structured event in JSON mode."""
         if _resolve_log_format() == "JSON":
-            # Merge bound fields so the stats event also carries correlation.
             payload = {**self._bound, **stats}
             self.logger.log(level, f"STATS: {title}", extra={"extra_data": payload})
             return
@@ -157,11 +168,61 @@ class CustomLogger:
         """Merge bound fields + caller's `extra` then forward to stdlib logger."""
         if self._bound or "extra" in kwargs:
             user_extra = kwargs.pop("extra", None) or {}
-            # Caller may pass {"extra_data": {...}} OR a plain dict — accept both.
             user_fields = user_extra.get("extra_data", user_extra)
             merged = {**self._bound, **user_fields}
             kwargs["extra"] = {"extra_data": merged}
         self.logger.log(level, msg, *args, **kwargs)
+
+
+def _configure_root_logger(log_level: int, log_format: str) -> None:
+    """
+    Install our handler on the root logger exactly once per process.
+
+    We use a marker class (_OurHandler) to detect if we already configured it,
+    so we never double-install — even when uvicorn or another framework has
+    already added its own handlers before we run.
+    """
+    root = logging.getLogger()
+
+    # If our handler is already present, just ensure the level is right.
+    if any(isinstance(h, _OurHandler) for h in root.handlers):
+        root.setLevel(log_level)
+        return
+
+    formatter = JsonFormatter() if log_format == "JSON" else _BoundFieldsFormatter()
+
+    # Remove any pre-existing StreamHandlers that uvicorn/fastapi may have added
+    # so we don't get duplicate lines in two different formats.
+    for h in root.handlers[:]:
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            root.removeHandler(h)
+
+    stdout_handler = _OurHandler(sys.stdout)
+    stdout_handler.setLevel(log_level)
+    stdout_handler.setFormatter(formatter)
+    root.addHandler(stdout_handler)
+
+    # Optional rotating file log — enabled when LOG_DIR is set.
+    log_dir = os.environ.get("LOG_DIR", "").strip()
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+        service_name = os.environ.get("SERVICE_NAME", "service")
+        log_path = os.path.join(log_dir, f"{service_name}.log")
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=10 * 1024 * 1024, backupCount=3, encoding="utf-8"
+        )
+        file_handler.setLevel(log_level)
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+
+    root.setLevel(log_level)
+
+    # Tame chatty libraries — keep them at INFO even when we're at DEBUG.
+    for lib in ("uvicorn", "uvicorn.access", "gunicorn", "transformers",
+                "urllib3", "filelock", "datasets", "fsspec"):
+        lib_logger = logging.getLogger(lib)
+        lib_logger.setLevel(logging.INFO)
+        lib_logger.propagate = True
 
 
 def get_logger(name: str) -> CustomLogger:
@@ -172,27 +233,9 @@ def get_logger(name: str) -> CustomLogger:
     """
     log_level_str = os.environ.get("LOG_LEVEL", "INFO").upper()
     log_level = getattr(logging, log_level_str, logging.INFO)
-
     log_format = _resolve_log_format()
 
-    root_logger = logging.getLogger()
-    if not getattr(root_logger, "_is_global_configured", False):
-        root_logger.setLevel(log_level)
-
-        if not root_logger.handlers:
-            rh = logging.StreamHandler(sys.stdout)
-            rh.setLevel(log_level)
-            rh.setFormatter(JsonFormatter() if log_format == "JSON" else _BoundFieldsFormatter())
-            root_logger.addHandler(rh)
-
-        # Tame chatty libraries — force them to INFO even when we're at DEBUG.
-        for lib in ("uvicorn", "uvicorn.access", "gunicorn", "transformers",
-                    "urllib3", "filelock", "datasets", "fsspec"):
-            lib_logger = logging.getLogger(lib)
-            lib_logger.setLevel(logging.INFO)
-            lib_logger.propagate = True
-
-        setattr(root_logger, "_is_global_configured", True)
+    _configure_root_logger(log_level, log_format)
 
     logger = logging.getLogger(name)
     logger.setLevel(log_level)

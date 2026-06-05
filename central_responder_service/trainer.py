@@ -14,7 +14,8 @@ Key changes from v1:
 Configuration (env vars, same as v1):
   RETRAIN_INTERVAL_SECONDS  (default: 1800)
   ACCURACY_GATE             (default: 0.40)
-  MAX_SAMPLES               (default: 2500)
+  MAX_EMPATHETIC_SAMPLES    (default: 25000)
+  MIN_DB_SAMPLES            (default: 50)
 """
 
 import os
@@ -43,11 +44,12 @@ DB_HOST     = os.getenv("DB_HOST",           "db")
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:5432/{DB_NAME}"
 
 # ── Configuration ───────────────────────────────────────────────────────────────
-RETRAIN_INTERVAL = int(os.environ.get("RETRAIN_INTERVAL_SECONDS", 1800))
-ACCURACY_GATE    = float(os.environ.get("ACCURACY_GATE",          0.40))
-MAX_SAMPLES      = int(os.environ.get("MAX_SAMPLES",              2500))
-MODEL_PATH       = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"))
-META_PATH        = MODEL_PATH.with_name("meta_weights_meta.json")
+RETRAIN_INTERVAL        = int(os.environ.get("RETRAIN_INTERVAL_SECONDS",   1800))
+ACCURACY_GATE           = float(os.environ.get("ACCURACY_GATE",            0.40))
+MAX_EMPATHETIC_SAMPLES  = int(os.environ.get("MAX_EMPATHETIC_SAMPLES",     25_000))
+MIN_DB_SAMPLES          = int(os.environ.get("MIN_DB_SAMPLES",             50))
+MODEL_PATH              = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"))
+META_PATH               = MODEL_PATH.with_name("meta_weights_meta.json")
 
 import torch
 import torch.nn as nn
@@ -542,29 +544,47 @@ def _empathetic_obs(emotion_label: str) -> int:
 
 def extract_empathetic_dialogues_features(
     vader_analyzer, bert_analyzer, goe_analyzer,
-    max_conversations: int = 2000,
+    split: str = "train",
 ) -> tuple:
     """
-    Build (X [N, FEATURE_DIM], y [N]) from EmpatheticDialogues.
+    Build (X [N, FEATURE_DIM], y [N], gs [N]) from EmpatheticDialogues.
 
-    Uses bdotloh/empathetic-dialogues-contexts (Parquet, no loading scripts).
-    Each row: situation text + human-annotated emotion label.
-    Labels are human-annotated (32 categories → GoEmotions 28 via mapping).
-    CDM context is synthetic (has_cdm=False — single-turn data, no conversation history).
+    The dataset's native splits are used directly (train ~19k / val ~2.7k / test ~2.5k).
+    Size is capped by MAX_EMPATHETIC_SAMPLES (train) and MAX_EMPATHETIC_SAMPLES // 5 (val/test).
+
+    Labels: 32 EmpatheticDialogues emotions → GoEmotions 28 via _EMPATHETIC_TO_GOEMOTION.
+    CDM context: synthetic (has_cdm=False — single-turn data, no conversation history).
+    ctx_mode: "train" for train split, "val" for val, "cold" for test.
     """
+    hf_split = {"train": "train", "val": "validation", "test": "test"}.get(split, "train")
+    cap      = MAX_EMPATHETIC_SAMPLES if split == "train" else MAX_EMPATHETIC_SAMPLES // 5
+    ctx_mode = {"train": "train", "val": "val", "test": "cold"}[split]
+
     try:
         from datasets import load_dataset
-        emp = load_dataset("bdotloh/empathetic-dialogues-contexts", split="train")
+        emp = load_dataset("bdotloh/empathetic-dialogues-contexts", split=hf_split)
     except Exception as e:
-        logger.warning(f"EmpatheticDialogues load failed: {e} — skipping.")
-        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
+        logger.warning(f"EmpatheticDialogues load failed: {e} — skipping {split} split.")
+        return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
 
-    features, labels = [], []
-    rows = list(emp)[:max_conversations]
+    rows = list(emp)[:cap]
 
-    logger.info(f"  [EmpDialogues] Building features from {len(rows)} situations...")
+    total = len(rows)
+    logger.info(f"  [EmpDialogues] Building {split} features from {total} situations...")
+    t0 = time.time()
 
-    for row in rows:
+    features, labels, gs_list = [], [], []
+    for i, row in enumerate(rows):
+        if i > 0 and i % 500 == 0:
+            elapsed  = time.time() - t0
+            rate     = i / elapsed
+            eta_s    = int((total - i) / rate) if rate > 0 else 0
+            logger.info(
+                f"  [EmpDialogues] {split} {i}/{total} "
+                f"({i * 100 // total}%)  "
+                f"{rate:.1f} samples/s  ETA {eta_s}s"
+            )
+
         text        = str(row.get('situation', '')).strip()
         raw_emotion = str(row.get('emotion', 'neutral')).lower()
         goemo_label = _EMPATHETIC_TO_GOEMOTION.get(raw_emotion, 'neutral')
@@ -578,8 +598,7 @@ def extract_empathetic_dialogues_features(
         except Exception:
             continue
 
-        # Synthetic CDM correlated with the human-annotated label
-        ctx = build_synthetic_context_vector(label=goemo_label, mode="train")
+        ctx = build_synthetic_context_vector(label=goemo_label, mode=ctx_mode)
         fv  = build_feature_vector(
             {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
             context_vector=ctx[:CDM_CTX_DIM],
@@ -587,10 +606,19 @@ def extract_empathetic_dialogues_features(
         )
         features.append(fv.flatten())
         labels.append(goemo_label)
+        gs_list.append(goe_out)
 
-    logger.info(f"  [EmpDialogues] Extracted {len(features)} human-labeled samples.")
-    return (np.array(features, dtype=np.float32) if features else np.empty((0, FEATURE_DIM), dtype=np.float32),
-            labels)
+    elapsed = time.time() - t0
+    logger.info(
+        f"  [EmpDialogues] Extracted {len(features)} samples ({split}) "
+        f"in {elapsed:.0f}s ({len(features)/elapsed:.1f} samples/s)."
+    )
+    empty = np.empty((0, FEATURE_DIM), dtype=np.float32)
+    return (
+        np.array(features, dtype=np.float32) if features else empty,
+        labels,
+        gs_list,
+    )
 
 
 # ── Relabeled conversations (implicit emotion labels from Claude API) ──────────
@@ -912,7 +940,7 @@ def fetch_live_data(vader, bert, goe) -> tuple:
                 SELECT text, ground_truth_emotion
                 FROM ranked
                 ORDER BY timestamp DESC
-                LIMIT {MAX_SAMPLES}
+                LIMIT {MAX_EMPATHETIC_SAMPLES}
             """)).fetchall()
 
         if not rows:
@@ -947,6 +975,14 @@ def run_one_cycle(reload_callback=None) -> None:
     """
     Full build → filter → train → gate → deploy cycle.
 
+    Two phases:
+      Bootstrap  — runs once when no model file exists.
+                   Trains on EmpatheticDialogues (size: MAX_EMPATHETIC_SAMPLES).
+                   Results are cached so NLP inference isn't repeated every cycle.
+      Continuous — every subsequent cycle trains only on verified PostgreSQL data
+                   + relabeled conversations. Skips if fewer than MIN_DB_SAMPLES
+                   samples are available.
+
     On success, calls reload_callback(wrapper) so main.py hot-swaps the
     global META_LEARNER without restarting the container.
     """
@@ -960,145 +996,104 @@ def run_one_cycle(reload_callback=None) -> None:
         except Exception:
             pass
 
-    # ── Feature vector cache ───────────────────────────────────────────────────
-    CACHE_PATH   = MODEL_PATH.parent / "dataset_features_cache.pkl"
-    _fresh_build = not CACHE_PATH.exists()  # track before we create it
-    if CACHE_PATH.exists():
-        logger.info("Loading cached dataset features...")
-        try:
-            with open(CACHE_PATH, "rb") as f:
-                cached = pickle.load(f)
+    is_bootstrap = not MODEL_PATH.exists()
 
-            if cached.get("feature_dim") != FEATURE_DIM:
-                logger.warning(
-                    f"Cache dim={cached.get('feature_dim')} ≠ current {FEATURE_DIM}. Invalidating."
+    device_int = 0 if torch.cuda.is_available() else -1
+    vader, bert, goe = _get_analyzers(device_int)
+
+    if is_bootstrap:
+        # ── One-time bootstrap from EmpatheticDialogues ────────────────────────
+        CACHE_PATH = MODEL_PATH.parent / "dataset_features_cache.pkl"
+        DATASET_ID = "empathetic_dialogues_v1"
+
+        if CACHE_PATH.exists():
+            logger.info("Loading cached bootstrap features...")
+            try:
+                with open(CACHE_PATH, "rb") as f:
+                    cached = pickle.load(f)
+                if (cached.get("dataset_id") != DATASET_ID or
+                        cached.get("feature_dim") != FEATURE_DIM):
+                    logger.warning("Cache stale (dataset_id or feature_dim mismatch). Rebuilding.")
+                    CACHE_PATH.unlink(missing_ok=True)
+                    del vader, bert, goe
+                    gc.collect()
+                    return run_one_cycle(reload_callback)
+                X_tr, y_tr, gs_tr = cached["train"]
+                X_v,  y_v,  _     = cached["val"]
+                X_te, y_te, _     = cached["test"]
+                logger.info(
+                    f"Bootstrap cache loaded — "
+                    f"{len(X_tr)} train / {len(X_v)} val / {len(X_te)} test samples."
                 )
+            except Exception as e:
+                logger.warning(f"Cache load failed: {e}. Rebuilding.")
                 CACHE_PATH.unlink(missing_ok=True)
+                del vader, bert, goe
+                gc.collect()
                 return run_one_cycle(reload_callback)
+        else:
+            logger.info(
+                f"No model found — bootstrapping from EmpatheticDialogues "
+                f"(MAX_EMPATHETIC_SAMPLES={MAX_EMPATHETIC_SAMPLES})..."
+            )
+            _va = lambda t: {f"vader_{k}": v for k, v in _vader(vader, t).items()}
+            _ba = lambda t: _run(bert, t)
+            _ga = lambda t: _run(goe,  t)
 
-            X_tr, y_tr, gs_tr = cached["train"]
-            X_v,  y_v,  _     = cached["val"]
-            X_te, y_te, _     = cached["test"]
+            X_tr, y_tr, gs_tr = extract_empathetic_dialogues_features(_va, _ba, _ga, split="train")
+            X_v,  y_v,  _     = extract_empathetic_dialogues_features(_va, _ba, _ga, split="val")
+            X_te, y_te, _     = extract_empathetic_dialogues_features(_va, _ba, _ga, split="test")
 
-            device_int = 0 if torch.cuda.is_available() else -1
-            vader, bert, goe  = _get_analyzers(device_int)
-            logger.info("Features loaded from cache.")
+            if not X_tr.size:
+                logger.error("EmpatheticDialogues extraction returned empty train set. Aborting.")
+                del vader, bert, goe
+                gc.collect()
+                return
 
-        except Exception as e:
-            logger.warning(f"Cache load failed: {e}. Rebuilding.")
-            CACHE_PATH.unlink(missing_ok=True)
-            return run_one_cycle(reload_callback)
+            logger.info(
+                f"Bootstrap: {len(X_tr)} train / {len(X_v)} val / {len(X_te)} test samples. "
+                f"Saving feature cache..."
+            )
+            with open(CACHE_PATH, "wb") as f:
+                pickle.dump({
+                    "dataset_id":  DATASET_ID,
+                    "feature_dim": FEATURE_DIM,
+                    "train": (list(X_tr), y_tr, gs_tr),
+                    "val":   (list(X_v),  y_v,  None),
+                    "test":  (list(X_te), y_te, None),
+                }, f)
+
+            # Convert to lists for the augmentation step below
+            X_tr, X_v, X_te = list(X_tr), list(X_v), list(X_te)
+
+        has_cdm_tr: list = [False] * len(X_tr)
+
     else:
-        # ── Fresh build from GoEmotions ────────────────────────────────────────
-        t0 = time.time()
-        logger.info("Loading GoEmotions dataset...")
-        try:
-            from datasets import load_dataset
-            ds = load_dataset("google-research-datasets/go_emotions", "simplified")
-        except Exception as e:
-            logger.error(f"Dataset load failed: {e}")
+        # ── Continuous learning from database ──────────────────────────────────
+        from sklearn.model_selection import train_test_split as _tts
+
+        X_live, y_live = fetch_live_data(vader, bert, goe)
+        X_rel,  y_rel  = load_relabeled_conversations()
+
+        X_all = X_live * 3 + list(X_rel) * 3
+        y_all = y_live * 3 + list(y_rel) * 3
+
+        if len(X_all) < MIN_DB_SAMPLES:
+            logger.info(
+                f"Only {len(X_all)} DB samples (need ≥ MIN_DB_SAMPLES={MIN_DB_SAMPLES}). "
+                f"Skipping cycle — waiting for more verified data."
+            )
+            del vader, bert, goe
+            gc.collect()
             return
 
-        train_raw = list(ds["train"])[:MAX_SAMPLES]
-        val_raw   = list(ds["validation"])[:MAX_SAMPLES // 5]
-        test_raw  = list(ds["test"])[:MAX_SAMPLES // 5]
-        logger.info(f"  [Extraction] {len(train_raw)} train / {len(val_raw)} val / {len(test_raw)} test samples")
+        logger.info(f"  [DB] {len(X_all)} samples available for continuous learning.")
 
-        device_int = 0 if torch.cuda.is_available() else -1
-        vader, bert, goe = _get_analyzers(device_int)
-
-        def process(split: list, name: str, ctx_mode: str):
-            X, y, gs_list = [], [], []
-            for i, s in enumerate(split):
-                if i % 100 == 0:
-                    logger.info(
-                        f"  [Trainer] {name} {i}/{len(split)} "
-                        f"({i / len(split) * 100:.0f}%)"
-                    )
-                lids = s.get("labels", [])
-                if not lids or lids[0] >= len(EMOTION_LABELS):
-                    continue
-                label    = EMOTION_LABELS[lids[0]]
-                text_val = s["text"]
-                vs  = {f"vader_{k}": v for k, v in _vader(vader, text_val).items()}
-                bs  = _run(bert, text_val)
-                gs  = _run(goe,  text_val)
-                gs_list.append(gs)
-                # Pass label + mode so context is correctly augmented per split
-                ctx = build_synthetic_context_vector(label=label, mode=ctx_mode)
-                X.append(
-                    build_feature_vector(
-                        {"vader": vs, "basic_bert": bs, "go_emotions": gs},
-                        context_vector=ctx[:CDM_CTX_DIM],
-                        trajectory_prior=ctx[CDM_CTX_DIM:],
-                    ).flatten()
-                )
-                y.append(label)
-
-            pt = (time.time() - t0) / max(len(X), 1)
-            logger.info(f"  [Trainer] {name}: {len(X)} samples, {pt*1000:.2f}ms/sample avg")
-            return X, y, gs_list
-
-        logger.info("Building feature vectors...")
-        X_tr, y_tr, gs_tr = process(train_raw, "train", "train")
-        X_v,  y_v,  _     = process(val_raw,   "val",   "val")
-        X_te, y_te, _     = process(test_raw,  "test",  "cold")  # cold = no-context worst case
-
-        logger.info("Saving feature cache...")
-        with open(CACHE_PATH, "wb") as f:
-            pickle.dump({
-                "feature_dim": FEATURE_DIM,
-                "train": (X_tr, y_tr, gs_tr),
-                "val":   (X_v,  y_v,  None),
-                "test":  (X_te, y_te, None),
-            }, f)
-
-    # has_cdm tracks whether each training sample has real CDM context vectors.
-    # GoEmotions (cache or fresh) → synthetic CDM → False
-    has_cdm_tr: list = [False] * len(X_tr)
-
-    # ── Relabeled conversations (implicit emotion labels, real NLP features) ─────
-    X_rel, y_rel = load_relabeled_conversations()
-    if len(X_rel) > 0:
-        rel_weight = 3  # high-quality: real pipeline outputs + implicit labels
-        X_tr.extend(list(X_rel) * rel_weight)
-        y_tr.extend(y_rel * rel_weight)
-        gs_tr.extend([{label: 1.0} for label in y_rel] * rel_weight)
-        has_cdm_tr.extend([False] * (len(X_rel) * rel_weight))  # synthetic CDM
-        logger.info(f"  [Relabeled] Added {len(X_rel) * rel_weight} samples (weight={rel_weight}).")
-
-    # ── Live supervised data augmentation ──────────────────────────────────────
-    X_live, y_live = fetch_live_data(vader, bert, goe)
-    if X_live:
-        weight = 3
-        X_tr.extend(X_live * weight)
-        y_tr.extend(y_live * weight)
-        gs_tr.extend([{}] * len(X_live) * weight)
-        has_cdm_tr.extend([False] * (len(X_live) * weight))  # mode="cold" = zeros
-        logger.info(
-            f"  [Trainer] Augmented with {len(X_live)} live samples (weight={weight})"
-        )
-
-    # ── EmpatheticDialogues + MELD: conversation-context augmentation ───────────
-    # Only on fresh build (analyzers still in RAM) to avoid re-running every cycle.
-    if _fresh_build:
-        logger.info("  [EmpDialogues] Extracting conversation-context features...")
-        X_emp, y_emp = extract_empathetic_dialogues_features(
-            vader_analyzer=lambda t: {f"vader_{k}": v for k, v in _vader(vader, t).items()},
-            bert_analyzer=lambda t: _run(bert, t),
-            goe_analyzer=lambda t: _run(goe, t),
-            max_conversations=2000,
-        )
-        if len(X_emp) > 0:
-            emp_weight = 2
-            X_tr.extend([row for row in X_emp] * emp_weight)
-            y_tr.extend(y_emp * emp_weight)
-            gs_tr.extend([{label: 1.0} for label in y_emp] * emp_weight)
-            has_cdm_tr.extend([False] * (len(X_emp) * emp_weight))  # single-turn, synthetic CDM
-            logger.info(f"  [EmpDialogues] Added {len(X_emp)*emp_weight} conv-context samples.")
-
-        # MELD (declare-lab/MELD) hangs on download — skipped until dataset is cached locally.
-        logger.info("  [MELD] Skipped — dataset not yet cached locally.")
+        X_tr, X_v, y_tr, y_v = _tts(X_all, y_all, test_size=0.20, random_state=42)
+        X_te, y_te = X_v, y_v  # val doubles as test for gate consistency
+        gs_tr      = [{label: 1.0} for label in y_tr]
+        has_cdm_tr = [False] * len(X_tr)
+        logger.info(f"DB cycle: {len(X_tr)} train / {len(X_v)} val samples.")
 
     del vader, bert, goe
     gc.collect()
@@ -1205,6 +1200,7 @@ def run_one_cycle(reload_callback=None) -> None:
             json.dump({
                 "trained_at":          datetime.datetime.utcnow().isoformat() + "Z",
                 "model_version":       "v2-gating-ensemble",
+                "training_mode":       "bootstrap" if is_bootstrap else "continuous",
                 "training_samples":    len(X_tr),
                 "filtered_samples":    n_filtered,
                 "validation_accuracy": round(val_acc,  4),
@@ -1287,7 +1283,8 @@ def start_trainer_thread(reload_callback) -> threading.Thread:
         logger.log_stats("Trainer Configuration", {
             "RETRAIN_INTERVAL_SECONDS": RETRAIN_INTERVAL,
             "ACCURACY_GATE":            ACCURACY_GATE,
-            "MAX_SAMPLES":              MAX_SAMPLES,
+            "MAX_EMPATHETIC_SAMPLES":   MAX_EMPATHETIC_SAMPLES,
+            "MIN_DB_SAMPLES":           MIN_DB_SAMPLES,
             "MODEL_PATH":               str(MODEL_PATH),
         })
         logger.info("API access will be enabled on first model completion.")
@@ -1330,7 +1327,8 @@ if __name__ == "__main__":
     logger.log_stats("Trainer Configuration", {
         "RETRAIN_INTERVAL_SECONDS": RETRAIN_INTERVAL,
         "ACCURACY_GATE":            ACCURACY_GATE,
-        "MAX_SAMPLES":              MAX_SAMPLES,
+        "MAX_EMPATHETIC_SAMPLES":   MAX_EMPATHETIC_SAMPLES,
+        "MIN_DB_SAMPLES":           MIN_DB_SAMPLES,
         "MODEL_PATH":               str(MODEL_PATH),
         "RELOAD_CHANNEL":           RELOAD_CHANNEL,
     })

@@ -12,14 +12,15 @@ Falls back silently (returns empty dict) if model is None or any error occurs.
 """
 
 import json
-import logging
 import secrets
 import numpy as np
 from typing import Optional, Dict, Tuple
 
 import torch
 
-logger = logging.getLogger("trajectory")
+from shared.utils.logger import get_logger
+
+logger = get_logger("trajectory")
 
 # ── Label constants (must match training schema) ──────────────────────────────
 

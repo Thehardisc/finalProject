@@ -52,6 +52,8 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: ingestion_service
 
   preprocessing_service:
     build:
@@ -68,12 +70,13 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: preprocessing_service
 
   vader_service:
     build:
       context: .
       dockerfile: vader_service/Dockerfile
-
     depends_on:
       redis:
         condition: service_healthy
@@ -85,6 +88,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: vader_service
 
   goemotions_service:
     build:
@@ -101,6 +106,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: goemotions_service
     volumes:
       - hf_cache:/root/.cache/huggingface
 
@@ -120,6 +127,8 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: bert_service
     volumes:
       - hf_cache:/root/.cache/huggingface
 
@@ -143,8 +152,9 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
-      # Trainer runs as its own container — reload via Redis pub/sub
       TRAINER_EXTERNAL: "true"
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: central_responder_service
     volumes:
       - ./central_responder_service/models:/app/models
       - hf_cache:/root/.cache/huggingface
@@ -169,13 +179,16 @@ services:
       REDIS_PORT: 6379
       RETRAIN_INTERVAL_SECONDS: ${RETRAIN_INTERVAL_SECONDS:-1800}
       ACCURACY_GATE: ${ACCURACY_GATE:-0.40}
-      MAX_SAMPLES: ${MAX_SAMPLES:-2500}
+      MAX_EMPATHETIC_SAMPLES: ${MAX_EMPATHETIC_SAMPLES:-25000}
+      MIN_DB_SAMPLES: ${MIN_DB_SAMPLES:-50}
       MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
       DB_HOST: db
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-emotion_db}
-      HF_DATASETS_OFFLINE: "0"
+      HF_DATASETS_OFFLINE: "1"
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: trainer_service
     volumes:
       - ./central_responder_service/models:/app/models
       - ./conversation_state_learner/training_data:/app/training_data:ro
@@ -197,6 +210,8 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       LLM_PROVIDER: ${LLM_PROVIDER:-RULE_BASED}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: llm_reasoning_service
 
   aggregation_service:
     build:
@@ -214,6 +229,8 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       CONVERSATION_IDLE_MINUTES: ${CONVERSATION_IDLE_MINUTES:-30}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: aggregation_service
 
   persistence_service:
     build:
@@ -233,8 +250,10 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       DB_HOST: db
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: persistence_service
     volumes:
-      - ./central_responder_service/models:/app/models:ro # Read-only access to readiness marker
+      - ./central_responder_service/models:/app/models:ro
 
   api_service:
     build:
@@ -264,7 +283,6 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
-      # DB credentials (used by asyncpg in analytics/messages endpoints)
       DB_HOST: db
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
@@ -272,6 +290,8 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: api_service
     volumes:
       - ./central_responder_service/models:/app/models:ro
 
@@ -304,9 +324,13 @@ services:
       context: .
       dockerfile: context_engine_service/Dockerfile
     environment:
-      - REDIS_HOST=redis
-      - QDRANT_HOST=qdrant
-      - TRAIN_HMM_ON_STARTUP=true
+      REDIS_HOST: redis
+      QDRANT_HOST: qdrant
+      TRAIN_HMM_ON_STARTUP: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: context_engine_service
     depends_on:
       redis:
         condition: service_healthy
