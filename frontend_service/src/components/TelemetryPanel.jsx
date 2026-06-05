@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { EmotionPalette } from './EmotionPalette';
 import CDMStateGraph from './CDMStateGraph';
+import PixelFace from './PixelFace';
 
 // Pipeline stage definitions — ordered by execution sequence
 const STAGES = [
@@ -72,6 +73,11 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
         <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 3 }}>
           4-model multimodal NLP + CDM context
         </div>
+      </div>
+
+      {/* ── Pixel face ── */}
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14, paddingTop: 4 }}>
+        <PixelFace emotion={domEmo || 'neutral'} scale={5} showLabel={true} />
       </div>
 
       {/* ── Tabs ── */}
