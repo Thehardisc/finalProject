@@ -175,8 +175,10 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-emotion_db}
+      HF_DATASETS_OFFLINE: "0"
     volumes:
       - ./central_responder_service/models:/app/models
+      - ./conversation_state_learner/training_data:/app/training_data:ro
       - hf_cache:/root/.cache/huggingface
 
   llm_reasoning_service:
@@ -211,6 +213,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      CONVERSATION_IDLE_MINUTES: ${CONVERSATION_IDLE_MINUTES:-30}
 
   persistence_service:
     build:
@@ -311,6 +314,8 @@ services:
         condition: service_healthy
     networks:
       - emotion_net
+    volumes:
+      - ./central_responder_service/models:/app/models
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8008/health || exit 1"]
       interval: 10s

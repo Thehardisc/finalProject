@@ -321,11 +321,32 @@ async def _handle_model_ready(message_id, data):
             await manager.broadcast_to_user(uid, payload)
 
 
+async def _handle_conversation_idle(data: dict) -> None:
+    """Triggered when a conversation has been idle for CONVERSATION_IDLE_MINUTES."""
+    from api_service.routes.conversations import _run_analysis
+    cid = data.get("conversation_id", "")
+    if not cid:
+        return
+    try:
+        await _run_analysis(cid, redis_client.redis)
+        logger.info(
+            "idle_analysis_done",
+            extra={"event": "idle_analysis_done", "conversation_id": cid},
+        )
+    except Exception as e:
+        logger.warning(f"Idle analysis failed for {cid}: {e}")
+
+
 async def redis_listener():
     """Listen to Redis streams and push updates to connected WebSocket clients."""
     logger.info("Starting Redis Listener for WebSockets...")
     r = redis_client.redis
-    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream", "partial_result_stream"]
+    STREAM_KEYS = [
+        "conversation_update_stream",
+        "reasoning_update_stream",
+        "partial_result_stream",
+        "conversation_idle_stream",
+    ]
     last_ids = {k: "$" for k in STREAM_KEYS}
 
     while True:
@@ -343,6 +364,10 @@ async def redis_listener():
                             await _handle_reasoning_update(message_id, data)
                         elif stream_name == "partial_result_stream":
                             await _handle_model_ready(message_id, data)
+                        elif stream_name == "conversation_idle_stream":
+                            asyncio.create_task(
+                                _handle_conversation_idle(data)
+                            )
         except Exception as e:
             logger.log_exception("WebSocket Redis Listener Error", e)
             await asyncio.sleep(1)
