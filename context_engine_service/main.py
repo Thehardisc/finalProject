@@ -699,6 +699,9 @@ async def _dlq_drainer():
                         )
                         await context_engine.redis.xack(dlq_name, group_name, msg_id)
         except Exception as e:
+            if "Timeout" in str(e) or "timeout" in str(e):
+                # xreadgroup block expired with no messages — expected when DLQ is empty.
+                continue
             logger.warning(f"DLQ drainer loop error: {e}")
             await asyncio.sleep(5)
 
