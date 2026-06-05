@@ -16,7 +16,8 @@ API_KEY=$(grep "^INTERNAL_API_KEY=" .env | cut -d'=' -f2 | tr -d '"'\'' ')
 API_KEY=${API_KEY:-dev-secret-key}
 
 # Load and display all config from .env so operators can verify before launch
-MAX_SAMPLES_VAL=$(grep '^MAX_SAMPLES=' .env 2>/dev/null | cut -d'=' -f2)
+MAX_EMPATHETIC_SAMPLES_VAL=$(grep '^MAX_EMPATHETIC_SAMPLES=' .env 2>/dev/null | cut -d'=' -f2)
+MIN_DB_SAMPLES_VAL=$(grep '^MIN_DB_SAMPLES=' .env 2>/dev/null | cut -d'=' -f2)
 RETRAIN_INTERVAL_VAL=$(grep '^RETRAIN_INTERVAL_SECONDS=' .env 2>/dev/null | cut -d'=' -f2)
 ACCURACY_GATE_VAL=$(grep '^ACCURACY_GATE=' .env 2>/dev/null | cut -d'=' -f2)
 LLM_PROVIDER_VAL=$(grep '^LLM_PROVIDER=' .env 2>/dev/null | cut -d'=' -f2)
@@ -26,7 +27,8 @@ RATE_LIMIT_MAX_VAL=$(grep '^RATE_LIMIT_MAX=' .env 2>/dev/null | cut -d'=' -f2)
 echo "[Config] Resolved environment from .env:"
 echo "──────────────────────────────────────────────────────────"
 echo "   LOG_LEVEL               = ${LOG_LEVEL_VAL:-INFO}"
-echo "   MAX_SAMPLES             = ${MAX_SAMPLES_VAL:-2500}  (GoEmotions dataset size per run)"
+echo "   MAX_EMPATHETIC_SAMPLES  = ${MAX_EMPATHETIC_SAMPLES_VAL:-25000}  (bootstrap dataset cap — runs once)"
+echo "   MIN_DB_SAMPLES          = ${MIN_DB_SAMPLES_VAL:-50}  (min DB rows to trigger a continuous cycle)"
 echo "   RETRAIN_INTERVAL_SECS   = ${RETRAIN_INTERVAL_VAL:-1800}s"
 echo "   ACCURACY_GATE           = ${ACCURACY_GATE_VAL:-0.40}  (min test accuracy to deploy model)"
 echo "   LLM_PROVIDER            = ${LLM_PROVIDER_VAL:-RULE_BASED}"
@@ -36,7 +38,7 @@ echo "────────────────────────�
 echo ""
 
 # Feature-vector parity is the #1 invariant (CLAUDE.md): the inference builder and
-# the training builder must produce identical 103-dim vectors. Catch drift here —
+# the training builder must produce identical 68-dim vectors. Catch drift here —
 # before spending minutes on a build — but degrade gracefully if the host lacks the
 # Python test deps (the test only needs numpy + pytest, no ML runtime).
 echo "[Invariant] Checking feature-vector parity (inference vs trainer)..."
@@ -97,7 +99,8 @@ INIT_LOG="${LOGDIR}/init.log"
     echo "[Config] Resolved environment from .env:"
     echo "──────────────────────────────────────────────────────────"
     echo "   LOG_LEVEL               = ${LOG_LEVEL_VAL:-INFO}"
-    echo "   MAX_SAMPLES             = ${MAX_SAMPLES_VAL:-2500}"
+    echo "   MAX_EMPATHETIC_SAMPLES  = ${MAX_EMPATHETIC_SAMPLES_VAL:-25000}"
+    echo "   MIN_DB_SAMPLES          = ${MIN_DB_SAMPLES_VAL:-50}"
     echo "   RETRAIN_INTERVAL_SECS   = ${RETRAIN_INTERVAL_VAL:-1800}s"
     echo "   ACCURACY_GATE           = ${ACCURACY_GATE_VAL:-0.40}"
     echo "   LLM_PROVIDER            = ${LLM_PROVIDER_VAL:-RULE_BASED}"
