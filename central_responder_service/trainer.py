@@ -569,8 +569,14 @@ def extract_empathetic_dialogues_features(
 
     rows = list(emp)[:cap]
 
-    total = len(rows)
-    logger.info(f"  [EmpDialogues] Building {split} features from {total} situations...")
+    total    = len(rows)
+    mapped   = sum(1 for r in rows if _EMPATHETIC_TO_GOEMOTION.get(str(r.get('emotion', '')).lower()) is not None)
+    skipped  = total - mapped
+    logger.info(
+        f"  [EmpDialogues] {split}: {total} rows loaded, "
+        f"{mapped} mapped ({skipped} skipped — unmapped emotions: "
+        f"prepared/content/ashamed)"
+    )
     t0 = time.time()
 
     features, labels, gs_list = [], [], []
@@ -580,9 +586,8 @@ def extract_empathetic_dialogues_features(
             rate     = i / elapsed
             eta_s    = int((total - i) / rate) if rate > 0 else 0
             logger.info(
-                f"  [EmpDialogues] {split} {i}/{total} "
-                f"({i * 100 // total}%)  "
-                f"{rate:.1f} samples/s  ETA {eta_s}s"
+                f"  [EmpDialogues] {split} {i}/{total} rows "
+                f"({len(features)} kept so far, {rate:.1f} rows/s, ETA {eta_s}s)"
             )
 
         text        = str(row.get('situation', '')).strip()
