@@ -56,9 +56,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import accuracy_score, f1_score
+from sklearn.metrics import accuracy_score, f1_score, classification_report
 
-from shared.constants import EMOTION_LABELS, VADER_KEYS, BERT_LABELS, FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, ML_DIM, N_CDM_STATES
+from shared.constants import (
+    EMOTION_LABELS, VADER_KEYS, BERT_LABELS,
+    FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, ML_DIM, N_CDM_STATES,
+    CTX_CDM_PROBS, CTX_RESIDENCY, CTX_TRANSITION, CTX_ABRUPTNESS,
+    CTX_COHERENCE, CTX_ENTROPY, CTX_SPK_DIVERGENCE,
+    CTX_VELOCITY, CTX_ACCELERATION,
+    CTX_HIST_POS, CTX_HIST_NEU, CTX_HIST_NEG,
+    CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
+    CTX_MSG_LENGTH, CTX_LATENCY_MS,
+    CTX_HMM_CONF, CTX_HMM_ENTROPY, CTX_HMM_EMISSION, CTX_HMM_NEXT3,
+    CTX_INTENT_STAB,
+)
 from meta_learner import build_feature_vector, GatingEnsembleNet, GatingNetworkWrapper, D_MODEL, DROPOUT
 
 # ── Label → likely CDM intent state (primary, secondary, tertiary) ───────────────
@@ -398,6 +409,17 @@ def train_gating_network(
     )
     criterion = nn.CrossEntropyLoss(weight=cw_tensor, label_smoothing=0.10)
 
+    # ── NLP anchor: GoEmotions index → class_to_idx mapping ─────────────────
+    # EMOTION_LABELS order ≠ class_to_idx order (classes may be a sorted subset).
+    # Precompute a lookup so the anchor loss can convert goe_argmax → model class idx.
+    goe_to_class_idx = torch.tensor(
+        [class_to_idx.get(lbl, -1) for lbl in EMOTION_LABELS],
+        dtype=torch.long, device=device,
+    )  # [28]  — -1 for labels absent from training classes
+
+    nlp_anchor_coeff  = 0.30   # weight of NLP anchor vs main CE loss
+    nlp_anchor_thresh = 0.75   # GoEmotions confidence threshold to apply anchor
+
     uniform_gate  = torch.ones(4, device=device) / 4.0
     X_v_t         = torch.tensor(X_v_s, dtype=torch.float32, device=device)
     best_f1       = -1.0
@@ -418,9 +440,22 @@ def train_gating_network(
 
             # Load-balance: penalise deviation of mean gate weights from uniform.
             # Prevents GoEmotions from monopolising α without context signal.
-            alpha_mean   = alpha.mean(dim=0)                         # [3]
+            alpha_mean   = alpha.mean(dim=0)                         # [4]
             balance_loss = ((alpha_mean - uniform_gate) ** 2).sum()
-            loss         = ce_loss + load_balance_coeff * balance_loss
+
+            # NLP anchor: when GoEmotions is highly confident, steer logits toward
+            # its top prediction. Teaches the model to trust NLP on clear-cut cases
+            # rather than letting context override a 90%+ signal.
+            goe_raw            = xb[:, 11:ML_DIM]                            # [B, 28]
+            goe_conf, goe_ridx = goe_raw.max(dim=1)                          # [B]
+            goe_cidx           = goe_to_class_idx[goe_ridx]                  # [B] class indices
+            anchor_mask        = (goe_conf > nlp_anchor_thresh) & (goe_cidx >= 0)
+            anchor_loss = (
+                F.cross_entropy(logits[anchor_mask], goe_cidx[anchor_mask])
+                if anchor_mask.any() else torch.tensor(0.0, device=device)
+            )
+
+            loss = ce_loss + load_balance_coeff * balance_loss + nlp_anchor_coeff * anchor_loss
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -656,18 +691,18 @@ def _generate_synthetic_sentences() -> dict:
 
     for label, target in _SYNTHETIC_COUNTS.items():
         sentences: list = []
-        n_batches = -(-target // _BATCH_SIZE)  # ceil division
+        n_batches_est = -(-target // _BATCH_SIZE)  # estimate assuming full yield per call
         logger.info(
             f"  [Synthetic] '{label}': target={target} sentences "
-            f"({n_batches} batch{'es' if n_batches > 1 else ''} of ≤{_BATCH_SIZE})"
+            f"(~{n_batches_est} batches of ≤{_BATCH_SIZE}, may need more if API returns fewer)"
         )
         batch_num = 0
         while len(sentences) < target:
             batch_num += 1
             needed = min(_BATCH_SIZE, target - len(sentences))
             logger.info(
-                f"  [Synthetic]   batch {batch_num}/{n_batches} for '{label}' "
-                f"— requesting {needed} sentences..."
+                f"  [Synthetic]   batch {batch_num} for '{label}' "
+                f"— requesting {needed}, have {len(sentences)}/{target} so far..."
             )
             prompt = (
                 f"Generate {needed} diverse first-person situational sentences "
@@ -685,7 +720,7 @@ def _generate_synthetic_sentences() -> dict:
             batch = [l.strip() for l in msg.content[0].text.splitlines() if l.strip()]
             sentences.extend(batch)
             logger.info(
-                f"  [Synthetic]   batch {batch_num}/{n_batches} done — "
+                f"  [Synthetic]   batch {batch_num} done — "
                 f"got {len(batch)}, total so far: {len(sentences)}/{target}"
             )
         result[label] = sentences[:target]
@@ -697,14 +732,142 @@ def _generate_synthetic_sentences() -> dict:
     return result
 
 
+_GOE_DIRECT_PER_CLASS   = 200    # samples per class from GoEmotions val+test
+_GOE_DIRECT_CACHE_ID    = "goemotions_direct_v1"
+
+
+def extract_goemotions_direct_features(
+    vader_analyzer, bert_analyzer, goe_analyzer,
+) -> tuple:
+    """
+    Load GoEmotions val+test samples and build NLP-aligned training features.
+
+    Unlike EmpatheticDialogues (where label = conversation topic), these samples
+    have gold labels that *match* what the GoEmotions model outputs. Training on
+    them teaches the meta-learner to trust NLP signals when they are confident.
+
+    Uses val+test splits (not train) so the GoEmotions model's output is realistic
+    rather than over-fitted.  Target: _GOE_DIRECT_PER_CLASS samples per class,
+    balanced across all 28 labels.
+
+    Results are cached in MODEL_PATH.parent/goemotions_direct_cache.pkl.
+    """
+    import hashlib
+
+    cache_path = MODEL_PATH.parent / "goemotions_direct_cache.pkl"
+    cache_key  = f"{_GOE_DIRECT_CACHE_ID}_{_GOE_DIRECT_PER_CLASS}_{FEATURE_DIM}"
+    empty      = np.empty((0, FEATURE_DIM), dtype=np.float32)
+
+    if cache_path.exists():
+        try:
+            with open(cache_path, "rb") as f:
+                cached = pickle.load(f)
+            if cached.get("cache_key") == cache_key:
+                X, y, gs = cached["data"]
+                logger.info(
+                    f"[GoEDirect] Feature cache hit — loaded {len(y)} NLP-aligned samples."
+                )
+                return np.array(X, dtype=np.float32) if X else empty, y, gs
+            logger.info("[GoEDirect] Cache stale — recomputing.")
+        except Exception as e:
+            logger.warning(f"[GoEDirect] Cache load failed: {e} — recomputing.")
+
+    logger.info(
+        f"[GoEDirect] Loading GoEmotions val+test (≤{_GOE_DIRECT_PER_CLASS}/class × 28 classes)..."
+    )
+    try:
+        from datasets import load_dataset
+        ds_val  = load_dataset("google-research-datasets/go_emotions", "simplified",
+                               split="validation")
+        ds_test = load_dataset("google-research-datasets/go_emotions", "simplified",
+                               split="test")
+    except Exception as e:
+        logger.warning(f"[GoEDirect] Could not load GoEmotions dataset: {e} — skipping.")
+        return empty, [], []
+
+    # Dataset label names (28 GoEmotions classes, may differ in order from EMOTION_LABELS)
+    id2label = ds_val.features["labels"].feature.int2str
+
+    # Collect balanced samples per class
+    per_class: dict = {lbl: [] for lbl in EMOTION_LABELS}
+    for row in list(ds_val) + list(ds_test):
+        if len(row["labels"]) != 1:
+            continue   # skip multi-label rows
+        label_str = id2label(row["labels"][0])
+        if label_str in per_class and len(per_class[label_str]) < _GOE_DIRECT_PER_CLASS:
+            per_class[label_str].append(row["text"])
+
+    counts = {k: len(v) for k, v in per_class.items() if v}
+    total  = sum(counts.values())
+    logger.info(f"[GoEDirect] Collected {total} samples across {len(counts)} classes: {counts}")
+
+    if total == 0:
+        return empty, [], []
+
+    # Build flat (text, label) pairs
+    pairs = [(text, lbl) for lbl, texts in per_class.items() for text in texts]
+
+    # Batched NLP inference
+    all_texts = [t for t, _ in pairs]
+    logger.info(f"[GoEDirect] Running batched NLP on {len(all_texts)} texts...")
+    t0 = time.time()
+
+    vader_outs = []
+    for text in all_texts:
+        try:
+            vader_outs.append(vader_analyzer(text) if callable(vader_analyzer) else {})
+        except Exception:
+            vader_outs.append({})
+
+    bert_outs = _run_batch(bert_analyzer, all_texts) if callable(bert_analyzer) else [{} for _ in all_texts]
+    goe_outs  = _run_batch(goe_analyzer,  all_texts) if callable(goe_analyzer)  else [{} for _ in all_texts]
+
+    elapsed = time.time() - t0
+    logger.info(
+        f"[GoEDirect] NLP done — {len(all_texts)} texts in {elapsed:.0f}s "
+        f"({len(all_texts)/elapsed:.1f} samples/s)"
+    )
+
+    # Build feature vectors (no CDM context — zero by default)
+    features, labels, gs_list = [], [], []
+    for (_, lbl), vader_out, bert_out, goe_out in zip(pairs, vader_outs, bert_outs, goe_outs):
+        fv = build_feature_vector(
+            {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
+        )
+        features.append(fv.flatten())
+        labels.append(lbl)
+        gs_list.append(goe_out)
+
+    logger.info(f"[GoEDirect] Built {len(features)} NLP-aligned feature vectors.")
+
+    # Cache
+    try:
+        with open(cache_path, "wb") as f:
+            pickle.dump({"cache_key": cache_key, "data": (features, labels, gs_list)}, f)
+        logger.info(f"[GoEDirect] Cache saved → {cache_path}")
+    except Exception as e:
+        logger.warning(f"[GoEDirect] Could not save cache: {e}")
+
+    return np.array(features, dtype=np.float32) if features else empty, labels, gs_list
+
+
 def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer) -> tuple:
     """
     Load (or auto-generate) synthetic sentences for the 5 missing GoEmotions classes
     and process them through the same NLP pipeline as EmpatheticDialogues.
-    Stored in MODEL_PATH.parent/synthetic_sentences.json (bind-mounted, persists rebuilds).
-    """
-    json_path = MODEL_PATH.parent / "synthetic_sentences.json"
 
+    Sentences are stored in MODEL_PATH.parent/synthetic_sentences.json (bind-mounted,
+    persists container rebuilds). Computed features are cached in
+    synthetic_features_cache.pkl keyed by the JSON file's MD5 hash — NLP only runs
+    once per unique JSON file.
+    """
+    import hashlib
+
+    json_path   = MODEL_PATH.parent / "synthetic_sentences.json"
+    cache_path  = MODEL_PATH.parent / "synthetic_features_cache.pkl"
+    empty       = np.empty((0, FEATURE_DIM), dtype=np.float32)
+
+    # ── 1. Obtain JSON (generate if missing) ────────────────────────────────────
     if not json_path.exists() or json_path.stat().st_size == 0:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         if not api_key:
@@ -713,7 +876,7 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer) -> tupl
                 "Add ANTHROPIC_API_KEY to .env and rebuild to cover: "
                 f"{_SYNTHETIC_CLASSES}. Training will proceed with 23/28 classes."
             )
-            return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+            return empty, [], []
 
         total_needed = sum(_SYNTHETIC_COUNTS.values())
         logger.info(
@@ -728,58 +891,107 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer) -> tupl
             logger.info(f"[Synthetic] Saved {saved} sentences → {json_path}")
         except Exception as e:
             logger.warning(f"[Synthetic] Generation failed: {e} — training with 23/28 classes.")
-            return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+            return empty, [], []
     else:
         with open(json_path) as f:
             data = json.load(f)
         loaded = {k: len(v) for k, v in data.items()}
         logger.info(f"[Synthetic] Loaded existing synthetic_sentences.json: {loaded}")
 
-    features, labels, gs_list = [], [], []
-    total_sentences = sum(len(v) for v in data.values() if isinstance(v, list))
-    processed       = 0
-    t0_syn          = time.time()
+    # ── 2. Compute syn_hash to check feature cache ──────────────────────────────
+    syn_hash = hashlib.md5(json_path.read_bytes()).hexdigest()[:12]
 
+    if cache_path.exists():
+        try:
+            with open(cache_path, "rb") as f:
+                cached = pickle.load(f)
+            if cached.get("syn_hash") == syn_hash and cached.get("feature_dim") == FEATURE_DIM:
+                X_syn, y_syn, gs_syn = cached["data"]
+                logger.info(
+                    f"[Synthetic] Feature cache hit (hash={syn_hash}) — "
+                    f"loaded {len(y_syn)} pre-computed feature vectors. Skipping NLP."
+                )
+                return (
+                    np.array(X_syn, dtype=np.float32) if X_syn else empty,
+                    y_syn,
+                    gs_syn,
+                )
+            else:
+                logger.info("[Synthetic] Feature cache stale (hash or dim mismatch) — recomputing.")
+        except Exception as e:
+            logger.warning(f"[Synthetic] Cache load failed: {e} — recomputing.")
+
+    # ── 3. Batch NLP processing ─────────────────────────────────────────────────
+    # Collect all (label, text) pairs; keep only valid GoEmotions labels
+    ordered_pairs: list = []  # (goemo_label, text)
     for goemo_label, sentences in data.items():
         if goemo_label not in EMOTION_LABELS:
             logger.warning(f"[Synthetic] Unknown label '{goemo_label}' in JSON — skipping.")
             continue
-        class_start = len(features)
         for text in sentences:
-            try:
-                vader_out = vader_analyzer(text) if callable(vader_analyzer) else {}
-                bert_out  = bert_analyzer(text)  if callable(bert_analyzer)  else {}
-                goe_out   = goe_analyzer(text)   if callable(goe_analyzer)   else {}
-            except Exception:
-                continue
-            ctx = build_synthetic_context_vector(label=goemo_label, mode="train")
-            fv  = build_feature_vector(
-                {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
-                context_vector=ctx[:CDM_CTX_DIM],
-                trajectory_prior=ctx[CDM_CTX_DIM:],
-            )
-            features.append(fv.flatten())
-            labels.append(goemo_label)
-            gs_list.append(goe_out)
-            processed += 1
-            if processed % 250 == 0:
-                elapsed = time.time() - t0_syn
-                rate    = processed / elapsed if elapsed > 0 else 0
-                logger.info(
-                    f"  [Synthetic] NLP processing: {processed} done "
-                    f"({rate:.1f} samples/s)..."
-                )
-        class_ok = len(features) - class_start
-        logger.info(
-            f"  [Synthetic] '{goemo_label}': {class_ok}/{len(sentences)} sentences → features"
-        )
+            if text:
+                ordered_pairs.append((goemo_label, text))
 
-    elapsed_syn = time.time() - t0_syn
+    total_sentences = len(ordered_pairs)
     logger.info(
-        f"[Synthetic] NLP complete — {len(features)} feature vectors in {elapsed_syn:.0f}s "
-        f"({len(features)/elapsed_syn:.1f} samples/s)"
+        f"[Synthetic] Running batched NLP on {total_sentences} sentences "
+        f"(batch_size=32, 3 models)..."
     )
-    empty = np.empty((0, FEATURE_DIM), dtype=np.float32)
+    t0 = time.time()
+
+    all_texts = [t for _, t in ordered_pairs]
+
+    # VADER is pure regex — fast even per-sentence, but we keep it consistent
+    vader_results = []
+    for text in all_texts:
+        try:
+            vader_results.append(vader_analyzer(text) if callable(vader_analyzer) else {})
+        except Exception:
+            vader_results.append({})
+
+    # BERT and GoEmotions: batched
+    bert_results = _run_batch(bert_analyzer, all_texts) if callable(bert_analyzer) else [{} for _ in all_texts]
+    goe_results  = _run_batch(goe_analyzer,  all_texts) if callable(goe_analyzer)  else [{} for _ in all_texts]
+
+    elapsed_nlp = time.time() - t0
+    rate = total_sentences / elapsed_nlp if elapsed_nlp > 0 else 0
+    logger.info(
+        f"[Synthetic] Batched NLP done — {total_sentences} sentences in {elapsed_nlp:.0f}s "
+        f"({rate:.1f} samples/s)"
+    )
+
+    # ── 4. Build feature vectors ─────────────────────────────────────────────────
+    features, labels, gs_list = [], [], []
+    class_counts: dict = {}
+    for (goemo_label, _text), vader_out, bert_out, goe_out in zip(
+        ordered_pairs, vader_results, bert_results, goe_results
+    ):
+        ctx = build_synthetic_context_vector(label=goemo_label, mode="train")
+        fv  = build_feature_vector(
+            {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
+            context_vector=ctx[:CDM_CTX_DIM],
+            trajectory_prior=ctx[CDM_CTX_DIM:],
+        )
+        features.append(fv.flatten())
+        labels.append(goemo_label)
+        gs_list.append(goe_out)
+        class_counts[goemo_label] = class_counts.get(goemo_label, 0) + 1
+
+    for lbl, cnt in class_counts.items():
+        logger.info(f"  [Synthetic] '{lbl}': {cnt} feature vectors built")
+
+    # ── 5. Save feature cache ────────────────────────────────────────────────────
+    try:
+        with open(cache_path, "wb") as f:
+            pickle.dump({
+                "syn_hash":    syn_hash,
+                "feature_dim": FEATURE_DIM,
+                "data":        (features, labels, gs_list),
+            }, f)
+        logger.info(f"[Synthetic] Feature cache saved → {cache_path} (hash={syn_hash})")
+    except Exception as e:
+        logger.warning(f"[Synthetic] Could not save feature cache: {e}")
+
     return (
         np.array(features, dtype=np.float32) if features else empty,
         labels,
@@ -876,6 +1088,32 @@ def load_relabeled_conversations() -> tuple:
 
 # ── MELD conversation-context training data ────────────────────────────────────
 
+def _download_meld_raw(out_path: Path, max_rows: int = 3000) -> None:
+    """Download MELD and save only (dialogue_id, utterance_id, text, emotion, speaker)
+    to a compact JSON. Called BEFORE NLP models are loaded so HuggingFace dataset and
+    BERT/GoEmotions don't share RAM simultaneously."""
+    try:
+        from datasets import load_dataset
+        slice_size = min(max_rows * 2, 4000)
+        logger.info(f"[MELD] Pre-downloading raw data (train[:{slice_size}]) — no NLP models in memory yet...")
+        ds = load_dataset("declare-lab/MELD", split=f"train[:{slice_size}]")
+        rows = []
+        for row in ds:
+            rows.append({
+                "d": str(row.get("Dialogue_ID", "")),
+                "u": int(row.get("Utterance_ID", 0)),
+                "t": str(row.get("Utterance", "")).strip(),
+                "e": str(row.get("Emotion",   "neutral")).lower(),
+                "s": str(row.get("Speaker",   "")).strip(),
+            })
+        del ds
+        gc.collect()
+        with open(out_path, "w") as f:
+            json.dump(rows, f)
+        logger.info(f"[MELD] Raw cache saved → {out_path} ({len(rows)} rows)")
+    except Exception as e:
+        logger.warning(f"[MELD] Pre-download failed: {e} — MELD will be skipped.")
+
 # MELD 7 labels → GoEmotions 28 (direct matches)
 _MELD_TO_GOEMOTION: dict = {
     "anger":    "anger",
@@ -898,71 +1136,273 @@ _MELD_VALENCE: dict = {
 }
 
 
+def _meld_build_cdm(
+    history: list,          # list of dicts: {valence, intent_state, speaker, goe_dist}
+    current_valence: float,
+    current_intent: int,
+    current_speaker: str,
+    current_text: str,
+) -> np.ndarray:
+    """
+    Build a real 40-dim CDM context vector from MELD conversation history.
+    Uses the same slot layout as context_engine_service so the meta-learner
+    trains on vectors that look like real inference-time CDM output.
+    """
+    ctx = np.zeros(CDM_CTX_DIM, dtype=np.float32)
+    n   = len(history)
+
+    # ── CDM intent one-hot [0:15] ──────────────────────────────────────────
+    ctx[current_intent] = 1.0
+
+    # ── state_residency [15] — how long in this state ─────────────────────
+    streak = 1
+    for h in reversed(history):
+        if h["intent_state"] == current_intent:
+            streak += 1
+        else:
+            break
+    ctx[CTX_RESIDENCY] = min(streak / max(n + 1, 1), 1.0)
+
+    # ── transition_path [16:19] — last 3 intent indices / N_CDM_STATES ────
+    recent = [h["intent_state"] for h in history[-3:]]
+    for i, s in enumerate(recent):
+        ctx[CTX_TRANSITION.start + i] = s / N_CDM_STATES
+
+    # ── entry_abruptness [19] — sudden valence jump ────────────────────────
+    prev_val = history[-1]["valence"] if history else 0.0
+    ctx[CTX_ABRUPTNESS] = min(abs(current_valence - prev_val), 1.0)
+
+    # ── topic_coherence [20] — stable intent = high coherence ─────────────
+    if n > 0:
+        same = sum(1 for h in history[-5:] if h["intent_state"] == current_intent)
+        ctx[CTX_COHERENCE] = same / min(n, 5)
+    else:
+        ctx[CTX_COHERENCE] = 0.5
+
+    # ── emotion_entropy [21] — diversity of previous labels ───────────────
+    if n > 0:
+        from collections import Counter
+        ec     = Counter(h["intent_state"] for h in history[-5:])
+        total  = sum(ec.values())
+        probs  = [c / total for c in ec.values()]
+        ent    = -sum(p * np.log(p + 1e-9) for p in probs)
+        ctx[CTX_ENTROPY] = float(np.clip(ent / np.log(N_CDM_STATES), 0.0, 1.0))
+
+    # ── speaker_divergence [22] ────────────────────────────────────────────
+    if history:
+        ctx[CTX_SPK_DIVERGENCE] = float(history[-1]["speaker"] != current_speaker)
+
+    # ── velocity [23] and acceleration [24] ───────────────────────────────
+    velocity = current_valence - prev_val
+    ctx[CTX_VELOCITY] = float(np.clip(velocity, -1.0, 1.0))
+    if len(history) >= 2:
+        prev_velocity = history[-1]["valence"] - history[-2]["valence"]
+        ctx[CTX_ACCELERATION] = float(np.clip(velocity - prev_velocity, -1.0, 1.0))
+
+    # ── valence history [25:28] ────────────────────────────────────────────
+    all_vals = [h["valence"] for h in history] + [current_valence]
+    ctx[CTX_HIST_POS] = float(np.mean([v > 0.2  for v in all_vals]))
+    ctx[CTX_HIST_NEU] = float(np.mean([abs(v) <= 0.2 for v in all_vals]))
+    ctx[CTX_HIST_NEG] = float(np.mean([v < -0.2 for v in all_vals]))
+
+    # ── topic_resonance [28] — reuse coherence as proxy ───────────────────
+    ctx[CTX_RESONANCE] = ctx[CTX_COHERENCE]
+
+    # ── volatility [29] — std of valence trajectory ────────────────────────
+    if len(all_vals) > 1:
+        ctx[CTX_VOLATILITY] = float(np.clip(np.std(all_vals), 0.0, 1.0))
+
+    # ── current_valence [30] ───────────────────────────────────────────────
+    ctx[CTX_CURR_VALENCE] = float(np.clip(current_valence, -1.0, 1.0))
+
+    # ── message_length [31] (raw chars — normalized by build_feature_vector)
+    ctx[CTX_MSG_LENGTH] = float(len(current_text))
+
+    # ── latency_ms [32] — 0 (not available in MELD) ───────────────────────
+    ctx[CTX_LATENCY_MS] = 0.0
+
+    # ── HMM slots [33:39] — moderate confidence since we have real context ─
+    # No live HMM in training; use mid-range values so ctx_weight is meaningful
+    ctx[CTX_HMM_CONF]    = 0.65
+    ctx[CTX_HMM_ENTROPY] = 0.40
+    ctx[CTX_HMM_EMISSION] = -1.0
+    ctx[CTX_HMM_NEXT3.start]     = 0.50
+    ctx[CTX_HMM_NEXT3.start + 1] = 0.30
+    ctx[CTX_HMM_NEXT3.start + 2] = 0.20
+
+    # ── intent_stability [39] — same as residency ─────────────────────────
+    ctx[CTX_INTENT_STAB] = ctx[CTX_RESIDENCY]
+
+    return ctx
+
+
 def extract_meld_features(
     vader_analyzer,
     bert_analyzer,
     goe_analyzer,
-    max_utterances: int = 5000,
+    max_utterances: int = 1500,
 ) -> tuple:
     """
-    Build (X [N, FEATURE_DIM], y [N]) from MELD for meta-learner training.
+    Build (X, y, has_cdm) from MELD with REAL conversation context.
 
-    MELD has 13,708 utterances from Friends TV across 7 emotion classes that
-    map directly to GoEmotions labels.  CDM context is synthetic (same noise
-    as GoEmotions training samples) since there is no live pipeline data.
+    Unlike EmpatheticDialogues (topic-level label) or GoEmotions (single sentence),
+    MELD provides multi-turn conversations where each utterance's CDM vector is
+    built from the actual preceding messages in the same dialogue.
+
+    This teaches the meta-learner:
+      - "Previous messages were angry → current ambiguous message = probably anger"
+      - "Context is neutral → trust NLP signal directly"
+      - When context genuinely changes the answer vs when NLP is sufficient
+
+    has_cdm = True for all MELD samples with at least 1 prior utterance,
+    so the CDM block is NOT zeroed during training — the context path gets
+    real gradient signal for the first time.
     """
-    try:
-        from datasets import load_dataset
-        meld = load_dataset("declare-lab/MELD")
-    except Exception as e:
-        logger.warning(f"MELD load failed: {e} — skipping.")
-        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
+    cache_path = MODEL_PATH.parent / "meld_features_cache.pkl"
+    cache_key  = f"meld_ctx_v1_{max_utterances}_{FEATURE_DIM}"
+    empty      = np.empty((0, FEATURE_DIM), dtype=np.float32)
 
-    features, labels = [], []
-    n_processed = 0
+    if cache_path.exists():
+        try:
+            with open(cache_path, "rb") as f:
+                cached = pickle.load(f)
+            if cached.get("cache_key") == cache_key:
+                X, y, has_cdm = cached["data"]
+                logger.info(f"[MELD] Cache hit — {len(y)} utterances with real context.")
+                return np.array(X, dtype=np.float32) if X else empty, y, has_cdm
+        except Exception as e:
+            logger.warning(f"[MELD] Cache load failed: {e} — recomputing.")
 
-    for split in ("train", "validation"):
-        if split not in meld:
+    # ── Pass 1: load raw MELD rows ────────────────────────────────────────────
+    # Raw rows are pre-downloaded by _download_meld_raw() before NLP models load.
+    # If the raw file exists, read from it. Otherwise attempt a live load (may OOM).
+    raw_json_path = MODEL_PATH.parent / "meld_raw_cache.json"
+    raw_rows = []   # (dialogue_id, utterance_id, text, emotion_label, speaker)
+    if raw_json_path.exists():
+        try:
+            with open(raw_json_path) as f:
+                data = json.load(f)
+            for r in data:
+                raw_rows.append((r["d"], r["u"], r["t"], r["e"], r["s"]))
+            logger.info(f"[MELD] Loaded {len(raw_rows)} rows from pre-downloaded raw cache.")
+        except Exception as e:
+            logger.warning(f"[MELD] Raw cache read failed: {e} — trying live load.")
+            raw_rows = []
+
+    if not raw_rows:
+        try:
+            from datasets import load_dataset
+            slice_size = min(max_utterances * 2, 3000)
+            meld_ds = load_dataset("declare-lab/MELD", split=f"train[:{slice_size}]")
+            for row in meld_ds:
+                raw_rows.append((
+                    str(row.get("Dialogue_ID", "")),
+                    int(row.get("Utterance_ID", 0)),
+                    str(row.get("Utterance",    "")).strip(),
+                    str(row.get("Emotion",      "neutral")).lower(),
+                    str(row.get("Speaker",      "")).strip(),
+                ))
+            del meld_ds
+            gc.collect()
+        except Exception as e:
+            logger.warning(f"[MELD] load failed: {e} — skipping.")
+            return empty, [], []
+
+    # Group and sort by dialogue
+    dialogues: dict = {}
+    for did, uid, text, emo, spk in raw_rows:
+        dialogues.setdefault(did, []).append((uid, text, emo, spk))
+    for did in dialogues:
+        dialogues[did].sort(key=lambda x: x[0])
+
+    # Flatten to ordered list
+    all_rows = []   # (dialogue_id, uid, text, emo, speaker)
+    for did, utt_list in dialogues.items():
+        for uid, text, emo, spk in utt_list:
+            all_rows.append((did, uid, text, emo, spk))
+    all_rows = all_rows[:max_utterances]
+    all_texts = [r[2] for r in all_rows]
+
+    logger.info(f"[MELD] {len(all_rows)} utterances across {len(dialogues)} dialogues. Running batched NLP...")
+    t0 = time.time()
+
+    vader_outs = []
+    for text in all_texts:
+        try:
+            vader_outs.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
+        except Exception:
+            vader_outs.append({})
+
+    bert_outs = _run_batch(bert_analyzer, all_texts) if callable(bert_analyzer) else [{} for _ in all_texts]
+    goe_outs  = _run_batch(goe_analyzer,  all_texts) if callable(goe_analyzer)  else [{} for _ in all_texts]
+
+    logger.info(f"[MELD] NLP done in {time.time()-t0:.0f}s. Building CDM vectors from conversation history...")
+
+    # ── Pass 2: build features with real context ───────────────────────────
+    # Accumulate conversation history as we process each dialogue in order
+    conv_history: dict = {}   # dialogue_id → list of history dicts
+
+    features, labels, has_cdm_list = [], [], []
+
+    for (did, uid, text, meld_label, speaker), vader_out, bert_out, goe_out in zip(
+        all_rows, vader_outs, bert_outs, goe_outs
+    ):
+        if not text:
             continue
-        for row in meld[split]:
-            if n_processed >= max_utterances:
-                break
-            text = str(row.get("Utterance", "")).strip()
-            if not text:
-                continue
 
-            goemo_label = _MELD_TO_GOEMOTION.get(
-                row.get("Emotion", "neutral").lower(), "neutral"
-            )
+        goemo_label = _MELD_TO_GOEMOTION.get(meld_label, "neutral")
+        valence     = _MELD_VALENCE.get(meld_label, 0.0)
+        intent_st   = _LABEL_TO_INTENT.get(goemo_label, (0, 0, 0))[0]
 
-            try:
-                vs  = {f"vader_{k}": v
-                       for k, v in _vader(vader_analyzer, text).items()}
-                bs  = _run(bert_analyzer, text)
-                gs  = _run(goe_analyzer,  text)
-            except Exception:
-                continue
+        history = conv_history.get(did, [])
 
-            # Synthetic context — same augmentation as GoEmotions training
-            ctx = build_synthetic_context_vector(label=goemo_label, mode="train")
-            fv  = build_feature_vector(
-                {"vader": vs, "basic_bert": bs, "go_emotions": gs},
-                context_vector=ctx[:CDM_CTX_DIM],
-                trajectory_prior=ctx[CDM_CTX_DIM:],
-            )
-            features.append(fv.flatten())
-            labels.append(goemo_label)
-            n_processed += 1
+        # First utterance in a conversation: no real context yet
+        if not history:
+            ctx        = np.zeros(CDM_CTX_DIM, dtype=np.float32)
+            ctx[intent_st] = 1.0
+            ctx[CTX_CURR_VALENCE] = valence
+            ctx[CTX_MSG_LENGTH]   = float(len(text))
+            ctx[CTX_HMM_CONF]     = 0.30   # low confidence — no history yet
+            prior      = [0.0] * PRIOR_DIM
+            real_ctx   = False
+        else:
+            ctx      = _meld_build_cdm(history, valence, intent_st, speaker, text)
+            prior    = history[-1]["goe_dist"]   # previous utterance's GoE distribution
+            real_ctx = True
 
-        if n_processed >= max_utterances:
-            break
+        fv = build_feature_vector(
+            {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
+            context_vector=ctx,
+            trajectory_prior=prior,
+        )
+        features.append(fv.flatten())
+        labels.append(goemo_label)
+        has_cdm_list.append(real_ctx)
 
-    logger.info(f"  [MELD] Extracted {len(features)} utterances.")
-    return (
-        np.array(features, dtype=np.float32) if features
-        else np.empty((0, FEATURE_DIM), dtype=np.float32),
-        labels,
+        # Update history for next utterance
+        goe_dist = [float(goe_out.get(e, 0.0)) for e in EMOTION_LABELS]
+        conv_history.setdefault(did, []).append({
+            "valence":      valence,
+            "intent_state": intent_st,
+            "speaker":      speaker,
+            "goe_dist":     goe_dist,
+        })
+
+    real_count = sum(has_cdm_list)
+    logger.info(
+        f"[MELD] Built {len(features)} feature vectors — "
+        f"{real_count} with real context ({100*real_count//max(len(features),1)}%), "
+        f"{len(features)-real_count} first-utterance (no context)."
     )
+
+    try:
+        with open(cache_path, "wb") as f:
+            pickle.dump({"cache_key": cache_key, "data": (features, labels, has_cdm_list)}, f)
+        logger.info(f"[MELD] Cache saved → {cache_path}")
+    except Exception as e:
+        logger.warning(f"[MELD] Could not save cache: {e}")
+
+    return np.array(features, dtype=np.float32) if features else empty, labels, has_cdm_list
 
 
 # ── Reporting ───────────────────────────────────────────────────────────────────
@@ -979,12 +1419,13 @@ def print_report(
     n_train: int,
     n_filtered: int,
     deployed: bool,
+    dataset_composition=None,
 ) -> None:
     prev_acc = prev_meta.get("test_accuracy")
     delta    = (new_acc - prev_acc) if prev_acc is not None else None
 
     stats = {
-        "Previous Accuracy":  f"{prev_acc:.4f}" if prev_acc is not None else "N/A",
+        "Previous Accuracy":   f"{prev_acc:.4f}" if prev_acc is not None else "N/A",
         "New Accuracy (test)": f"{new_acc:.4f}  {_bar(new_acc)}",
         "New F1 (macro)":      f"{new_f1:.4f}  {_bar(new_f1)}",
         "Samples Trained":     n_train,
@@ -994,6 +1435,11 @@ def print_report(
     if delta is not None:
         direction    = "↑" if delta >= 0 else "↓"
         stats["Delta"] = f"{direction} {delta*100:+.2f}%"
+
+    if dataset_composition:
+        stats["─── Dataset Sources ───"] = ""
+        for src, count in dataset_composition.items():
+            stats[f"  {src}"] = count
 
     logger.log_stats("Retraining Report", stats)
 
@@ -1033,6 +1479,20 @@ def _run(model, text: str) -> dict:
         return {r['label']: r['score'] for r in model(text[:512])[0]}
     except Exception:
         return {}
+
+
+def _run_batch(model, texts: list, batch_size: int = 32) -> list:
+    """Run a HuggingFace pipeline on a list of texts in batches. Returns one dict per text."""
+    results = []
+    for i in range(0, len(texts), batch_size):
+        chunk = [t[:512] for t in texts[i:i + batch_size]]
+        try:
+            out = model(chunk)
+            for item in out:
+                results.append({r['label']: r['score'] for r in item})
+        except Exception:
+            results.extend([{} for _ in chunk])
+    return results
 
 
 # ── Data filtering ──────────────────────────────────────────────────────────────
@@ -1160,6 +1620,15 @@ def run_one_cycle(reload_callback=None) -> None:
 
     is_bootstrap = not MODEL_PATH.exists()
 
+    # MELD pre-download is disabled: the full declare-lab/MELD Arrow file loads into RAM
+    # before slicing, which OOMs alongside BERT+GoEmotions in a constrained container.
+    # Re-enable when running on a host with >6 GB Docker memory or after adding a
+    # HuggingFace cache volume mount so the dataset is never re-downloaded from scratch.
+    # MELD_RAW_PATH   = MODEL_PATH.parent / "meld_raw_cache.json"
+    # MELD_CACHE_PATH = MODEL_PATH.parent / "meld_features_cache.pkl"
+    # if is_bootstrap and not MELD_CACHE_PATH.exists() and not MELD_RAW_PATH.exists():
+    #     _download_meld_raw(MELD_RAW_PATH, max_rows=3000)
+
     device_int = 0 if torch.cuda.is_available() else -1
     vader, bert, goe = _get_analyzers(device_int)
 
@@ -1231,18 +1700,64 @@ def run_one_cycle(reload_callback=None) -> None:
             X_tr, X_v, X_te = list(X_tr), list(X_v), list(X_te)
 
         has_cdm_tr: list = [False] * len(X_tr)
+        n_ed = len(X_tr)
 
         # ── Synthetic augmentation for the 5 missing GoEmotions classes ────────
         X_syn, y_syn, gs_syn = load_synthetic_features(_va, _ba, _ga)
+        n_syn = 0
         if len(X_syn) > 0:
+            n_syn      = len(X_syn)
             X_tr       = list(X_tr) + list(X_syn)
             y_tr       = y_tr + y_syn
             gs_tr      = gs_tr + gs_syn
-            has_cdm_tr = has_cdm_tr + [False] * len(y_syn)
+            has_cdm_tr = has_cdm_tr + [False] * n_syn
             logger.info(
-                f"Bootstrap: +{len(X_syn)} synthetic samples "
+                f"Bootstrap: +{n_syn} synthetic samples "
                 f"({_SYNTHETIC_CLASSES}) → {len(X_tr)} total train"
             )
+
+        # ── GoEmotions direct (NLP-aligned) augmentation ─────────────────────
+        # Teaches the meta-learner to trust NLP models on clear-cut single sentences.
+        X_goe_d, y_goe_d, gs_goe_d = extract_goemotions_direct_features(_va, _ba, _ga)
+        n_goe_d = 0
+        if len(X_goe_d) > 0:
+            # Oversample 3× so GoEmotions-aligned signal competes with ED volume
+            n_goe_d    = len(X_goe_d) * 3
+            X_tr       = list(X_tr) + list(X_goe_d) * 3
+            y_tr       = y_tr + y_goe_d * 3
+            gs_tr      = gs_tr + gs_goe_d * 3
+            has_cdm_tr = has_cdm_tr + [False] * n_goe_d
+            logger.info(
+                f"Bootstrap: +{n_goe_d} GoEmotions-direct samples (3× oversample) → {len(X_tr)} total train"
+            )
+
+        # ── MELD (real multi-turn context) augmentation ───────────────────────
+        # MELD provides 13K utterances from real conversations where each
+        # utterance's CDM vector is built from the actual preceding messages.
+        # has_cdm=True for these samples — the context path gets real gradient
+        # signal for the first time (not synthetic noise or all-zeros).
+        # MELD disabled — see comment above re: OOM on constrained containers.
+        X_meld, y_meld, has_cdm_meld = np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+        n_meld = 0
+        n_meld_ctx = 0
+        if len(X_meld) > 0:
+            n_meld     = len(X_meld)
+            n_meld_ctx = sum(has_cdm_meld)
+            X_tr       = list(X_tr) + list(X_meld)
+            y_tr       = y_tr + y_meld
+            gs_tr      = gs_tr + [{label: 1.0} for label in y_meld]
+            has_cdm_tr = has_cdm_tr + list(has_cdm_meld)
+            logger.info(
+                f"Bootstrap: +{n_meld} MELD samples "
+                f"({n_meld_ctx} with real context) → {len(X_tr)} total train"
+            )
+
+        dataset_composition = {
+            "EmpatheticDialogues": n_ed,
+            "Synthetic (5 classes)": n_syn,
+            "GoEmotions-direct (3×)": n_goe_d,
+            f"MELD ({n_meld_ctx} w/ real ctx)": n_meld,
+        }
 
     else:
         # ── Continuous learning from database ──────────────────────────────────
@@ -1269,6 +1784,10 @@ def run_one_cycle(reload_callback=None) -> None:
         X_te, y_te = X_v, y_v  # val doubles as test for gate consistency
         gs_tr      = [{label: 1.0} for label in y_tr]
         has_cdm_tr = [False] * len(X_tr)
+        dataset_composition = {
+            "Live DB samples (3×)":      len(X_live) * 3,
+            "Relabeled conversations (3×)": len(X_rel) * 3,
+        }
         logger.info(f"DB cycle: {len(X_tr)} train / {len(X_v)} val samples.")
 
     del vader, bert, goe
@@ -1339,6 +1858,43 @@ def run_one_cycle(reload_callback=None) -> None:
     test_f1  = f1_score(y_te, y_te_pred, average='macro', zero_division=0)
     logger.info(f"  [Metrics] Val  — Acc: {val_acc:.4f}  Macro-F1: {val_f1:.4f}")
     logger.info(f"  [Metrics] Test — Acc: {test_acc:.4f}  Macro-F1: {test_f1:.4f}")
+
+    # ── Per-class breakdown (test set) ────────────────────────────────────────
+    all_labels = sorted(set(y_te) | set(y_te_pred))
+    report = classification_report(
+        y_te, y_te_pred,
+        labels=all_labels,
+        zero_division=0,
+        output_dict=True,
+    )
+    width = 72
+    sep    = f"+{'-' * (width - 2)}+"
+    header = f"|{'  Per-Class Metrics (Test Set) ':─^{width - 2}}|"
+    col_hdr = f"|  {'Emotion':<18}  {'F1':>6}  {'Bar':<14}  {'Prec':>6}  {'Recall':>6}  {'n':>5}  |"
+    logger.info(sep)
+    logger.info(header)
+    logger.info(sep)
+    logger.info(col_hdr)
+    logger.info(sep)
+    for lbl in EMOTION_LABELS:          # fixed order, same as EMOTION_LABELS list
+        r = report.get(lbl, {})
+        support = int(r.get("support", 0))
+        f1   = r.get("f1-score",  0.0)
+        prec = r.get("precision", 0.0)
+        rec  = r.get("recall",    0.0)
+        bar  = _bar(f1, width=14)
+        tag  = "  " if support > 0 else "⚠ "
+        logger.info(
+            f"|  {tag}{lbl:<18}  {f1:>6.3f}  {bar:<14}  {prec:>6.3f}  {rec:>6.3f}  {support:>5}  |"
+        )
+    macro_f1 = report.get("macro avg", {}).get("f1-score", 0.0)
+    macro_p  = report.get("macro avg", {}).get("precision", 0.0)
+    macro_r  = report.get("macro avg", {}).get("recall", 0.0)
+    logger.info(sep)
+    logger.info(
+        f"|  {'  macro avg':<20}  {macro_f1:>6.3f}  {'':14}  {macro_p:>6.3f}  {macro_r:>6.3f}  {'':>5}  |"
+    )
+    logger.info(sep)
 
     # Log mean gate weights on test set for monitoring (expert collapse detection)
     alpha_te = wrapper.get_gate_weights(X_te_arr)
@@ -1450,7 +2006,7 @@ def run_one_cycle(reload_callback=None) -> None:
             logger.info("Training complete. Opening system gates.")
             setattr(start_trainer_thread, '_initial_trained', True)
 
-    print_report(prev_meta, test_acc, test_f1, len(X_tr), n_filtered, deployed)
+    print_report(prev_meta, test_acc, test_f1, len(X_tr), n_filtered, deployed, dataset_composition)
 
 
 # ── Background worker ───────────────────────────────────────────────────────────
