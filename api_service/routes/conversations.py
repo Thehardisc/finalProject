@@ -1,11 +1,12 @@
 """
 api_service/routes/conversations.py — Conversation and message retrieval endpoints.
 """
+import json
 import time
 import uuid
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from shared.utils.logger import get_logger
@@ -281,6 +282,304 @@ async def get_conversation_state(conversation_id: str):
                 "average_valence": 0.0, "conversation_id": conversation_id,
                 "status": "New"}
     return state
+
+
+@router.get("/conversation/{conversation_id}/emotional-state",
+            dependencies=[Depends(get_current_user)])
+async def get_emotional_state(conversation_id: str):
+    """
+    Bot-readable emotional state for a conversation.
+
+    Returns the narrative mood, emotional trajectory, and recent mood arc
+    computed from the full message history — not just the last message.
+
+    Intended for bots and agents that need to adapt their response tone
+    based on the conversation's emotional context.
+
+    trajectory values:
+      escalating     — conversation is getting more negative
+      de-escalating  — conversation is getting more positive
+      stable         — no significant change
+
+    arc: list of up to 5 recent mood labels, newest first.
+    """
+    _EMPTY = {
+        "conversation_id":   conversation_id,
+        "current_mood":      "neutral",
+        "dominant_emotion":  "neutral",
+        "trajectory":        "stable",
+        "arc":               [],
+        "ema_valence":       0.0,
+        "message_count":     0,
+        "status":            "no_data",
+    }
+
+    if not _redis_client or not _redis_client.redis:
+        return _EMPTY
+
+    r   = _redis_client.redis
+    raw = await r.hgetall(f"conversation:{conversation_id}:emotional_state")
+
+    if not raw:
+        return _EMPTY
+
+    arc_raw = raw.get("arc", "[]")
+    try:
+        import json as _json
+        arc = _json.loads(arc_raw)
+    except Exception:
+        arc = []
+
+    return {
+        "conversation_id":   conversation_id,
+        "current_mood":      raw.get("current_mood",     "neutral"),
+        "dominant_emotion":  raw.get("dominant_emotion", "neutral"),
+        "trajectory":        raw.get("trajectory",       "stable"),
+        "arc":               arc,
+        "ema_valence":       float(raw.get("ema_valence",    0.0)),
+        "message_count":     int(raw.get("message_count",   0)),
+        "status":            "active",
+    }
+
+
+# ── Post-conversation analysis ────────────────────────────────────────────────
+
+_EMOTION_TO_MOOD: dict = {
+    'admiration': 'warm',      'amusement':      'joyful',
+    'approval':   'warm',      'caring':         'warm',
+    'curiosity':  'neutral',   'desire':         'warm',
+    'excitement': 'joyful',    'gratitude':      'warm',
+    'joy':        'joyful',    'love':           'warm',
+    'optimism':   'joyful',    'pride':          'joyful',
+    'relief':     'resolved',  'realization':    'neutral',
+    'surprise':   'neutral',   'neutral':        'neutral',
+    'anger':      'hostile',   'annoyance':      'hostile',
+    'disapproval':'conflicted','disgust':        'hostile',
+    'disappointment': 'melancholic',
+    'embarrassment':  'conflicted',
+    'fear':       'anxious',   'grief':          'melancholic',
+    'nervousness':'anxious',   'remorse':        'melancholic',
+    'sadness':    'melancholic','confusion':     'conflicted',
+}
+
+_MOOD_VALENCE: dict = {
+    'joyful': 0.75, 'warm': 0.55, 'resolved': 0.30, 'neutral': 0.0,
+    'anxious': -0.35, 'conflicted': -0.40, 'melancholic': -0.65, 'hostile': -0.80,
+}
+
+
+def _dominant_from_emotions(emotions: dict) -> str:
+    skip = {'vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion'}
+    best, best_score = 'neutral', 0.0
+    for k, v in emotions.items():
+        if k not in skip and isinstance(v, (int, float)) and v > best_score:
+            best, best_score = k, v
+    return best
+
+
+def _build_chunks(rows: list) -> list:
+    """
+    Group consecutive messages into emotionally coherent chunks.
+    A new chunk starts when the mood label changes.
+    Each row: (message_id, text, timestamp, user_id, emotions_json_str)
+    """
+    chunks, current_chunk, current_mood = [], [], None
+
+    for i, (msg_id, text, ts, uid, emo_json) in enumerate(rows):
+        try:
+            emotions = json.loads(emo_json) if emo_json else {}
+        except Exception:
+            emotions = {}
+
+        dominant = _dominant_from_emotions(emotions)
+        mood     = _EMOTION_TO_MOOD.get(dominant, 'neutral')
+
+        if mood != current_mood:
+            if current_chunk:
+                chunks.append((current_mood, current_chunk))
+            current_chunk = []
+            current_mood  = mood
+
+        current_chunk.append({
+            "index":            i,
+            "message_id":       msg_id,
+            "text":             text,
+            "dominant_emotion": dominant,
+            "emotions":         {k: float(v) for k, v in emotions.items()
+                                 if k not in {'vader_neg', 'vader_neu',
+                                              'vader_pos', 'vader_compound',
+                                              'dominant_emotion'}},
+        })
+
+    if current_chunk:
+        chunks.append((current_mood, current_chunk))
+
+    result = []
+    for chunk_idx, (mood, msgs) in enumerate(chunks):
+        # Average emotion scores across messages in the chunk
+        all_keys = set()
+        for m in msgs:
+            all_keys.update(m["emotions"].keys())
+        avg_emotions = {}
+        for k in all_keys:
+            vals = [m["emotions"].get(k, 0.0) for m in msgs]
+            avg_emotions[k] = round(sum(vals) / len(vals), 4)
+
+        result.append({
+            "chunk_index":    chunk_idx,
+            "message_indices": [m["index"] for m in msgs],
+            "message_ids":    [m["message_id"] for m in msgs],
+            "mood":           mood,
+            "emotions":       avg_emotions,
+            "transition_logic": (
+                f"Initial state: {mood}." if chunk_idx == 0
+                else f"Transition [{result[chunk_idx-1]['mood']} → {mood}]."
+            ),
+        })
+
+    return result
+
+
+async def _run_analysis(conversation_id: str, r) -> dict:
+    """Fetch messages from DB, build chunks, write results to Redis."""
+    pool = get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT m.message_id, m.text, m.timestamp, m.user_id,
+                   ea.emotions_json
+            FROM messages m
+            LEFT JOIN emotion_analysis ea ON m.message_id = ea.message_id
+            WHERE m.conversation_id = $1
+            ORDER BY m.timestamp ASC
+            """,
+            conversation_id,
+        )
+
+    if not rows:
+        return {"status": "no_messages"}
+
+    chunks = _build_chunks(list(rows))
+
+    if not chunks:
+        return {"status": "no_chunks"}
+
+    # Overall trajectory: compare first chunk mood valence vs last
+    first_v = _MOOD_VALENCE.get(chunks[0]["mood"],  0.0)
+    last_v  = _MOOD_VALENCE.get(chunks[-1]["mood"], 0.0)
+    delta   = last_v - first_v
+    trajectory = "escalating" if delta < -0.2 else ("de-escalating" if delta > 0.2 else "stable")
+
+    last_chunk  = chunks[-1]
+    current_mood = last_chunk["mood"]
+    dominant     = max(last_chunk["emotions"], key=last_chunk["emotions"].get,
+                       default="neutral") if last_chunk["emotions"] else "neutral"
+
+    # Write full chunk analysis to Redis
+    analysis = {
+        "conversation_id": conversation_id,
+        "chunks":          json.dumps(chunks),
+        "current_mood":    current_mood,
+        "dominant_emotion":dominant,
+        "trajectory":      trajectory,
+        "message_count":   len(rows),
+        "chunk_count":     len(chunks),
+        "analyzed_at":     time.time(),
+        "mode":            "local",
+    }
+
+    pipe = r.pipeline()
+    # Full analysis key (for training data export + deep inspection)
+    pipe.hset(f"conversation:{conversation_id}:analysis",
+              mapping={k: str(v) for k, v in analysis.items()})
+    pipe.expire(f"conversation:{conversation_id}:analysis", 86400 * 30)
+    # Overwrite emotional_state so bot sees the post-conversation view
+    pipe.hset(f"conversation:{conversation_id}:emotional_state", mapping={
+        "current_mood":     current_mood,
+        "dominant_emotion": dominant,
+        "trajectory":       trajectory,
+        "arc":              json.dumps([c["mood"] for c in chunks[-5:]]),
+        "ema_valence":      round(last_v, 4),
+        "message_count":    len(rows),
+        "last_updated":     time.time(),
+    })
+    pipe.expire(f"conversation:{conversation_id}:emotional_state", 86400 * 30)
+    await pipe.execute()
+
+    logger.info(
+        "conversation_analyzed",
+        extra={
+            "event":           "conversation_analyzed",
+            "conversation_id": conversation_id,
+            "chunks":          len(chunks),
+            "trajectory":      trajectory,
+            "mode":            "local",
+        },
+    )
+    return analysis
+
+
+@router.post("/conversation/{conversation_id}/analyze",
+             dependencies=[Depends(get_current_user)])
+async def analyze_conversation(conversation_id: str, background_tasks: BackgroundTasks):
+    """
+    Trigger post-conversation emotional analysis.
+
+    Fetches all messages from DB, groups them into emotionally coherent
+    chunks, and writes the results to Redis so the bot can read the
+    full narrative emotional arc — not just the last message.
+
+    The analysis runs as a background task (returns immediately).
+    Poll GET /conversation/{id}/emotional-state to read the result.
+    """
+    if not _redis_client or not _redis_client.redis:
+        raise HTTPException(status_code=503, detail="Redis unavailable.")
+
+    r = _redis_client.redis
+    background_tasks.add_task(_run_analysis, conversation_id, r)
+
+    return {
+        "conversation_id": conversation_id,
+        "status":          "analysis_started",
+        "result_endpoint": f"/conversation/{conversation_id}/emotional-state",
+    }
+
+
+class SessionRequest(BaseModel):
+    mode: str = Field("continue", pattern="^(fresh|continue)$")
+
+
+@router.post("/conversation/{conversation_id}/session",
+             dependencies=[Depends(get_current_user)])
+async def set_conversation_session(conversation_id: str, req: SessionRequest):
+    """
+    Control session continuity after an idle period.
+
+    mode=continue (default): preserve the existing emotional state — the bot
+      remembers the conversation's emotional arc.
+
+    mode=fresh: reset emotional state to neutral — the bot treats the next
+      message as the start of a new emotional context, even within the same
+      conversation thread.
+    """
+    if not _redis_client or not _redis_client.redis:
+        raise HTTPException(status_code=503, detail="Redis unavailable.")
+
+    r = _redis_client.redis
+
+    if req.mode == "fresh":
+        pipe = r.pipeline()
+        pipe.delete(f"conversation:{conversation_id}:emotional_state")
+        pipe.delete(f"conv:{conversation_id}:mood_arc")
+        pipe.delete(f"conv:{conversation_id}:valence_hist")
+        await pipe.execute()
+        logger.info(
+            "session_reset",
+            extra={"event": "session_reset", "conversation_id": conversation_id},
+        )
+        return {"conversation_id": conversation_id, "mode": "fresh", "status": "reset"}
+
+    return {"conversation_id": conversation_id, "mode": "continue", "status": "preserved"}
 
 
 @router.get("/conversation/{conversation_id}/messages",

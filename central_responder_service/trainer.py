@@ -248,6 +248,7 @@ def pretrain_context_encoder(
     X_ctx: np.ndarray,
     y_labels: list,
     classes: list,
+    has_cdm: np.ndarray = None,
     n_epochs: int = 20,
     lr: float = 1e-3,
     device: str = "cpu",
@@ -258,7 +259,17 @@ def pretrain_context_encoder(
     representations rather than noise, giving the Bayesian prior a useful starting point.
 
     Only trains enc_ctx_expert and ctx_prior_head — all other parameters frozen.
+    When has_cdm is provided, only real-CDM samples are used for pretraining.
     """
+    # Filter to real-CDM samples when mask is available
+    if has_cdm is not None and has_cdm.any():
+        X_ctx   = X_ctx[has_cdm]
+        y_labels = [y_labels[i] for i, v in enumerate(has_cdm) if v]
+        logger.info(f"  [CtxPretrain] Using {len(X_ctx)} real-CDM samples for pretraining.")
+    elif has_cdm is not None and not has_cdm.any():
+        logger.info("  [CtxPretrain] No real-CDM samples — skipping pretrain.")
+        return model
+
     class_to_idx = {c: i for i, c in enumerate(classes)}
     y_idx = np.array([class_to_idx.get(y, 0) for y in y_labels])
 
@@ -293,6 +304,7 @@ def train_gating_network(
     X_v: np.ndarray,
     y_v: list,
     classes: list,
+    has_cdm: np.ndarray = None,
     n_epochs: int = 80,
     batch_size: int = 256,
     lr: float = 5e-4,
@@ -316,6 +328,30 @@ def train_gating_network(
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"  [Trainer] Training on device={device}")
+
+    # ── CDM masking: zero out CDM block for samples without real context ──────
+    # When CDM[39:79] is synthetic (has_cdm=False), hmm_conf becomes 0
+    # → ctx_weight ≈ 0.12 (minimum) → ctx_prior_head barely contributes.
+    # This prevents the context encoder from learning spurious synthetic→label
+    # correlations; only real-CDM samples (EmpatheticDialogues, collect.py)
+    # train the context path meaningfully.
+    CDM_SLICE = slice(ML_DIM, ML_DIM + CDM_CTX_DIM)
+    if has_cdm is not None:
+        no_cdm = ~has_cdm
+        if no_cdm.any():
+            X_tr = X_tr.copy()
+            X_tr[no_cdm, CDM_SLICE] = 0.0
+            logger.info(
+                f"  [CDMMask] Zeroed CDM[{ML_DIM}:{ML_DIM+CDM_CTX_DIM}] for "
+                f"{no_cdm.sum()}/{len(X_tr)} samples "
+                f"({100*no_cdm.mean():.1f}% without real CDM)"
+            )
+        # Val/test data comes from GoEmotions (no real CDM).
+        # Zero val CDM too so the scaler sees a consistent distribution
+        # for CDM columns — prevents scaled val outliers when scaler is
+        # fit on zeroed training CDM.
+        X_v = X_v.copy()
+        X_v[:, CDM_SLICE] = 0.0
 
     # ── Scaling ──────────────────────────────────────────────────────────────
     scaler  = StandardScaler()
@@ -343,9 +379,12 @@ def train_gating_network(
     # ── Model + optimiser ─────────────────────────────────────────────────────
     model = GatingEnsembleNet(n_classes=len(classes), d=D_MODEL, dropout=DROPOUT).to(device)
 
-    # Pre-train context encoder before full pipeline training
+    # Pre-train context encoder — only on real-CDM samples when mask is available
     logger.info("  [CtxPretrain] Pre-training context encoder on context block...")
-    model = pretrain_context_encoder(model, X_tr, y_tr, classes, n_epochs=20, device=device)
+    model = pretrain_context_encoder(
+        model, X_tr, y_tr, classes,
+        has_cdm=has_cdm, n_epochs=20, device=device,
+    )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -506,134 +545,139 @@ def extract_empathetic_dialogues_features(
     max_conversations: int = 2000,
 ) -> tuple:
     """
-    Build (X [N, 77], y [N]) from EmpatheticDialogues with real HMM context history.
+    Build (X [N, FEATURE_DIM], y [N]) from EmpatheticDialogues.
 
-    For each conversation, runs HMM forward filtering through utterances,
-    producing a real context vector rather than synthetic noise.
+    Uses bdotloh/empathetic-dialogues-contexts (Parquet, no loading scripts).
+    Each row: situation text + human-annotated emotion label.
+    Labels are human-annotated (32 categories → GoEmotions 28 via mapping).
+    CDM context is synthetic (has_cdm=False — single-turn data, no conversation history).
     """
     try:
         from datasets import load_dataset
-        emp = load_dataset("empathetic_dialogues")
+        emp = load_dataset("bdotloh/empathetic-dialogues-contexts", split="train")
     except Exception as e:
         logger.warning(f"EmpatheticDialogues load failed: {e} — skipping.")
         return np.empty((0, FEATURE_DIM), dtype=np.float32), []
 
-    transmat, emissionprob = _load_hmm_params()
-    n_states = N_CDM_STATES
-    if transmat is None:
-        logger.warning("HMM params unavailable — skipping EmpatheticDialogues.")
-        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
-
-    # Group utterances by conversation id
-    convs: dict = {}
-    for row in emp['train']:
-        cid = row.get('conv_id', '')
-        if cid not in convs:
-            convs[cid] = []
-        convs[cid].append(row)
-
     features, labels = [], []
-    conv_list = list(convs.items())[:max_conversations]
+    rows = list(emp)[:max_conversations]
 
-    logger.info(f"  [EmpDialogues] Building context features from {len(conv_list)} conversations...")
+    logger.info(f"  [EmpDialogues] Building features from {len(rows)} situations...")
 
-    for conv_id, turns in conv_list:
-        turns_sorted = sorted(turns, key=lambda t: int(t.get('utterance_idx', 0)))
-        conv_emotion = turns_sorted[0].get('context', 'neutral').lower()
-        goemo_label  = _EMPATHETIC_TO_GOEMOTION.get(conv_emotion, 'neutral')
+    for row in rows:
+        text        = str(row.get('situation', '')).strip()
+        raw_emotion = str(row.get('emotion', 'neutral')).lower()
+        goemo_label = _EMPATHETIC_TO_GOEMOTION.get(raw_emotion, 'neutral')
 
-        hmm_alpha   = np.ones(n_states, dtype=np.float64) / n_states
-        val_hist    = []
-        prev_val    = 0.0
-        prev_goe_out: dict = {}  # GoEmotions from the previous turn — used as trajectory prior
+        if not text:
+            continue
+        try:
+            vader_out = vader_analyzer(text) if callable(vader_analyzer) else {}
+            bert_out  = bert_analyzer(text)  if callable(bert_analyzer)  else {}
+            goe_out   = goe_analyzer(text)   if callable(goe_analyzer)   else {}
+        except Exception:
+            continue
 
-        for i, turn in enumerate(turns_sorted):
-            text = str(turn.get('utterance', '')).strip()
-            if not text:
-                continue
+        # Synthetic CDM correlated with the human-annotated label
+        ctx = build_synthetic_context_vector(label=goemo_label, mode="train")
+        fv  = build_feature_vector(
+            {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
+            context_vector=ctx[:CDM_CTX_DIM],
+            trajectory_prior=ctx[CDM_CTX_DIM:],
+        )
+        features.append(fv.flatten())
+        labels.append(goemo_label)
 
-            # NLP features for this utterance
-            try:
-                vader_out = vader_analyzer(text) if callable(vader_analyzer) else {}
-                bert_out  = bert_analyzer(text)  if callable(bert_analyzer)  else {}
-                goe_out   = goe_analyzer(text)   if callable(goe_analyzer)   else {}
-            except Exception:
-                continue
-
-            # Valence history for velocity
-            cur_val  = float(vader_out.get('vader_compound', 0.0))
-            val_hist.append(cur_val)
-            velocity     = cur_val - prev_val
-            acceleration = (velocity - (prev_val - val_hist[-3] if len(val_hist) >= 3 else 0.0))
-            prev_val     = cur_val
-
-            # CDM state from HMM forward variable
-            cdm_state  = int(np.argmax(hmm_alpha))
-            cdm_onehot = [0.0] * n_states
-            cdm_onehot[cdm_state] = 1.0
-
-            hmm_conf    = float(hmm_alpha.max())
-            hmm_entropy = float(-np.sum(hmm_alpha * np.log(hmm_alpha + 1e-12)))
-            top3_next   = sorted(transmat[cdm_state].tolist(), reverse=True)[:3]
-            stab_count  = sum(1 for _ in range(min(i, 5)) if i > 0)  # approximate
-            intent_stab = min(stab_count / 10.0, 1.0)
-
-            # Build context vector (CDM_CTX_DIM=40 + PRIOR_DIM=28 = CONTEXT_DIM=68)
-            prior_block = [float(prev_goe_out.get(e, 0.0)) for e in EMOTION_LABELS]
-            ctx = (
-                cdm_onehot +
-                [min(i / 10.0, 1.0)] +   # residency
-                [cdm_state / n_states, cdm_state / n_states, cdm_state / n_states] +  # transition path
-                [0.0,         # abruptness (no prev state for first turn)
-                 0.5,         # topic coherence (neutral approx)
-                 0.5,         # emotion entropy (neutral approx)
-                 0.0,         # speaker divergence (single speaker)
-                 float(np.clip(velocity, -1, 1)),
-                 float(np.clip(acceleration, -1, 1)),
-                 max(0.0, _EMPATHETIC_VALENCE.get(conv_emotion, 0.0)),          # hist_pos [25]
-                 float(0.5 - abs(_EMPATHETIC_VALENCE.get(conv_emotion, 0.0)) * 0.4),  # hist_neu [26]
-                 max(0.0, -_EMPATHETIC_VALENCE.get(conv_emotion, 0.0)),         # hist_neg [27]
-                 0.5,         # topic resonance
-                 0.2,         # volatility
-                 float(np.clip(cur_val, -1, 1)),
-                 float(np.clip(len(text) / 500.0, 0, 1)),
-                 0.1,         # latency
-                 hmm_conf,
-                 hmm_entropy,
-                 0.7 if hmm_conf > 0.5 else 0.3,  # emission approx
-                ] + top3_next +
-                [intent_stab]
-                + prior_block  # [40:68] previous turn's GoEmotions distribution
-            )
-
-            if len(ctx) != CONTEXT_DIM:
-                continue  # skip malformed
-
-            # ML block
-            ml = []
-            for k in VADER_KEYS:
-                ml.append(float(vader_out.get(k, 0.0)))
-            for k in BERT_LABELS:
-                ml.append(float(bert_out.get(k, 0.0)))
-            for k in EMOTION_LABELS:
-                ml.append(float(goe_out.get(k, 0.0)))
-
-            fv = np.array(ml + ctx, dtype=np.float32)
-            if len(fv) != FEATURE_DIM:
-                continue
-
-            features.append(fv)
-            labels.append(goemo_label)
-
-            prev_goe_out = goe_out  # carry GoEmotions forward as trajectory prior for next turn
-
-            # Update HMM for next turn
-            obs        = _empathetic_obs(conv_emotion)
-            hmm_alpha  = _hmm_forward_step(hmm_alpha, transmat, emissionprob, obs)
-
-    logger.info(f"  [EmpDialogues] Extracted {len(features)} conv-context samples.")
+    logger.info(f"  [EmpDialogues] Extracted {len(features)} human-labeled samples.")
     return (np.array(features, dtype=np.float32) if features else np.empty((0, FEATURE_DIM), dtype=np.float32),
             labels)
+
+
+# ── Relabeled conversations (implicit emotion labels from Claude API) ──────────
+
+RELABELED_DATA_PATH = Path(os.environ.get(
+    "RELABELED_DATA_PATH",
+    "/app/training_data/conversations_relabeled.jsonl",
+))
+
+
+def load_relabeled_conversations() -> tuple:
+    """
+    Load re-labeled conversations produced by relabel.py.
+
+    Key difference from GoEmotions training data:
+      - Labels come from Claude's implicit emotion recognition (not GoEmotions predictions)
+      - NLP features are the real pipeline outputs stored in conversations.jsonl
+      - GoEmotions features in the vector may DISAGREE with the label →
+        the model learns that GoEmotions can be wrong and context matters
+
+    CDM context is synthetic (correlated with the Claude-assigned label, same
+    augmentation as GoEmotions training) — real CDM vectors are not stored in
+    the collected data at sufficient resolution to reconstruct the full 40-dim block.
+    """
+    if not RELABELED_DATA_PATH.exists():
+        logger.info(f"  [Relabeled] {RELABELED_DATA_PATH} not found — skipping.")
+        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
+
+    try:
+        conversations = [
+            json.loads(line)
+            for line in RELABELED_DATA_PATH.read_text().splitlines()
+            if line.strip()
+        ]
+    except Exception as e:
+        logger.warning(f"  [Relabeled] Failed to read file: {e} — skipping.")
+        return np.empty((0, FEATURE_DIM), dtype=np.float32), []
+
+    features, labels = [], []
+
+    for conv in conversations:
+        chunks   = conv.get("relabeled_chunks", [])
+        messages = conv.get("messages", [])
+
+        for chunk in chunks:
+            emotions_dict = chunk.get("emotions", {})
+            if not emotions_dict:
+                continue
+
+            # Dominant emotion = argmax of Claude's 28-dim scores
+            valid = {k: v for k, v in emotions_dict.items() if k in EMOTION_LABELS}
+            if not valid:
+                continue
+            chunk_label = max(valid, key=valid.get)
+
+            for idx in chunk.get("message_indices", []):
+                if idx >= len(messages):
+                    continue
+                stages = messages[idx].get("pipeline", {}).get("stages", {})
+                if not stages:
+                    continue
+
+                # Map stored stage keys → build_feature_vector format
+                model_outputs = {
+                    "vader":       stages.get("vader",       {}),
+                    "basic_bert":  stages.get("bert",        {}),
+                    "go_emotions": stages.get("goemotions",  {}),
+                }
+
+                ctx = build_synthetic_context_vector(label=chunk_label, mode="train")
+                fv  = build_feature_vector(
+                    model_outputs,
+                    context_vector=ctx[:CDM_CTX_DIM],
+                    trajectory_prior=ctx[CDM_CTX_DIM:],
+                )
+                features.append(fv.flatten())
+                labels.append(chunk_label)
+
+    logger.info(
+        f"  [Relabeled] Loaded {len(features)} samples "
+        f"from {len(conversations)} conversations."
+    )
+    return (
+        np.array(features, dtype=np.float32) if features
+        else np.empty((0, FEATURE_DIM), dtype=np.float32),
+        labels,
+    )
 
 
 # ── MELD conversation-context training data ────────────────────────────────────
@@ -803,35 +847,39 @@ def _run(model, text: str) -> dict:
 
 # ── Data filtering ──────────────────────────────────────────────────────────────
 
-def filter_outliers(X: list, y: list, goe_list: list):
+def filter_outliers(X: list, y: list, goe_list: list, has_cdm: list = None):
     """Drop samples where GoEmotions gives < 5% confidence to the gold label."""
-    cX, cy, removed = [], [], 0
-    for fv, label, goe in zip(X, y, goe_list):
+    cX, cy, cdm, removed = [], [], [], 0
+    for i, (fv, label, goe) in enumerate(zip(X, y, goe_list)):
         if label not in EMOTION_LABELS or goe.get(label, 0.0) < 0.05:
             removed += 1
         else:
             cX.append(fv)
             cy.append(label)
-    return cX, cy, removed
+            if has_cdm is not None:
+                cdm.append(has_cdm[i])
+    return (cX, cy, removed, cdm) if has_cdm is not None else (cX, cy, removed)
 
 
-def filter_balance(X: list, y: list):
+def filter_balance(X: list, y: list, has_cdm: list = None):
     """Cap any class at 3× the median class count."""
     if not y:
-        return X, y
+        return (X, y, has_cdm) if has_cdm is not None else (X, y)
     counts = Counter(y)
     cap    = max(50, int(statistics.median(counts.values()) * 3))
     seen   = Counter()
-    cX, cy = [], []
-    for fv, label in zip(X, y):
+    cX, cy, cdm = [], [], []
+    for i, (fv, label) in enumerate(zip(X, y)):
         if seen[label] < cap:
             cX.append(fv)
             cy.append(label)
+            if has_cdm is not None:
+                cdm.append(has_cdm[i])
             seen[label] += 1
     removed = len(X) - len(cX)
     if removed:
         logger.info(f"  [Filter] Balance cap: removed {removed} samples (cap={cap}/class).")
-    return cX, cy
+    return (cX, cy, cdm) if has_cdm is not None else (cX, cy)
 
 
 # ── Live data ───────────────────────────────────────────────────────────────────
@@ -1005,6 +1053,20 @@ def run_one_cycle(reload_callback=None) -> None:
                 "test":  (X_te, y_te, None),
             }, f)
 
+    # has_cdm tracks whether each training sample has real CDM context vectors.
+    # GoEmotions (cache or fresh) → synthetic CDM → False
+    has_cdm_tr: list = [False] * len(X_tr)
+
+    # ── Relabeled conversations (implicit emotion labels, real NLP features) ─────
+    X_rel, y_rel = load_relabeled_conversations()
+    if len(X_rel) > 0:
+        rel_weight = 3  # high-quality: real pipeline outputs + implicit labels
+        X_tr.extend(list(X_rel) * rel_weight)
+        y_tr.extend(y_rel * rel_weight)
+        gs_tr.extend([{label: 1.0} for label in y_rel] * rel_weight)
+        has_cdm_tr.extend([False] * (len(X_rel) * rel_weight))  # synthetic CDM
+        logger.info(f"  [Relabeled] Added {len(X_rel) * rel_weight} samples (weight={rel_weight}).")
+
     # ── Live supervised data augmentation ──────────────────────────────────────
     X_live, y_live = fetch_live_data(vader, bert, goe)
     if X_live:
@@ -1012,6 +1074,7 @@ def run_one_cycle(reload_callback=None) -> None:
         X_tr.extend(X_live * weight)
         y_tr.extend(y_live * weight)
         gs_tr.extend([{}] * len(X_live) * weight)
+        has_cdm_tr.extend([False] * (len(X_live) * weight))  # mode="cold" = zeros
         logger.info(
             f"  [Trainer] Augmented with {len(X_live)} live samples (weight={weight})"
         )
@@ -1031,21 +1094,11 @@ def run_one_cycle(reload_callback=None) -> None:
             X_tr.extend([row for row in X_emp] * emp_weight)
             y_tr.extend(y_emp * emp_weight)
             gs_tr.extend([{label: 1.0} for label in y_emp] * emp_weight)
+            has_cdm_tr.extend([False] * (len(X_emp) * emp_weight))  # single-turn, synthetic CDM
             logger.info(f"  [EmpDialogues] Added {len(X_emp)*emp_weight} conv-context samples.")
 
-        logger.info("  [MELD] Extracting MELD utterance features...")
-        X_meld, y_meld = extract_meld_features(
-            vader_analyzer=vader,
-            bert_analyzer=bert,
-            goe_analyzer=goe,
-            max_utterances=5000,
-        )
-        if len(X_meld) > 0:
-            # MELD has clean single-label per utterance → weight=1 (same as GoEmotions)
-            X_tr.extend([row for row in X_meld])
-            y_tr.extend(y_meld)
-            gs_tr.extend([{label: 1.0} for label in y_meld])
-            logger.info(f"  [MELD] Added {len(X_meld)} utterance samples.")
+        # MELD (declare-lab/MELD) hangs on download — skipped until dataset is cached locally.
+        logger.info("  [MELD] Skipped — dataset not yet cached locally.")
 
     del vader, bert, goe
     gc.collect()
@@ -1055,11 +1108,17 @@ def run_one_cycle(reload_callback=None) -> None:
     dist_before = Counter(y_tr).most_common(5)
     logger.log_stats("Pre-Filter Distribution (Top 5)", dict(dist_before))
 
-    n_before       = len(X_tr)
-    X_tr, y_tr, n_out = filter_outliers(X_tr, y_tr, gs_tr)
+    n_before                      = len(X_tr)
+    X_tr, y_tr, n_out, has_cdm_tr = filter_outliers(X_tr, y_tr, gs_tr, has_cdm_tr)
     logger.info(f"  Layer 2 (outlier): removed {n_out}")
-    X_tr, y_tr     = filter_balance(X_tr, y_tr)
-    n_filtered     = n_before - len(X_tr)
+    X_tr, y_tr, has_cdm_tr        = filter_balance(X_tr, y_tr, has_cdm_tr)
+    n_filtered                    = n_before - len(X_tr)
+
+    n_real_cdm = sum(has_cdm_tr)
+    logger.info(
+        f"  [CDMMask] {n_real_cdm}/{len(X_tr)} samples have real CDM "
+        f"({100*n_real_cdm/max(len(X_tr),1):.1f}%)"
+    )
 
     logger.log_stats("Post-Filter Distribution (Top 5)", dict(Counter(y_tr).most_common(5)))
 
@@ -1082,6 +1141,7 @@ def run_one_cycle(reload_callback=None) -> None:
         X_v=X_v_arr,
         y_v=y_v,
         classes=EMOTION_LABELS,
+        has_cdm=np.array(has_cdm_tr, dtype=bool),
         n_epochs=80,
         batch_size=256,
         lr=5e-4,

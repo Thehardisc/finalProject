@@ -1,10 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
+import axios from 'axios';
 import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
 import TelemetryPanel  from '../components/TelemetryPanel';
 import AnalysisDrawer  from '../components/AnalysisDrawer';
 import DemoRunner      from '../components/DemoRunner';
 import SyntaxText from '../syntax/SyntaxText';
 import { THEMES } from '../syntax/highlighter';
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+
+const EMOTION_LABELS = [
+  'admiration','amusement','anger','annoyance','approval','caring','confusion',
+  'curiosity','desire','disappointment','disapproval','disgust','embarrassment',
+  'excitement','fear','gratitude','grief','joy','love','nervousness','optimism',
+  'pride','realization','relief','remorse','sadness','surprise','neutral',
+];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -192,7 +202,18 @@ const PIPELINE_MODELS = [
 ];
 
 function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModels, theme = 'prism', dark = false }) {
-  const [hovered, setHovered] = useState(false);
+  const [hovered, setHovered]           = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackSent, setFeedbackSent] = useState(false);
+
+  const submitFeedback = async (emotion, e) => {
+    e.stopPropagation();
+    setFeedbackOpen(false);
+    try {
+      await axios.post(`${API_BASE}/message/${msg.id}/feedback`, { label: emotion });
+      setFeedbackSent(true);
+    } catch {}
+  };
 
   const bert = msg.analysis?.data?.bert_emotions;
   let emotionDict = {};
@@ -276,7 +297,68 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
             {dom}
           </div>
         )}
-        {msg.analysis && hovered && (
+
+        {/* ── Feedback button + inline picker ── */}
+        {msg.analysis && dom && !feedbackSent && hovered && (
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={e => { e.stopPropagation(); setFeedbackOpen(o => !o); }}
+              title="Wrong emotion? Click to correct"
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer',
+                fontSize: '0.72rem', lineHeight: 1, padding: '0 2px',
+                opacity: 0.55, transition: 'opacity .15s',
+              }}
+              onMouseEnter={e => e.currentTarget.style.opacity = 1}
+              onMouseLeave={e => e.currentTarget.style.opacity = 0.55}
+            >👎</button>
+
+            {feedbackOpen && (
+              <>
+                {/* Transparent overlay to close on outside click */}
+                <div
+                  onClick={e => { e.stopPropagation(); setFeedbackOpen(false); }}
+                  style={{ position: 'fixed', inset: 0, zIndex: 99 }}
+                />
+                <div style={{
+                  position: 'absolute', bottom: '120%', left: 0,
+                  background: '#fff', border: '1px solid rgba(0,0,0,.12)',
+                  borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,.15)',
+                  zIndex: 100, padding: '6px 4px',
+                  maxHeight: 220, overflowY: 'auto', width: 160,
+                }}>
+                  <div style={{
+                    fontSize: '0.62rem', fontWeight: 700, color: '#9ca3af',
+                    padding: '2px 8px 6px', textTransform: 'uppercase', letterSpacing: '.05em',
+                  }}>Correct emotion</div>
+                  {EMOTION_LABELS.map(emo => (
+                    <button
+                      key={emo}
+                      onClick={e => submitFeedback(emo, e)}
+                      style={{
+                        display: 'block', width: '100%', textAlign: 'left',
+                        background: 'none', border: 'none', cursor: 'pointer',
+                        padding: '5px 10px', fontSize: '0.78rem',
+                        color: emo === dom ? '#0077ff' : '#1c1c2e',
+                        fontWeight: emo === dom ? 700 : 400,
+                        borderRadius: 6,
+                      }}
+                      onMouseEnter={e => e.currentTarget.style.background = '#f3f4f6'}
+                      onMouseLeave={e => e.currentTarget.style.background = 'none'}
+                    >
+                      {emo === dom ? `✓ ${emo}` : emo}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+        {feedbackSent && (
+          <span style={{ fontSize: '0.62rem', color: '#15803d', fontWeight: 600 }}>✓ corrected</span>
+        )}
+
+        {msg.analysis && hovered && !feedbackOpen && (
           <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
         )}
         {!msg.analysis && msg.sender === 'user' && (
