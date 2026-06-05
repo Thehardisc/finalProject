@@ -341,7 +341,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             "action":        "Meta-Learner nuance override applied.",
         }
 
-    logic_map  = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion)
+    logic_map  = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion) if META_LEARNER is not None else {}
 
     logger.debug(
         f"[DIAG-4] pre-log msg={message_id} "

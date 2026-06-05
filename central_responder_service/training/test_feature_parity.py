@@ -127,9 +127,19 @@ def test_cdm_block_zeros_when_wrong_length():
     np.testing.assert_array_equal(fv[39:79], [0.0] * CDM_CTX_DIM)
 
 def test_cdm_block_used_when_correct_length():
+    from shared.constants import CTX_MSG_LENGTH, CTX_LATENCY_MS, CTX_HMM_EMISSION
     ctx = [float(i) / 100 for i in range(CDM_CTX_DIM)]
     fv = build_feature_vector(_model_outputs(), context_vector=ctx).flatten()
-    np.testing.assert_allclose(fv[39:79], ctx, atol=1e-6)
+    cdm_out = fv[39:79]
+    # indices 31, 32, 35 are normalized in build_feature_vector — skip exact match there
+    normalized_idx = {CTX_MSG_LENGTH, CTX_LATENCY_MS, CTX_HMM_EMISSION}
+    for i, (actual, expected) in enumerate(zip(cdm_out, ctx)):
+        if i not in normalized_idx:
+            assert actual == pytest.approx(expected, abs=1e-6), f"CDM index {i} mismatch"
+    # confirm normalized slots are present (non-NaN) and within sane range
+    assert -3.0 <= cdm_out[CTX_MSG_LENGTH]  <= 3.0
+    assert -3.0 <= cdm_out[CTX_LATENCY_MS]  <= 3.0
+    assert -3.0 <= cdm_out[CTX_HMM_EMISSION] <= 3.0
 
 def test_prior_block_zeros_when_missing():
     fv = build_feature_vector(_model_outputs(), trajectory_prior=None).flatten()
