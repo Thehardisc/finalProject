@@ -66,29 +66,18 @@ else
     COMPOSE_CMD="docker compose up -d --build"
 fi
 
-# Setup logging — create timestamped run directory BEFORE launch so we can
-# capture the docker build/up output (pull, build, create, start) as it happens.
+# Setup logging — create timestamped run directory and the live log dir.
+# logs/live/ is bind-mounted into every Python container so services write
+# directly to host files at write time (zero lag, no pipe, no ANSI codes).
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGDIR="logs/run_${TIMESTAMP}"
 mkdir -p "${LOGDIR}"
-STARTUP_LOG="${LOGDIR}/docker_startup.log"
+rm -rf logs/live && mkdir -p logs/live
 
 echo ""
 echo "[Launch] ${COMPOSE_CMD}"
-echo "[Launch] Capturing startup output to ${STARTUP_LOG}"
 echo ""
-# tee so the operator still sees build/startup progress live while we record it.
-# PIPESTATUS preserves compose's exit code through the pipe (tee would mask it).
-$COMPOSE_CMD 2>&1 | tee "${STARTUP_LOG}"
-COMPOSE_RC=${PIPESTATUS[0]}
-if [ "${COMPOSE_RC}" -ne 0 ]; then
-    echo ""
-    echo "   [Fail] docker compose exited with code ${COMPOSE_RC}. See ${STARTUP_LOG}"
-    exit "${COMPOSE_RC}"
-fi
-echo ""
-
-# Write init log: capture the config + launch summary to a file
+# Capture build/start output directly into init.log while showing it live.
 INIT_LOG="${LOGDIR}/init.log"
 {
     echo "=============================================================="
@@ -113,30 +102,63 @@ INIT_LOG="${LOGDIR}/init.log"
     echo "=============================================================="
     echo "[Docker Startup] build / create / start output"
     echo "=============================================================="
-    cat "${STARTUP_LOG}"
-    echo ""
 } > "${INIT_LOG}"
+$COMPOSE_CMD 2>&1 | tee -a "${INIT_LOG}"
+COMPOSE_RC=${PIPESTATUS[0]}
+if [ "${COMPOSE_RC}" -ne 0 ]; then
+    echo ""
+    echo "   [Fail] docker compose exited with code ${COMPOSE_RC}. See ${INIT_LOG}"
+    exit "${COMPOSE_RC}"
+fi
+echo "" | tee -a "${INIT_LOG}"
 
-echo "[Logs] Writing per-service logs to: ${LOGDIR}/"
-echo "[Logs] Init log: ${INIT_LOG}"
+echo "[Logs] Per-service logs (real-time): logs/live/<service>.log"
+echo "[Logs] Run artifacts: ${LOGDIR}/"
 
-# Spawn a background log process for each service into its own file
-# --since prevents old logs from previous runs bleeding into this session
 LAUNCH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-SERVICES=$(docker compose config --services 2>/dev/null)
-for SERVICE in $SERVICES; do
-    docker compose logs -f --since "${LAUNCH_TIME}" "${SERVICE}" > "${LOGDIR}/${SERVICE}.log" 2>&1 &
-done
 
-# Combined log without noisy health-check pings
-docker compose logs -f --since "${LAUNCH_TIME}" 2>&1 | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' > "${LOGDIR}/important.log" 2>&1 &
+# Strip ANSI escape codes (docker compose emits colour/cursor codes even to files)
+_strip_ansi() { sed $'s/\033\\[[0-9;]*[A-Za-z]//g'; }
 
-# Errors-only log — matches actual format: [ERROR   ] [CRITICAL ] plus Traceback/Exception lines
-# The logger outputs "[ERROR   ]" and "[CRITICAL]" with bracket-wrapped padded levels
-docker compose logs -f --since "${LAUNCH_TIME}" 2>&1 | grep -E '\[ERROR\s*\]|\[CRITICAL\]|\[WARNING\s*\]|Traceback|Exception:|FATAL|CRASH|ROLLBACK' | grep -v 'uvicorn.error' > "${LOGDIR}/errors.log" 2>&1 &
+# Per-service logs are written directly by each container via LOG_DIR=/app/logs
+# bound to ./logs/live/ — no watchdog needed, zero lag.
 
-# Full combined log for deep debugging
-docker compose logs -f --since "${LAUNCH_TIME}" > "${LOGDIR}/all.log" 2>&1 &
+# Combined aggregate logs — watchdog pattern for all-in-one views
+(
+    SINCE="${LAUNCH_TIME}"
+    > "${LOGDIR}/important.log"
+    while true; do
+        docker compose logs -f --since "${SINCE}" 2>&1 | _strip_ansi \
+            | grep -v '"GET /health HTTP' | grep -v 'GET /health HTTP' \
+            | grep -v 'OPTIONS /health' | grep -v '"GET / HTTP/1.1" 200' \
+            >> "${LOGDIR}/important.log" || true
+        SINCE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        sleep 2
+    done
+) &
+
+(
+    SINCE="${LAUNCH_TIME}"
+    > "${LOGDIR}/errors.log"
+    while true; do
+        docker compose logs -f --since "${SINCE}" 2>&1 | _strip_ansi \
+            | grep -E '\[ERROR\s*\]|\[CRITICAL\]|\[WARNING\s*\]|Traceback|Exception:|FATAL|CRASH|ROLLBACK' \
+            | grep -v 'uvicorn.error' \
+            >> "${LOGDIR}/errors.log" || true
+        SINCE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        sleep 2
+    done
+) &
+
+(
+    SINCE="${LAUNCH_TIME}"
+    > "${LOGDIR}/all.log"
+    while true; do
+        docker compose logs -f --since "${SINCE}" 2>&1 | _strip_ansi >> "${LOGDIR}/all.log" || true
+        SINCE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        sleep 2
+    done
+) &
 LOGFILE="${LOGDIR}/all.log"
 
 # Wait for containers
@@ -277,17 +299,15 @@ echo "    [Web]  Frontend:     http://localhost:5173"
 echo "    [API]  API:          http://localhost:8001"
 echo "    [In]   Ingestion:    http://localhost:8000"
 echo ""
-echo "    [Logs] Directory:    ${LOGDIR}/"
-echo "    [Log]  Init report:  ${LOGDIR}/init.log              (config + docker startup + health + container logs)"
-echo "    [Log]  Docker boot:  ${LOGDIR}/docker_startup.log     (build / create / start output)"
-echo "    [Log]  Errors only:  ${LOGDIR}/errors.log            (ERROR/WARN/CRITICAL)"
-echo "    [Log]  Brain only:   ${LOGDIR}/important.log         (no health pings)"
-echo "    [Log]  Responder:    ${LOGDIR}/central_responder_service.log"
-echo "    [Log]  Database:     ${LOGDIR}/db.log"
+echo "    [Log]  Per-service (real-time): logs/live/<service>.log"
+echo "    [Log]  Init report:  ${LOGDIR}/init.log"
+echo "    [Log]  Errors only:  ${LOGDIR}/errors.log"
+echo "    [Log]  Important:    ${LOGDIR}/important.log"
 echo "    [Log]  Full dump:    ${LOGDIR}/all.log"
 echo ""
+echo "    Tip: tail -f logs/live/trainer_service.log"
+echo "    Tip: tail -f logs/live/central_responder_service.log"
 echo "    Tip: tail -f ${LOGDIR}/errors.log"
-echo "    Tip: tail -f ${LOGDIR}/important.log"
 echo "=============================================================="
 
 # Append health check results to init.log
@@ -313,7 +333,7 @@ echo "=============================================================="
     echo "   Ingestion : http://localhost:8000"
     echo ""
     echo "[Log Files]"
-    echo "   ${LOGDIR}/docker_startup.log"
+    echo "   logs/live/<service>.log  (real-time, written directly by each service)"
     echo "   ${LOGDIR}/errors.log"
     echo "   ${LOGDIR}/important.log"
     echo "   ${LOGDIR}/all.log"

@@ -10,11 +10,7 @@ frontend_service/dist/
 frontend_service/node_modules/
 
 # ── ML Model artifacts (generated, not source) ─
-central_responder_service/models/*.pkl
-central_responder_service/models/*.json
-central_responder_service/models/*.sha256
-central_responder_service/models/.ready
-!central_responder_service/models/.gitkeep
+.cache/
 
 # ── Runtime logs ──────────────────────────────
 logs/
