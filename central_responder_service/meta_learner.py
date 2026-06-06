@@ -295,8 +295,16 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             logger.warning(f"No model file at '{model_path}'. Fallback mode.")
             return None
 
+        import io
+        import torch
+        class CPU_Unpickler(pickle.Unpickler):
+            def find_class(self, module, name):
+                if module == 'torch.storage' and name == '_load_from_bytes':
+                    return lambda b: torch.load(io.BytesIO(b), map_location='cpu', weights_only=False)
+                return super().find_class(module, name)
+
         with open(model_path, 'rb') as f:
-            model = pickle.load(f)
+            model = CPU_Unpickler(f).load()
 
         if not hasattr(model, 'predict_proba'):
             logger.warning("Loaded object has no predict_proba. Fallback mode.")

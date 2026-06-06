@@ -36,7 +36,7 @@ import time
 import uuid
 import os
 import numpy as np
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Make cdm.py importable from any launch directory (project root or service dir)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -311,6 +311,39 @@ class ContextEngineService:
             logger.error(f"Redis working-memory update failed: {e}", exc_info=True)
             return 0.0
 
+    async def _fetch_lifetime_baseline(self, user_id: str) -> Optional[Dict[str, float]]:
+        """Returns {valence, volatility} from lifetime EMA, or None if no baseline exists yet."""
+        try:
+            data = await self.redis.hgetall(f"user:{user_id}:lifetime_baseline")
+            if not data:
+                return None
+            return {
+                "valence":    float(data.get("valence",    0.0)),
+                "volatility": float(data.get("volatility", 0.0)),
+            }
+        except Exception:
+            return None
+
+    async def _update_lifetime_baseline(
+        self, user_id: str, valence: float, volatility: float
+    ) -> None:
+        """EMA update of the user's lifetime baseline. alpha=0.15 — ~6 msgs to 65% convergence."""
+        key = f"user:{user_id}:lifetime_baseline"
+        try:
+            existing = await self.redis.hgetall(key)
+            alpha = 0.15
+            if existing:
+                new_val = alpha * valence    + (1 - alpha) * float(existing.get("valence",    valence))
+                new_vol = alpha * volatility + (1 - alpha) * float(existing.get("volatility", volatility))
+            else:
+                new_val, new_vol = valence, volatility
+            async with self.redis.pipeline(transaction=False) as pipe:
+                pipe.hset(key, mapping={"valence": str(new_val), "volatility": str(new_vol)})
+                pipe.expire(key, 86400 * 90)
+                await pipe.execute()
+        except Exception as exc:
+            logger.warning("lifetime_baseline_update_failed", extra={"user_id": user_id, "error": str(exc)})
+
     async def _store_embedding(self, key: str, embedding: List[float]):
         """Persist embedding in Redis."""
         try:
@@ -336,10 +369,13 @@ class ContextEngineService:
                 conversation_id, user_id, linguistic_markers, current_embedding, last_emotions
             )
 
-        # Qdrant + working-memory are independent — run in parallel
-        baseline_task = self.calculate_user_baseline(user_id, current_embedding)
-        memory_task   = self.update_working_memory(user_id, current_valence, linguistic_markers)
-        baseline_data, volatility = await asyncio.gather(baseline_task, memory_task)
+        # Qdrant + working-memory + lifetime baseline are independent — run in parallel
+        baseline_task  = self.calculate_user_baseline(user_id, current_embedding)
+        memory_task    = self.update_working_memory(user_id, current_valence, linguistic_markers)
+        lifetime_task  = self._fetch_lifetime_baseline(user_id)
+        baseline_data, volatility, lifetime_bl = await asyncio.gather(
+            baseline_task, memory_task, lifetime_task
+        )
 
         # ── Read conversation hash (written by aggregation_service for T-1) ────
         state = await self.redis.hgetall(f"conversation:{conversation_id}")
@@ -347,8 +383,21 @@ class ContextEngineService:
         # ── Velocity & Acceleration ────────────────────────────────────────────
         hist_raw = await self.redis.lrange(f"conv:{conversation_id}:valence_hist", 0, 2)
         hist = [float(x) for x in hist_raw]
-        velocity     = hist[0] - hist[1] if len(hist) >= 2 else 0.0
-        acceleration = (velocity - (hist[1] - hist[2])) if len(hist) >= 3 else 0.0
+
+        if len(hist) >= 2:
+            velocity     = hist[0] - hist[1]
+            acceleration = (velocity - (hist[1] - hist[2])) if len(hist) >= 3 else 0.0
+        elif len(hist) == 1 and lifetime_bl is not None:
+            # msg 2: warm-start velocity against user's lifetime mean instead of zero
+            velocity     = hist[0] - lifetime_bl["valence"]
+            acceleration = 0.0
+        else:
+            velocity     = 0.0
+            acceleration = 0.0
+
+        # ── Baseline volatility injection for brand-new users ─────────────────
+        if volatility == 0.0 and lifetime_bl is not None:
+            volatility = lifetime_bl["volatility"]
 
         # ── Speaker Divergence ─────────────────────────────────────────────────
         spk_vals = []
@@ -452,7 +501,11 @@ class ContextEngineService:
         ctx[CTX_HIST_NEG]       = baseline_data["historical_neg"]
         ctx[CTX_RESONANCE]      = baseline_data["topic_resonance"]
         ctx[CTX_VOLATILITY]     = volatility
-        ctx[CTX_CURR_VALENCE]   = current_valence
+        # Warm-seed CTX_CURR_VALENCE on the very first message (hist empty + no prior aggregation)
+        _curr_val = current_valence
+        if _curr_val == 0.0 and not hist and lifetime_bl is not None:
+            _curr_val = lifetime_bl["valence"]
+        ctx[CTX_CURR_VALENCE]   = _curr_val
         ctx[CTX_MSG_LENGTH]     = float(linguistic_markers.get("length", 0))
         ctx[CTX_LATENCY_MS]     = float(linguistic_markers.get("latency_ms", 0))
         ctx[CTX_HMM_CONF]       = diag.hmm_confidence
@@ -460,6 +513,9 @@ class ContextEngineService:
         ctx[CTX_HMM_EMISSION]   = diag.hmm_emission_logprob
         ctx[CTX_HMM_NEXT3]      = diag.hmm_top3_next[:3]
         ctx[CTX_INTENT_STAB]    = intent_stability
+        asyncio.create_task(
+            self._update_lifetime_baseline(user_id, current_valence, float(ctx[CTX_VOLATILITY]))
+        )
         return ctx.tolist()
 
     async def _build_continuation_vector(
