@@ -16,7 +16,7 @@ COPY central_responder_service/ /app/central_responder_service/
 # Copy LSTM training pipeline (used by trainer_service to retrain ConversationLSTM)
 COPY conversation_state_learner/ /app/conversation_state_learner/
 
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app:/app/central_responder_service
 ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "central_responder_service/main.py"]

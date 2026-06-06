@@ -8,10 +8,10 @@ echo ==============================================================
 echo.
 
 REM ── Load config from .env ─────────────────────────────────────
-set MAX_EMPATHETIC_SAMPLES_VAL=23000
+set MAX_EMPATHETIC_SAMPLES_VAL=25000
 set MIN_DB_SAMPLES_VAL=50
 set RETRAIN_INTERVAL_VAL=1800
-set ACCURACY_GATE_VAL=0.25
+set ACCURACY_GATE_VAL=0.40
 set LLM_PROVIDER_VAL=RULE_BASED
 set LOG_LEVEL_VAL=INFO
 set RATE_LIMIT_MAX_VAL=60
@@ -19,18 +19,17 @@ set API_KEY_VAL=N/A
 set ANTHROPIC_KEY_VAL=
 
 for /f "usebackq tokens=1,* delims==" %%a in (".env") do (
-    if "%%a"=="MAX_EMPATHETIC_SAMPLES"  set MAX_EMPATHETIC_SAMPLES_VAL=%%b
-    if "%%a"=="MIN_DB_SAMPLES"          set MIN_DB_SAMPLES_VAL=%%b
+    if "%%a"=="MAX_EMPATHETIC_SAMPLES"   set MAX_EMPATHETIC_SAMPLES_VAL=%%b
+    if "%%a"=="MIN_DB_SAMPLES"           set MIN_DB_SAMPLES_VAL=%%b
     if "%%a"=="RETRAIN_INTERVAL_SECONDS" set RETRAIN_INTERVAL_VAL=%%b
-    if "%%a"=="ACCURACY_GATE"           set ACCURACY_GATE_VAL=%%b
-    if "%%a"=="LLM_PROVIDER"            set LLM_PROVIDER_VAL=%%b
-    if "%%a"=="LOG_LEVEL"               set LOG_LEVEL_VAL=%%b
-    if "%%a"=="RATE_LIMIT_MAX"          set RATE_LIMIT_MAX_VAL=%%b
-    if "%%a"=="INTERNAL_API_KEY"        set API_KEY_VAL=%%b
-    if "%%a"=="ANTHROPIC_API_KEY"       set ANTHROPIC_KEY_VAL=%%b
+    if "%%a"=="ACCURACY_GATE"            set ACCURACY_GATE_VAL=%%b
+    if "%%a"=="LLM_PROVIDER"             set LLM_PROVIDER_VAL=%%b
+    if "%%a"=="LOG_LEVEL"                set LOG_LEVEL_VAL=%%b
+    if "%%a"=="RATE_LIMIT_MAX"           set RATE_LIMIT_MAX_VAL=%%b
+    if "%%a"=="INTERNAL_API_KEY"         set API_KEY_VAL=%%b
+    if "%%a"=="ANTHROPIC_API_KEY"        set ANTHROPIC_KEY_VAL=%%b
 )
 
-REM Show whether ANTHROPIC_API_KEY is set (needed for synthetic data generation)
 if "!ANTHROPIC_KEY_VAL!"=="" (
     set ANTHROPIC_STATUS=NOT SET ^(synthetic sentence generation will be skipped^)
 ) else (
@@ -61,17 +60,17 @@ if %ERRORLEVEL% equ 0 (
         if !ERRORLEVEL! equ 0 (
             echo    [OK] Feature-vector parity holds.
         ) else (
-            echo    [FAIL] Feature-vector parity VIOLATION — inference and trainer disagree.
+            echo    [FAIL] Feature-vector parity VIOLATION -- inference and trainer disagree.
             echo           Launch aborted; fix build_feature_vector before starting.
             echo           Details:
             type "%TEMP%\parity_check.log"
             exit /b 1
         )
     ) else (
-        echo    [SKIP] pytest/numpy not installed on host — parity not checked.
+        echo    [SKIP] pytest/numpy not installed on host -- parity not checked.
     )
 ) else (
-    echo    [SKIP] python not on host — parity not checked.
+    echo    [SKIP] python not on host -- parity not checked.
 )
 echo.
 
@@ -87,8 +86,12 @@ if %ERRORLEVEL% equ 0 (
 )
 echo.
 
-REM ── Setup log directory ───────────────────────────────────────
-if not exist logs mkdir logs
+REM ── Setup log directories ─────────────────────────────────────
+REM logs\live\ is bind-mounted into every Python container so services
+REM write directly to host files at write time (zero lag, no pipe).
+REM Wipe it on each run for a clean slate.
+if not exist logs\live mkdir logs\live
+for /f %%f in ('dir /b /a-d logs\live\ 2^>nul') do del /q "logs\live\%%f"
 
 set TIMESTAMP=%date:~-4,4%-%date:~-10,2%-%date:~-7,2%_%time:~0,2%-%time:~3,2%-%time:~6,2%
 set TIMESTAMP=%TIMESTAMP: =0%
@@ -103,7 +106,6 @@ set IMPORTANT_LOG=%LOGDIR%\important.log
 
 REM ── Launch stack, capture startup output ──────────────────────
 echo [Launch] !COMPOSE_CMD!
-echo [Launch] Capturing startup output to %STARTUP_LOG%
 echo.
 %COMPOSE_CMD% > "%STARTUP_LOG%" 2>&1
 type "%STARTUP_LOG%"
@@ -141,28 +143,21 @@ REM ── Write init log header ───────────────�
 ) > "%INIT_LOG%"
 type "%STARTUP_LOG%" >> "%INIT_LOG%"
 
-echo [Logs] Log directory  : %LOGDIR%
-echo [Logs] Init log       : %INIT_LOG%
-echo [Logs] All logs       : %LOGFILE%
-echo [Logs] Errors only    : %ERRORS_LOG%
-echo [Logs] Important      : %IMPORTANT_LOG%
+echo [Logs] Per-service ^(real-time^): logs\live\^<service^>.log
+echo [Logs] Run artifacts: %LOGDIR%\
 
-REM ── Capture current time for --since (PowerShell UTC) ─────────
+REM ── Capture launch time (PowerShell UTC) ──────────────────────
 for /f %%a in ('powershell -NoProfile -Command "[DateTime]::UtcNow.ToString(\"yyyy-MM-ddTHH:mm:ssZ\")"') do set LAUNCH_TIME=%%a
 
-REM ── Spawn per-service log files ───────────────────────────────
-for /f %%s in ('docker compose config --services 2^>nul') do (
-    start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% %%s > %LOGDIR%\%%s.log 2>&1"
-)
+REM ── Combined aggregate log watchers ───────────────────────────
+REM Per-service logs are written directly by each container (LOG_DIR=/app/logs
+REM bind-mounted to logs\live\) -- no per-service watchdog needed here.
 
-REM ── Full combined log ─────────────────────────────────────────
 start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% > %LOGFILE% 2>&1"
 
-REM ── Errors-only log (findstr — no PowerShell required) ────────
-start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% 2>&1 | findstr /i /c:"[ERROR" /c:"[CRITICAL" /c:"[WARNING" /c:"Traceback" /c:"Exception:" /c:"FATAL" /c:"CRASH" > %ERRORS_LOG%"
+start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% 2>&1 | findstr /i /c:\"[ERROR\" /c:\"[CRITICAL\" /c:\"[WARNING\" /c:\"Traceback\" /c:\"Exception:\" /c:\"FATAL\" /c:\"CRASH\" > %ERRORS_LOG%"
 
-REM ── Important log (exclude noisy health pings) ────────────────
-start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% 2>&1 | findstr /v /i /c:"GET /health" /c:"OPTIONS /health" /c:"GET / HTTP/1.1" > %IMPORTANT_LOG%"
+start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% 2>&1 | findstr /v /i /c:\"GET /health\" /c:\"OPTIONS /health\" /c:\"GET / HTTP/1.1\" > %IMPORTANT_LOG%"
 
 REM ── Wait for containers ───────────────────────────────────────
 echo.
@@ -197,6 +192,7 @@ echo.
 echo [Health] Running service health checks...
 set PASS=0
 set FAIL=0
+set FAILED_CHECKS=
 
 REM Check Redis
 docker compose exec -T redis redis-cli ping 2>nul | find "PONG" >nul
@@ -206,6 +202,8 @@ if %ERRORLEVEL% equ 0 (
 ) else (
     echo    [Fail] Redis - not responding
     set /a FAIL+=1
+    set FAILED_CHECKS=!FAILED_CHECKS!   - Redis: ping did not return PONG^
+
 )
 
 REM Check PostgreSQL
@@ -216,6 +214,8 @@ if %ERRORLEVEL% equ 0 (
 ) else (
     echo    [Fail] PostgreSQL - not ready
     set /a FAIL+=1
+    set FAILED_CHECKS=!FAILED_CHECKS!   - PostgreSQL: not accepting connections^
+
 )
 
 REM Check HTTP services
@@ -231,63 +231,76 @@ if %ERRORLEVEL% equ 0 (
 ) else (
     echo    [Fail] Meta-Learner - not loaded ^(check central_responder_service logs^)
     set /a FAIL+=1
+    set FAILED_CHECKS=!FAILED_CHECKS!   - Meta-Learner: 'Running in META-LEARNER mode' not found^
+
 )
 
-REM ── Pipeline test ─────────────────────────────────────────────
+REM ── Pipeline test (10 retries) ────────────────────────────────
 echo.
 echo [Test] Running end-to-end pipeline test...
-for /f "tokens=1,2 delims==" %%A in (.env) do if "%%A"=="INTERNAL_API_KEY" set API_KEY=%%B
+set PIPE_ATTEMPT=0
+set HTTP_CODE=0
 
-set API_TEST_URL=http://localhost:8000/messages
-set PAYLOAD={\"conversation_id\": \"healthcheck\", \"user_id\": \"system\", \"text\": \"I am happy!\"}
+:PIPE_RETRY
+if !PIPE_ATTEMPT! geq 10 goto :PIPE_FAIL
+for /f %%a in ('powershell -NoProfile -command "try { $r = Invoke-WebRequest -Uri \"http://localhost:8000/messages\" -Method Post -ContentType \"application/json\" -Headers @{\"X-API-Key\"=\"!API_KEY_VAL!\"} -Body \"{\\\"conversation_id\\\": \\\"healthcheck\\\", \\\"user_id\\\": \\\"system\\\", \\\"text\\\": \\\"I am happy!\\\"}\" -UseBasicParsing; Write-Output $r.StatusCode } catch { Write-Output 0 }" 2^>nul') do set HTTP_CODE=%%a
+if "!HTTP_CODE!"=="200" goto :PIPE_OK
+ping 127.0.0.1 -n 3 >nul
+set /a PIPE_ATTEMPT+=1
+goto :PIPE_RETRY
 
-for /f %%a in ('powershell -NoProfile -command "try { $r = Invoke-WebRequest -Uri \"%API_TEST_URL%\" -Method Post -ContentType \"application/json\" -Headers @{\"X-API-Key\"=\"%API_KEY%\"} -Body \"%PAYLOAD%\" -UseBasicParsing; Write-Output $r.StatusCode } catch { Write-Output $_.Exception.Response.StatusCode.value__ }" 2^>nul') do set HTTP_CODE=%%a
+:PIPE_OK
+echo    [OK] Pipeline test - message accepted ^(HTTP 200^)
+set /a PASS+=1
+goto :SUMMARY
 
-if "%HTTP_CODE%"=="200" (
-    echo    [OK] Pipeline test - message accepted ^(HTTP 200^)
-    set /a PASS+=1
-) else (
-    echo    [Fail] Pipeline test - failed ^(HTTP %HTTP_CODE%^)
-    set /a FAIL+=1
-)
+:PIPE_FAIL
+echo    [Fail] Pipeline test - failed ^(HTTP !HTTP_CODE!^) after 10 tries
+set /a FAIL+=1
+set FAILED_CHECKS=!FAILED_CHECKS!   - Pipeline test: POST /messages returned HTTP !HTTP_CODE!^
 
 REM ── Summary ───────────────────────────────────────────────────
+:SUMMARY
 echo.
 echo ==============================================================
 if !FAIL! equ 0 (
-    echo    [Yay]  ALL CHECKS PASSED ^(%PASS%/%PASS%^)
+    echo    [Yay]  ALL CHECKS PASSED ^(!PASS!/!PASS!^)
 ) else (
-    echo    [Warn]   %PASS% passed, %FAIL% failed
+    echo    [Warn]   !PASS! passed, !FAIL! failed
+    echo.
+    echo    Failed checks:
+    echo    !FAILED_CHECKS!
 )
 echo ==============================================================
 echo.
-echo    [Web]  Frontend:      http://localhost:5173
-echo    [API]  API:           http://localhost:8001
-echo    [In]   Ingestion:     http://localhost:8000
+echo    [Web]  Frontend:     http://localhost:5173
+echo    [API]  API:          http://localhost:8001
+echo    [In]   Ingestion:    http://localhost:8000
 echo.
-echo    [Logs] Directory:     %LOGDIR%
-echo    [Log]  Init report:   %INIT_LOG%          ^(config + health checks^)
-echo    [Log]  Docker boot:   %STARTUP_LOG%       ^(build / create / start output^)
-echo    [Log]  Errors only:   %ERRORS_LOG%        ^(ERROR/WARN/CRITICAL/Traceback^)
-echo    [Log]  Important:     %IMPORTANT_LOG%     ^(no health pings^)
-echo    [Log]  Full dump:     %LOGFILE%
-echo    [Log]  Per-service:   %LOGDIR%\^<service^>.log
+echo    [Log]  Per-service ^(real-time^): logs\live\^<service^>.log
+echo    [Log]  Init report:  %INIT_LOG%
+echo    [Log]  Errors only:  %ERRORS_LOG%
+echo    [Log]  Important:    %IMPORTANT_LOG%
+echo    [Log]  Full dump:    %LOGFILE%
 echo.
+echo    Tip: type logs\live\trainer_service.log
+echo    Tip: type logs\live\central_responder_service.log
 echo    Tip: type %ERRORS_LOG%
-echo    Tip: type %IMPORTANT_LOG%
 echo ==============================================================
-echo.
 
-REM Append health results to init.log
+REM ── Append health summary to init.log ─────────────────────────
 (
     echo.
     echo [Health Checks]
-    echo    PASS : %PASS%
-    echo    FAIL : %FAIL%
-    if %FAIL% equ 0 (
+    echo    PASS : !PASS!
+    echo    FAIL : !FAIL!
+    if !FAIL! equ 0 (
         echo    Result : ALL CHECKS PASSED
     ) else (
-        echo    Result : %FAIL% check^(s^) FAILED - see all.log for details
+        echo    Result : !FAIL! check^(s^) FAILED
+        echo.
+        echo    Failed checks:
+        echo    !FAILED_CHECKS!
     )
     echo.
     echo [URLs]
@@ -296,33 +309,36 @@ REM Append health results to init.log
     echo    Ingestion : http://localhost:8000
     echo.
     echo [Log Files]
-    echo    %STARTUP_LOG%
-    echo    %LOGDIR%\errors.log
-    echo    %LOGDIR%\important.log
-    echo    %LOGDIR%\all.log
+    echo    logs\live\^<service^>.log  ^(real-time, written directly by each service^)
+    echo    %ERRORS_LOG%
+    echo    %IMPORTANT_LOG%
+    echo    %LOGFILE%
 ) >> "%INIT_LOG%"
 
+echo.
 echo    [Log] Init report saved: %INIT_LOG%
 echo.
 pause
-exit /b %FAIL%
+exit /b !FAIL!
 
 REM ── Helper: HTTP check with retries ───────────────────────────
 :CheckHTTP
-set NAME=%~1
-set URL=%~2
+set CHECK_NAME=%~1
+set CHECK_URL=%~2
 set MAX_RETRIES=10
 set ATTEMPT=0
 
 :CheckHTTPLoop
 if !ATTEMPT! geq !MAX_RETRIES! (
-    echo    [Fail] !NAME! - NOT responding at !URL!
+    echo    [Fail] !CHECK_NAME! - NOT responding at !CHECK_URL!
     set /a FAIL+=1
+    set FAILED_CHECKS=!FAILED_CHECKS!   - !CHECK_NAME!: no response after !MAX_RETRIES! tries^
+
     exit /b
 )
-powershell -NoProfile -command "try { $r = Invoke-WebRequest -Uri '!URL!' -UseBasicParsing; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+powershell -NoProfile -command "try { $r = Invoke-WebRequest -Uri '!CHECK_URL!' -UseBasicParsing; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
 if !ERRORLEVEL! equ 0 (
-    echo    [OK] !NAME! - responding
+    echo    [OK] !CHECK_NAME! - responding
     set /a PASS+=1
     exit /b
 )

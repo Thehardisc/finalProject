@@ -37,17 +37,15 @@ echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
 echo "──────────────────────────────────────────────────────────"
 echo ""
 
-# Feature-vector parity is the #1 invariant (CLAUDE.md): the inference builder and
-# the training builder must produce identical 68-dim vectors. Catch drift here —
-# before spending minutes on a build — but degrade gracefully if the host lacks the
-# Python test deps (the test only needs numpy + pytest, no ML runtime).
+# Feature-vector parity is the #1 invariant (CLAUDE.md): inference and trainer must
+# produce identical 107-dim vectors. Catch drift before spending minutes on a build.
 echo "[Invariant] Checking feature-vector parity (inference vs trainer)..."
 if command -v python3 &> /dev/null && python3 -c "import pytest, numpy" &> /dev/null; then
     if python3 -m pytest central_responder_service/training/test_feature_parity.py -q &> /tmp/parity_check.log; then
         echo "   [OK] Feature-vector parity holds."
     else
         echo "   [FAIL] Feature-vector parity VIOLATION — inference and trainer disagree."
-        echo "          Launch aborted; fix build_feature_vector / build_fv before starting."
+        echo "          Launch aborted; fix build_feature_vector before starting."
         echo "          Details:"; tail -20 /tmp/parity_check.log | sed 's/^/          /'
         exit 1
     fi
@@ -72,7 +70,7 @@ fi
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGDIR="logs/run_${TIMESTAMP}"
 mkdir -p "${LOGDIR}"
-rm -rf logs/live && mkdir -p logs/live
+mkdir -p logs/live && find logs/live -maxdepth 1 -type f -delete
 
 echo ""
 echo "[Launch] ${COMPOSE_CMD}"
