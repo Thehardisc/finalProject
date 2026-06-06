@@ -1,7 +1,0 @@
-{
-  "input_dim": 79,
-  "hidden_dim": 128,
-  "num_layers": 2,
-  "output_dim": 28,
-  "dropout": 0.2
-}

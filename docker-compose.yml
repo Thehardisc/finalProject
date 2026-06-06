@@ -54,6 +54,10 @@ services:
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: ingestion_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   preprocessing_service:
     build:
@@ -72,6 +76,10 @@ services:
       REDIS_PORT: 6379
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: preprocessing_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   vader_service:
     build:
@@ -90,6 +98,10 @@ services:
       REDIS_PORT: 6379
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: vader_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   goemotions_service:
     build:
@@ -108,8 +120,11 @@ services:
       REDIS_PORT: 6379
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: goemotions_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
       - hf_cache:/root/.cache/huggingface
+      - ./logs/live:/app/logs
 
 
   bert_service:
@@ -129,8 +144,11 @@ services:
       REDIS_PORT: 6379
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: bert_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
       - hf_cache:/root/.cache/huggingface
+      - ./logs/live:/app/logs
 
   central_responder_service:
     build:
@@ -155,9 +173,12 @@ services:
       TRAINER_EXTERNAL: "true"
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: central_responder_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - ./central_responder_service/models:/app/models
+      - ./.cache:/app/models
       - hf_cache:/root/.cache/huggingface
+      - ./logs/live:/app/logs
 
   trainer_service:
     build:
@@ -190,10 +211,13 @@ services:
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: trainer_service
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - ./central_responder_service/models:/app/models
+      - ./.cache:/app/models
       - ./conversation_state_learner/training_data:/app/training_data:ro
       - hf_cache:/root/.cache/huggingface
+      - ./logs/live:/app/logs
 
   llm_reasoning_service:
     build:
@@ -213,6 +237,10 @@ services:
       LLM_PROVIDER: ${LLM_PROVIDER:-RULE_BASED}
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: llm_reasoning_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   aggregation_service:
     build:
@@ -232,6 +260,10 @@ services:
       CONVERSATION_IDLE_MINUTES: ${CONVERSATION_IDLE_MINUTES:-30}
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: aggregation_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   persistence_service:
     build:
@@ -253,8 +285,11 @@ services:
       DB_HOST: db
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: persistence_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - ./central_responder_service/models:/app/models:ro
+      - ./.cache:/app/models:ro
+      - ./logs/live:/app/logs
 
   api_service:
     build:
@@ -293,8 +328,11 @@ services:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: api_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - ./central_responder_service/models:/app/models:ro
+      - ./.cache:/app/models:ro
+      - ./logs/live:/app/logs
 
 
   frontend_service:
@@ -332,6 +370,8 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: context_engine_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     depends_on:
       redis:
         condition: service_healthy
@@ -340,7 +380,8 @@ services:
     networks:
       - emotion_net
     volumes:
-      - ./central_responder_service/models:/app/models
+      - ./.cache:/app/models
+      - ./logs/live:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8008/health || exit 1"]
       interval: 10s

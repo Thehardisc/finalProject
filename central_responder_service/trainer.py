@@ -19,10 +19,13 @@ Configuration (env vars, same as v1):
 """
 
 import os
+import re
 import gc
+import sys
 import json
 import time
 import pickle
+import logging
 import datetime
 import statistics
 import threading
@@ -35,6 +38,66 @@ from shared.utils.logger import get_logger
 import redis as redis_sync
 
 logger = get_logger("trainer")
+
+
+# ── HuggingFace / stderr verbose capture ────────────────────────────────────────
+
+def _setup_hf_logging():
+    """Route HuggingFace datasets + transformers logging into our trainer logger."""
+    _ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+
+    class _HFHandler(logging.Handler):
+        def emit(self, record):
+            msg = _ANSI.sub('', self.format(record)).strip()
+            if msg:
+                logger.info(f"[HF] {msg}")
+
+    handler = _HFHandler()
+    handler.setFormatter(logging.Formatter('%(message)s'))
+    for name in ("datasets", "datasets.utils", "datasets.builder",
+                 "datasets.download", "fsspec", "transformers"):
+        lg = logging.getLogger(name)
+        lg.setLevel(logging.INFO)
+        lg.addHandler(handler)
+        lg.propagate = False
+
+
+_setup_hf_logging()
+
+
+class _StderrToLogger:
+    """Context manager: redirect stderr lines to logger.info during downloads."""
+    _ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\r')
+
+    def __init__(self):
+        self._real = None
+        self._buf  = ""
+
+    def write(self, data):
+        self._buf += data
+        # tqdm uses \r to overwrite lines — treat both \r and \n as line ends
+        for chunk in re.split(r'[\r\n]', self._buf):
+            pass  # iterate to last segment
+        lines = re.split(r'[\r\n]', self._buf)
+        self._buf = lines[-1]  # keep incomplete last segment
+        for line in lines[:-1]:
+            line = self._ANSI.sub('', line).strip()
+            if line:
+                logger.info(f"[HF] {line}")
+
+    def flush(self):
+        pass
+
+    def fileno(self):
+        return self._real.fileno()
+
+    def __enter__(self):
+        self._real = sys.stderr
+        sys.stderr  = self
+        return self
+
+    def __exit__(self, *_):
+        sys.stderr = self._real
 
 # ── Database ────────────────────────────────────────────────────────────────────
 DB_USER     = os.getenv("POSTGRES_USER",     "user")
@@ -463,8 +526,8 @@ def train_gating_network(
             scheduler.step()
             epoch_loss += loss.item()
 
-        # ── Validation every 5 epochs ─────────────────────────────────────────
-        if (epoch + 1) % 5 == 0:
+        # ── Validation every epoch ───────────────────────────────────────────
+        if True:
             model.eval()
             with torch.no_grad():
                 logits_v, alpha_v = model(X_v_t)
@@ -732,8 +795,8 @@ def _generate_synthetic_sentences() -> dict:
     return result
 
 
-_GOE_DIRECT_PER_CLASS   = 200    # samples per class from GoEmotions val+test
-_GOE_DIRECT_CACHE_ID    = "goemotions_direct_v1"
+_GOE_DIRECT_PER_CLASS   = 500    # samples per class from GoEmotions train+val+test
+_GOE_DIRECT_CACHE_ID    = "goemotions_direct_v3"
 
 
 def extract_goemotions_direct_features(
@@ -773,14 +836,18 @@ def extract_goemotions_direct_features(
             logger.warning(f"[GoEDirect] Cache load failed: {e} — recomputing.")
 
     logger.info(
-        f"[GoEDirect] Loading GoEmotions val+test (≤{_GOE_DIRECT_PER_CLASS}/class × 28 classes)..."
+        f"[GoEDirect] Loading GoEmotions train+val+test (≤{_GOE_DIRECT_PER_CLASS}/class × 28 classes)..."
     )
     try:
         from datasets import load_dataset
-        ds_val  = load_dataset("google-research-datasets/go_emotions", "simplified",
-                               split="validation")
-        ds_test = load_dataset("google-research-datasets/go_emotions", "simplified",
-                               split="test")
+        with _StderrToLogger():
+            logger.info("[GoEDirect] Downloading split=train...")
+            ds_train = load_dataset("google-research-datasets/go_emotions", "simplified", split="train")
+            logger.info(f"[GoEDirect] train loaded ({len(ds_train)} rows). Downloading split=validation...")
+            ds_val   = load_dataset("google-research-datasets/go_emotions", "simplified", split="validation")
+            logger.info(f"[GoEDirect] validation loaded ({len(ds_val)} rows). Downloading split=test...")
+            ds_test  = load_dataset("google-research-datasets/go_emotions", "simplified", split="test")
+            logger.info(f"[GoEDirect] test loaded ({len(ds_test)} rows).")
     except Exception as e:
         logger.warning(f"[GoEDirect] Could not load GoEmotions dataset: {e} — skipping.")
         return empty, [], []
@@ -788,9 +855,9 @@ def extract_goemotions_direct_features(
     # Dataset label names (28 GoEmotions classes, may differ in order from EMOTION_LABELS)
     id2label = ds_val.features["labels"].feature.int2str
 
-    # Collect balanced samples per class
+    # Collect balanced samples per class — train first (most examples), then val+test
     per_class: dict = {lbl: [] for lbl in EMOTION_LABELS}
-    for row in list(ds_val) + list(ds_test):
+    for row in list(ds_train) + list(ds_val) + list(ds_test):
         if len(row["labels"]) != 1:
             continue   # skip multi-label rows
         label_str = id2label(row["labels"][0])
@@ -819,8 +886,8 @@ def extract_goemotions_direct_features(
         except Exception:
             vader_outs.append({})
 
-    bert_outs = _run_batch(bert_analyzer, all_texts) if callable(bert_analyzer) else [{} for _ in all_texts]
-    goe_outs  = _run_batch(goe_analyzer,  all_texts) if callable(goe_analyzer)  else [{} for _ in all_texts]
+    bert_outs = _run_batch(bert_analyzer, all_texts, label="GoEDirect/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
+    goe_outs  = _run_batch(goe_analyzer,  all_texts, label="GoEDirect/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
 
     elapsed = time.time() - t0
     logger.info(
@@ -950,8 +1017,8 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer) -> tupl
             vader_results.append({})
 
     # BERT and GoEmotions: batched
-    bert_results = _run_batch(bert_analyzer, all_texts) if callable(bert_analyzer) else [{} for _ in all_texts]
-    goe_results  = _run_batch(goe_analyzer,  all_texts) if callable(goe_analyzer)  else [{} for _ in all_texts]
+    bert_results = _run_batch(bert_analyzer, all_texts, label="Synthetic/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
+    goe_results  = _run_batch(goe_analyzer,  all_texts, label="Synthetic/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
 
     elapsed_nlp = time.time() - t0
     rate = total_sentences / elapsed_nlp if elapsed_nlp > 0 else 0
@@ -1262,6 +1329,7 @@ def extract_meld_features(
     cache_key  = f"meld_ctx_v1_{max_utterances}_{FEATURE_DIM}"
     empty      = np.empty((0, FEATURE_DIM), dtype=np.float32)
 
+    logger.info(f"[MELD] Starting feature extraction (max_utterances={max_utterances})...")
     if cache_path.exists():
         try:
             with open(cache_path, "rb") as f:
@@ -1290,11 +1358,47 @@ def extract_meld_features(
             raw_rows = []
 
     if not raw_rows:
+        # Download MELD train CSV directly — far faster than load_dataset which
+        # regenerates from audio/video source files at ~1.5 rows/s (34 min for 3K rows).
+        import urllib.request
+        import zipfile
+        import csv
+        import io
+        CSV_URLS = [
+            # GitHub raw — original MELD repo
+            "https://raw.githubusercontent.com/declare-lab/MELD/master/data/MELD/train_sent_emo.csv",
+            # HuggingFace data dir alternatives
+            "https://huggingface.co/datasets/declare-lab/MELD/resolve/main/data/train_sent_emo.csv",
+            "https://huggingface.co/datasets/declare-lab/MELD/resolve/main/train_sent_emo.csv",
+        ]
+        csv_bytes = None
+        for url in CSV_URLS:
+            try:
+                logger.info(f"[MELD] Trying CSV download: {url}")
+                with urllib.request.urlopen(url, timeout=120) as resp:
+                    size_mb = int(resp.headers.get("Content-Length", 0)) / 1e6
+                    logger.info(f"[MELD] Downloading ({size_mb:.1f} MB)...")
+                    csv_bytes = resp.read()
+                logger.info(f"[MELD] Download complete ({len(csv_bytes)/1e6:.1f} MB).")
+                break
+            except Exception as e:
+                logger.warning(f"[MELD] {url} failed: {e}")
+
+        if not csv_bytes:
+            logger.warning("[MELD] All CSV URLs failed — skipping MELD.")
+            return empty, [], []
+
         try:
-            from datasets import load_dataset
-            slice_size = min(max_utterances * 2, 3000)
-            meld_ds = load_dataset("declare-lab/MELD", split=f"train[:{slice_size}]")
-            for row in meld_ds:
+            # Handle zip or plain CSV
+            if csv_bytes[:2] == b'PK':
+                with zipfile.ZipFile(io.BytesIO(csv_bytes)) as zf:
+                    csv_name = next(n for n in zf.namelist() if n.endswith(".csv"))
+                    text_data = zf.read(csv_name).decode("utf-8")
+            else:
+                text_data = csv_bytes.decode("utf-8")
+
+            reader = csv.DictReader(io.StringIO(text_data))
+            for row in reader:
                 raw_rows.append((
                     str(row.get("Dialogue_ID", "")),
                     int(row.get("Utterance_ID", 0)),
@@ -1302,10 +1406,14 @@ def extract_meld_features(
                     str(row.get("Emotion",      "neutral")).lower(),
                     str(row.get("Speaker",      "")).strip(),
                 ))
-            del meld_ds
-            gc.collect()
+            logger.info(f"[MELD] Parsed {len(raw_rows)} raw rows from CSV.")
+            save_data = [{"d": d, "u": u, "t": t, "e": e, "s": s}
+                         for d, u, t, e, s in raw_rows]
+            with open(raw_json_path, "w") as f:
+                json.dump(save_data, f)
+            logger.info(f"[MELD] Raw cache saved → {raw_json_path}")
         except Exception as e:
-            logger.warning(f"[MELD] load failed: {e} — skipping.")
+            logger.warning(f"[MELD] CSV parse failed: {e} — skipping.")
             return empty, [], []
 
     # Group and sort by dialogue
@@ -1326,15 +1434,19 @@ def extract_meld_features(
     logger.info(f"[MELD] {len(all_rows)} utterances across {len(dialogues)} dialogues. Running batched NLP...")
     t0 = time.time()
 
+    total_texts = len(all_texts)
     vader_outs = []
-    for text in all_texts:
+    _chk = {int(total_texts * p) for p in (0.25, 0.50, 0.75)}
+    for i, text in enumerate(all_texts):
         try:
             vader_outs.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
         except Exception:
             vader_outs.append({})
+        if i + 1 in _chk:
+            logger.info(f"  [MELD/VADER] {i+1}/{total_texts} ({int((i+1)/total_texts*100)}%)")
 
-    bert_outs = _run_batch(bert_analyzer, all_texts) if callable(bert_analyzer) else [{} for _ in all_texts]
-    goe_outs  = _run_batch(goe_analyzer,  all_texts) if callable(goe_analyzer)  else [{} for _ in all_texts]
+    bert_outs = _run_batch(bert_analyzer, all_texts, label="MELD/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
+    goe_outs  = _run_batch(goe_analyzer,  all_texts, label="MELD/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
 
     logger.info(f"[MELD] NLP done in {time.time()-t0:.0f}s. Building CDM vectors from conversation history...")
 
@@ -1343,10 +1455,14 @@ def extract_meld_features(
     conv_history: dict = {}   # dialogue_id → list of history dicts
 
     features, labels, has_cdm_list = [], [], []
+    _cdm_total = len(all_rows)
+    _cdm_chk = {int(_cdm_total * p) for p in (0.25, 0.50, 0.75)}
 
-    for (did, uid, text, meld_label, speaker), vader_out, bert_out, goe_out in zip(
+    for _cdm_i, ((did, uid, text, meld_label, speaker), vader_out, bert_out, goe_out) in enumerate(zip(
         all_rows, vader_outs, bert_outs, goe_outs
-    ):
+    )):
+        if _cdm_i + 1 in _cdm_chk:
+            logger.info(f"  [MELD/CDM] {_cdm_i+1}/{_cdm_total} ({int((_cdm_i+1)/_cdm_total*100)}%) — {len(features)} vectors built so far")
         if not text:
             continue
 
@@ -1481,10 +1597,12 @@ def _run(model, text: str) -> dict:
         return {}
 
 
-def _run_batch(model, texts: list, batch_size: int = 32) -> list:
+def _run_batch(model, texts: list, batch_size: int = 32, label: str = "") -> list:
     """Run a HuggingFace pipeline on a list of texts in batches. Returns one dict per text."""
     results = []
-    for i in range(0, len(texts), batch_size):
+    total = len(texts)
+    checkpoints = {int(total * p) for p in (0.25, 0.50, 0.75)} if total > 100 else set()
+    for i in range(0, total, batch_size):
         chunk = [t[:512] for t in texts[i:i + batch_size]]
         try:
             out = model(chunk)
@@ -1492,6 +1610,12 @@ def _run_batch(model, texts: list, batch_size: int = 32) -> list:
                 results.append({r['label']: r['score'] for r in item})
         except Exception:
             results.extend([{} for _ in chunk])
+        done = len(results)
+        if any(done >= cp for cp in list(checkpoints)):
+            pct = int(done / total * 100)
+            tag = f"[{label}] " if label else ""
+            logger.info(f"  {tag}NLP progress: {done}/{total} ({pct}%)")
+            checkpoints = {cp for cp in checkpoints if cp > done}
     return results
 
 
@@ -1620,14 +1744,6 @@ def run_one_cycle(reload_callback=None) -> None:
 
     is_bootstrap = not MODEL_PATH.exists()
 
-    # MELD pre-download is disabled: the full declare-lab/MELD Arrow file loads into RAM
-    # before slicing, which OOMs alongside BERT+GoEmotions in a constrained container.
-    # Re-enable when running on a host with >6 GB Docker memory or after adding a
-    # HuggingFace cache volume mount so the dataset is never re-downloaded from scratch.
-    # MELD_RAW_PATH   = MODEL_PATH.parent / "meld_raw_cache.json"
-    # MELD_CACHE_PATH = MODEL_PATH.parent / "meld_features_cache.pkl"
-    # if is_bootstrap and not MELD_CACHE_PATH.exists() and not MELD_RAW_PATH.exists():
-    #     _download_meld_raw(MELD_RAW_PATH, max_rows=3000)
 
     device_int = 0 if torch.cuda.is_available() else -1
     vader, bert, goe = _get_analyzers(device_int)
@@ -1718,17 +1834,63 @@ def run_one_cycle(reload_callback=None) -> None:
 
         # ── GoEmotions direct (NLP-aligned) augmentation ─────────────────────
         # Teaches the meta-learner to trust NLP models on clear-cut single sentences.
+        # Split 70/15/15: train gets 3× oversample; val+test get GoEmotions representation
+        # so the final per-class metrics cover all 28 classes (not just ED classes).
+        from sklearn.model_selection import train_test_split as _tts
         X_goe_d, y_goe_d, gs_goe_d = extract_goemotions_direct_features(_va, _ba, _ga)
         n_goe_d = 0
+        n_goe_val = 0
+        n_goe_test = 0
         if len(X_goe_d) > 0:
-            # Oversample 3× so GoEmotions-aligned signal competes with ED volume
-            n_goe_d    = len(X_goe_d) * 3
-            X_tr       = list(X_tr) + list(X_goe_d) * 3
-            y_tr       = y_tr + y_goe_d * 3
-            gs_tr      = gs_tr + gs_goe_d * 3
+            X_goe_arr = np.array(X_goe_d, dtype=np.float32)
+            # 70% train, 30% holdout — then split holdout 50/50 into val/test
+            X_g_tr, X_g_hold, y_g_tr, y_g_hold = _tts(
+                X_goe_arr, y_goe_d, test_size=0.30, random_state=42, stratify=y_goe_d
+            )
+            X_g_val, X_g_te, y_g_val, y_g_te = _tts(
+                X_g_hold, y_g_hold, test_size=0.50, random_state=42, stratify=y_g_hold
+            )
+
+            # Log per-class split breakdown
+            from collections import Counter as _Counter
+            c_tr  = _Counter(y_g_tr)
+            c_val = _Counter(y_g_val)
+            c_te  = _Counter(y_g_te)
+            _w = 62
+            logger.info(f"+{'-' * (_w - 2)}+")
+            logger.info(f"|{'  GoEmotions-Direct Split (70 / 15 / 15) ':─^{_w - 2}}|")
+            logger.info(f"+{'-' * (_w - 2)}+")
+            logger.info(f"|  {'Emotion':<18}  {'Train':>6}  {'×3':>6}  {'Val':>5}  {'Test':>5}  |")
+            logger.info(f"+{'-' * (_w - 2)}+")
+            for lbl in EMOTION_LABELS:
+                tr_n  = c_tr.get(lbl, 0)
+                val_n = c_val.get(lbl, 0)
+                te_n  = c_te.get(lbl, 0)
+                tag   = "  " if (tr_n > 0 and val_n > 0 and te_n > 0) else "⚠ "
+                logger.info(f"|  {tag}{lbl:<18}  {tr_n:>6}  {tr_n*3:>6}  {val_n:>5}  {te_n:>5}  |")
+            logger.info(f"+{'-' * (_w - 2)}+")
+            logger.info(f"|  {'TOTAL':<18}  {len(y_g_tr):>6}  {len(y_g_tr)*3:>6}  {len(y_g_val):>5}  {len(y_g_te):>5}  |")
+            logger.info(f"+{'-' * (_w - 2)}+")
+
+            # Train: 3× oversample to compete with ED volume
+            n_goe_d    = len(X_g_tr) * 3
+            X_tr       = list(X_tr) + list(X_g_tr) * 3
+            y_tr       = y_tr + list(y_g_tr) * 3
+            gs_tr      = gs_tr + gs_goe_d[:len(X_g_tr)] * 3   # approx — gs unused after feature-build
             has_cdm_tr = has_cdm_tr + [False] * n_goe_d
+
+            # Val + test: add GoEmotions samples so all 28 classes appear in evaluation
+            n_goe_val  = len(X_g_val)
+            n_goe_test = len(X_g_te)
+            X_v  = list(X_v)  + list(X_g_val)
+            y_v  = list(y_v)  + list(y_g_val)
+            X_te = list(X_te) + list(X_g_te)
+            y_te = list(y_te) + list(y_g_te)
+
             logger.info(
-                f"Bootstrap: +{n_goe_d} GoEmotions-direct samples (3× oversample) → {len(X_tr)} total train"
+                f"Bootstrap: GoEmotions-direct split → "
+                f"train +{n_goe_d} (3×) / val +{n_goe_val} / test +{n_goe_test} "
+                f"→ {len(X_tr)} total train"
             )
 
         # ── MELD (real multi-turn context) augmentation ───────────────────────
@@ -1736,8 +1898,7 @@ def run_one_cycle(reload_callback=None) -> None:
         # utterance's CDM vector is built from the actual preceding messages.
         # has_cdm=True for these samples — the context path gets real gradient
         # signal for the first time (not synthetic noise or all-zeros).
-        # MELD disabled — see comment above re: OOM on constrained containers.
-        X_meld, y_meld, has_cdm_meld = np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+        X_meld, y_meld, has_cdm_meld = extract_meld_features(_va, _ba, _ga)
         n_meld = 0
         n_meld_ctx = 0
         if len(X_meld) > 0:
@@ -1753,9 +1914,11 @@ def run_one_cycle(reload_callback=None) -> None:
             )
 
         dataset_composition = {
-            "EmpatheticDialogues": n_ed,
-            "Synthetic (5 classes)": n_syn,
-            "GoEmotions-direct (3×)": n_goe_d,
+            "EmpatheticDialogues (train)": n_ed,
+            "Synthetic (train, 5 classes)": n_syn,
+            f"GoEmotions-direct (train 3×)": n_goe_d,
+            f"GoEmotions-direct (val)": n_goe_val,
+            f"GoEmotions-direct (test)": n_goe_test,
             f"MELD ({n_meld_ctx} w/ real ctx)": n_meld,
         }
 
@@ -1793,6 +1956,14 @@ def run_one_cycle(reload_callback=None) -> None:
     del vader, bert, goe
     gc.collect()
     logger.info("Transient analysers purged.")
+
+    # ── Dataset composition summary (shown BEFORE training starts) ────────────
+    comp_rows = {src: cnt for src, cnt in dataset_composition.items() if cnt > 0}
+    comp_rows["─── Totals ───"] = ""
+    comp_rows["  Train samples"] = len(X_tr)
+    comp_rows["  Val samples  "] = len(X_v)
+    comp_rows["  Test samples "] = len(X_te)
+    logger.log_stats("Dataset Composition (before training)", comp_rows)
 
     # ── Filters ────────────────────────────────────────────────────────────────
     dist_before = Counter(y_tr).most_common(5)
