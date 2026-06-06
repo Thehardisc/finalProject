@@ -104,9 +104,13 @@ def _run(model, text: str) -> dict:
 
 def _run_batch(model, texts: list, batch_size: int = 32, label: str = "") -> list:
     """Run a HuggingFace pipeline on a list of texts in batches. Returns one dict per text."""
+    import time as _time
     results = []
     total = len(texts)
-    checkpoints = {int(total * p) for p in (0.25, 0.50, 0.75)} if total > 100 else set()
+    t0 = _time.time()
+    last_logged = 0
+    tag = f"[{label}] " if label else ""
+    logger.info(f"  {tag}Starting NLP batch — {total} texts, batch_size={batch_size}")
     for i in range(0, total, batch_size):
         chunk = [t[:512] for t in texts[i:i + batch_size]]
         try:
@@ -116,11 +120,28 @@ def _run_batch(model, texts: list, batch_size: int = 32, label: str = "") -> lis
         except Exception:
             results.extend([{} for _ in chunk])
         done = len(results)
-        if any(done >= cp for cp in list(checkpoints)):
+        if done - last_logged >= 100 or done == total:
+            elapsed = _time.time() - t0
+            speed = done / elapsed if elapsed > 0 else 0
+            remaining = total - done
+            eta_sec = remaining / speed if speed > 0 else 0
+            if eta_sec >= 60:
+                eta_str = f"{int(eta_sec // 60)}m {int(eta_sec % 60)}s"
+            else:
+                eta_str = f"{eta_sec:.1f}s"
             pct = int(done / total * 100)
-            tag = f"[{label}] " if label else ""
-            logger.info(f"  {tag}NLP progress: {done}/{total} ({pct}%)")
-            checkpoints = {cp for cp in checkpoints if cp > done}
+            logger.info(
+                f"  {tag}NLP progress: {done}/{total} ({pct}%)  "
+                f"{speed:.1f} samples/s  ETA={eta_str}"
+            )
+            last_logged = done
+    elapsed_total = _time.time() - t0
+    speed_total = total / elapsed_total if elapsed_total > 0 else 0
+    if elapsed_total >= 60:
+        elapsed_str = f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s"
+    else:
+        elapsed_str = f"{elapsed_total:.1f}s"
+    logger.info(f"  {tag}NLP complete — {total} texts in {elapsed_str} ({speed_total:.1f} samples/s)")
     return results
 
 

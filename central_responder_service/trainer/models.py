@@ -2,6 +2,8 @@
 trainer/models.py — PyTorch GatingEnsembleNet training loop.
 """
 
+from contextlib import nullcontext
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -81,11 +83,14 @@ def train_gating_network(
     cw_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
 
     # ── DataLoader ────────────────────────────────────────────────────────────
+    use_gpu   = device in ("cuda", "mps") or (isinstance(device, int) and device >= 0)
+    pin_mem   = device == "cuda"          # pin_memory only helps CUDA, not MPS/CPU
     ds     = TensorDataset(
         torch.tensor(X_tr_s, dtype=torch.float32),
         torch.tensor(y_tr_idx, dtype=torch.long),
     )
-    loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=False)
+    loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=False,
+                        pin_memory=pin_mem)
 
     # ── Model + optimiser ─────────────────────────────────────────────────────
     model = GatingEnsembleNet(n_classes=len(classes), d=D_MODEL, dropout=DROPOUT).to(device)
@@ -122,8 +127,20 @@ def train_gating_network(
     best_state    = None
     no_improve    = 0
 
+    # AMP scaler — active only on CUDA (MPS has native float16 issues; CPU skips it)
+    use_amp    = device == "cuda"
+    scaler_amp = torch.cuda.amp.GradScaler() if use_amp else None
+    amp_ctx    = torch.cuda.amp.autocast if use_amp else nullcontext
+    logger.info(f"  [Trainer] AMP (mixed precision): {'enabled' if use_amp else 'disabled'}")
+
     # ── Training loop ─────────────────────────────────────────────────────────
+    import time as _time
+    train_start = _time.time()
+    n_train_samples = len(y_tr_idx)
+    epoch_times = []   # wall-clock seconds per completed epoch
+
     for epoch in range(n_epochs):
+        epoch_start = _time.time()
         model.train()
         epoch_loss = 0.0
 
@@ -131,31 +148,42 @@ def train_gating_network(
             xb, yb = xb.to(device), yb.to(device)
             optimizer.zero_grad()
 
-            logits, alpha = model(xb)
-            ce_loss    = criterion(logits, yb)
+            with amp_ctx():
+                logits, alpha = model(xb)
+                ce_loss    = criterion(logits, yb)
 
-            # Load-balance: penalise deviation of mean gate weights from uniform.
-            alpha_mean   = alpha.mean(dim=0)                         # [4]
-            balance_loss = ((alpha_mean - uniform_gate) ** 2).sum()
+                # Load-balance: penalise deviation of mean gate weights from uniform.
+                alpha_mean   = alpha.mean(dim=0)                         # [4]
+                balance_loss = ((alpha_mean - uniform_gate) ** 2).sum()
 
-            # NLP anchor: when GoEmotions is highly confident, steer logits toward
-            # its top prediction.
-            goe_raw            = xb[:, 11:ML_DIM]                            # [B, 28]
-            goe_conf, goe_ridx = goe_raw.max(dim=1)                          # [B]
-            goe_cidx           = goe_to_class_idx[goe_ridx]                  # [B] class indices
-            anchor_mask        = (goe_conf > nlp_anchor_thresh) & (goe_cidx >= 0)
-            anchor_loss = (
-                F.cross_entropy(logits[anchor_mask], goe_cidx[anchor_mask])
-                if anchor_mask.any() else torch.tensor(0.0, device=device)
-            )
+                # NLP anchor: when GoEmotions is highly confident, steer logits toward
+                # its top prediction.
+                goe_raw            = xb[:, 11:ML_DIM]                            # [B, 28]
+                goe_conf, goe_ridx = goe_raw.max(dim=1)                          # [B]
+                goe_cidx           = goe_to_class_idx[goe_ridx]                  # [B] class indices
+                anchor_mask        = (goe_conf > nlp_anchor_thresh) & (goe_cidx >= 0)
+                anchor_loss = (
+                    F.cross_entropy(logits[anchor_mask], goe_cidx[anchor_mask])
+                    if anchor_mask.any() else torch.tensor(0.0, device=device)
+                )
 
-            loss = ce_loss + load_balance_coeff * balance_loss + nlp_anchor_coeff * anchor_loss
+                loss = ce_loss + load_balance_coeff * balance_loss + nlp_anchor_coeff * anchor_loss
 
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
+            if use_amp:
+                scaler_amp.scale(loss).backward()
+                scaler_amp.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler_amp.step(optimizer)
+                scaler_amp.update()
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
             scheduler.step()
             epoch_loss += loss.item()
+
+        epoch_elapsed = _time.time() - epoch_start
+        epoch_times.append(epoch_elapsed)
 
         # ── Validation every epoch ───────────────────────────────────────────
         if True:
@@ -168,10 +196,29 @@ def train_gating_network(
             alpha_mean_ = alpha_v.mean(dim=0).cpu().numpy()
             avg_loss    = epoch_loss / len(loader)
             ctx_str = f" ctx:{alpha_mean_[3]:.3f}]" if len(alpha_mean_) > 3 else "]"
+
+            # Speed & ETA calculation
+            samples_per_sec = n_train_samples / epoch_elapsed if epoch_elapsed > 0 else 0
+            avg_epoch_time  = sum(epoch_times) / len(epoch_times)
+            remaining       = n_epochs - (epoch + 1)
+            eta_sec         = avg_epoch_time * remaining
+            # Format ETA as human-readable
+            if eta_sec >= 60:
+                eta_str = f"{int(eta_sec // 60)}m {int(eta_sec % 60)}s"
+            else:
+                eta_str = f"{eta_sec:.1f}s"
+            total_elapsed = _time.time() - train_start
+            if total_elapsed >= 60:
+                elapsed_str = f"{int(total_elapsed // 60)}m {int(total_elapsed % 60)}s"
+            else:
+                elapsed_str = f"{total_elapsed:.1f}s"
+
             logger.info(
                 f"  [Epoch {epoch+1:3d}/{n_epochs}]  "
                 f"loss={avg_loss:.4f}  val_F1={val_f1:.4f}  "
-                f"α=[vader:{alpha_mean_[0]:.3f} bert:{alpha_mean_[1]:.3f} goe:{alpha_mean_[2]:.3f}{ctx_str}"
+                f"α=[vader:{alpha_mean_[0]:.3f} bert:{alpha_mean_[1]:.3f} goe:{alpha_mean_[2]:.3f}{ctx_str}  "
+                f"⏱ {epoch_elapsed:.2f}s ({samples_per_sec:.0f} samples/s)  "
+                f"elapsed={elapsed_str}  ETA={eta_str}"
             )
 
             if val_f1 > best_f1:
@@ -183,6 +230,21 @@ def train_gating_network(
                 if no_improve >= patience:
                     logger.info(f"  [EarlyStopping] No improvement for {patience} checks.")
                     break
+
+    # ── Training summary ─────────────────────────────────────────────────────
+    total_train_time = _time.time() - train_start
+    completed_epochs = len(epoch_times)
+    avg_epoch_sec    = sum(epoch_times) / completed_epochs if completed_epochs else 0
+    total_samples    = n_train_samples * completed_epochs
+    overall_sps      = total_samples / total_train_time if total_train_time > 0 else 0
+    if total_train_time >= 60:
+        total_str = f"{int(total_train_time // 60)}m {int(total_train_time % 60)}s"
+    else:
+        total_str = f"{total_train_time:.1f}s"
+    logger.info(
+        f"  [Trainer] Training complete — {completed_epochs} epochs in {total_str}  "
+        f"avg={avg_epoch_sec:.2f}s/epoch  throughput={overall_sps:.0f} samples/s"
+    )
 
     if best_state is not None:
         model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
