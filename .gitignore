@@ -1,30 +1,44 @@
-# ── Dependencies ──────────────────────────────
-node_modules/
+# ── Python ─────────────────────────────────────
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.egg-info/
 .pytest_cache/
-venv
+.mypy_cache/
+htmlcov/
+coverage.xml
+venv/
+.venv/
 
-# ── Build artifacts ───────────────────────────
+# ── Node / Frontend ────────────────────────────
+node_modules/
 frontend_service/dist/
 frontend_service/node_modules/
 
-# ── ML Model artifacts (generated, not source) ─
+# ── ML model artifacts (generated, not source) ─
 .cache/
+*.pkl
+*.pt
+*.safetensors
 
-# ── Runtime logs ──────────────────────────────
+# ── Runtime logs ───────────────────────────────
 logs/
 output.txt
 output_utf8.txt
 
-# ── Secrets — never commit these ──────────────
+# ── Secrets — never commit these ───────────────
 .env
 .env.*
 !.env.example
 
-# ── IDE / OS ──────────────────────────────────
+# ── IDE / OS ───────────────────────────────────
 .DS_Store
+**/.DS_Store
 .vscode/
 .idea/
 *.swp
-CLAUDE.md
+*.swo
+
+# ── Claude Code local state ────────────────────
+.claude/

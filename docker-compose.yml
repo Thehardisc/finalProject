@@ -184,7 +184,7 @@ services:
     build:
       context: .
       dockerfile: central_responder_service/Dockerfile
-    command: ["python", "central_responder_service/trainer.py"]
+    command: ["python", "-m", "trainer"]
     depends_on:
       redis:
         condition: service_healthy
