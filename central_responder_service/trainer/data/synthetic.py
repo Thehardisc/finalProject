@@ -15,7 +15,7 @@ from shared.constants import (
 )
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
-from trainer.utils import _run_batch, _vader
+from trainer.utils import _run_batch, _run_parallel_batches, _vader
 
 logger = get_logger("trainer")
 
@@ -351,15 +351,21 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
 
     all_texts = [t for _, t in ordered_pairs]
 
-    vader_results = []
-    for text in all_texts:
-        try:
-            vader_results.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
-        except Exception:
-            vader_results.append({})
-
-    bert_results = _run_batch(bert_analyzer, all_texts, batch_size=batch_size, label="Synthetic/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
-    goe_results  = _run_batch(goe_analyzer,  all_texts, batch_size=batch_size, label="Synthetic/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
+    if callable(bert_analyzer) and callable(goe_analyzer):
+        vader_results, bert_results, goe_results = _run_parallel_batches(
+            bert_analyzer, goe_analyzer, all_texts,
+            vader_analyzer=vader_analyzer,
+            batch_size=batch_size, label_prefix="Synthetic",
+        )
+    else:
+        vader_results = []
+        for text in all_texts:
+            try:
+                vader_results.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
+            except Exception:
+                vader_results.append({})
+        bert_results = _run_batch(bert_analyzer, all_texts, batch_size=batch_size, label="Synthetic/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
+        goe_results  = _run_batch(goe_analyzer,  all_texts, batch_size=batch_size, label="Synthetic/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
 
     elapsed_nlp = time.time() - t0
     rate = total_sentences / elapsed_nlp if elapsed_nlp > 0 else 0

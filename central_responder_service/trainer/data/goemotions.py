@@ -12,7 +12,7 @@ import numpy as np
 from shared.constants import EMOTION_LABELS, FEATURE_DIM
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
-from trainer.utils import _run_batch, _vader
+from trainer.utils import _run_batch, _run_parallel_batches, _vader
 
 logger = get_logger("trainer")
 
@@ -104,14 +104,20 @@ def extract_goemotions_direct_features(
     t0 = time.time()
 
     vader_outs = []
-    for text in all_texts:
-        try:
-            vader_outs.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
-        except Exception:
-            vader_outs.append({})
-
-    bert_outs = _run_batch(bert_analyzer, all_texts, batch_size=batch_size, label="GoEDirect/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
-    goe_outs  = _run_batch(goe_analyzer,  all_texts, batch_size=batch_size, label="GoEDirect/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
+    if callable(bert_analyzer) and callable(goe_analyzer):
+        vader_outs, bert_outs, goe_outs = _run_parallel_batches(
+            bert_analyzer, goe_analyzer, all_texts,
+            vader_analyzer=vader_analyzer,
+            batch_size=batch_size, label_prefix="GoEDirect",
+        )
+    else:
+        for text in all_texts:
+            try:
+                vader_outs.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
+            except Exception:
+                vader_outs.append({})
+        bert_outs = _run_batch(bert_analyzer, all_texts, batch_size=batch_size, label="GoEDirect/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
+        goe_outs  = _run_batch(goe_analyzer,  all_texts, batch_size=batch_size, label="GoEDirect/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
 
     elapsed = time.time() - t0
     logger.info(

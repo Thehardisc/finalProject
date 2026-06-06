@@ -145,6 +145,125 @@ def _run_batch(model, texts: list, batch_size: int = 32, label: str = "") -> lis
     return results
 
 
+def _run_parallel_batches(
+    bert_model, goe_model, texts: list,
+    vader_analyzer=None,
+    batch_size: int = 32, label_prefix: str = "",
+) -> tuple:
+    """
+    Run BERT and GoEmotions concurrently using threads, with per-100-sample
+    progress logging from each model. VADER runs inline first (it's rule-based
+    and finishes in <1s).
+
+    HuggingFace pipelines release the GIL during the C++/CUDA forward pass,
+    so threading gives near-perfect overlap on CPU and partial overlap on GPU.
+
+    Returns:
+        If vader_analyzer is provided: (vader_results, bert_results, goe_results)
+        Otherwise: (bert_results, goe_results)
+    """
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    total = len(texts)
+
+    # ── VADER: run inline (rule-based, <1s for 20k texts) ─────────────────
+    vader_results = None
+    if vader_analyzer:
+        t_v = _time.time()
+        vader_results = []
+        for t in texts:
+            try:
+                vader_results.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, t).items()})
+            except Exception:
+                vader_results.append({})
+        v_elapsed = _time.time() - t_v
+        v_speed = total / v_elapsed if v_elapsed > 0 else 0
+        logger.info(
+            f"  [{label_prefix}/VADER] Done — {total} texts in {v_elapsed:.1f}s "
+            f"({v_speed:.0f} samples/s)"
+        )
+
+    # ── BERT + GoEmotions: run in parallel with progress logging ──────────
+    logger.info(
+        f"  [{label_prefix}] Running BERT + GoEmotions in parallel — "
+        f"{total} texts, batch_size={batch_size}"
+    )
+    t0 = _time.time()
+
+    def _run_hf(model, label):
+        results = []
+        last_logged = 0
+        t_start = _time.time()
+        for i in range(0, total, batch_size):
+            chunk = [t[:512] for t in texts[i:i + batch_size]]
+            try:
+                out = model(chunk)
+                for item in out:
+                    results.append({r['label']: r['score'] for r in item})
+            except Exception:
+                results.extend([{} for _ in chunk])
+            done = len(results)
+            if done - last_logged >= 100:
+                elapsed = _time.time() - t_start
+                speed = done / elapsed if elapsed > 0 else 0
+                remaining = total - done
+                eta_sec = remaining / speed if speed > 0 else 0
+                if eta_sec >= 60:
+                    eta_str = f"{int(eta_sec // 60)}m {int(eta_sec % 60)}s"
+                else:
+                    eta_str = f"{eta_sec:.1f}s"
+                pct = int(done / total * 100)
+                logger.info(
+                    f"  [{label}] {done}/{total} ({pct}%)  "
+                    f"{speed:.1f} samples/s  ETA={eta_str}"
+                )
+                last_logged = done
+        return label, results
+
+    bert_label = f"{label_prefix}/BERT" if label_prefix else "BERT"
+    goe_label  = f"{label_prefix}/GoE"  if label_prefix else "GoE"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {
+            pool.submit(_run_hf, bert_model, bert_label): bert_label,
+            pool.submit(_run_hf, goe_model, goe_label): goe_label,
+        }
+
+        bert_results = None
+        goe_results  = None
+        for future in as_completed(futures):
+            label, results = future.result()
+            elapsed = _time.time() - t0
+            speed = total / elapsed if elapsed > 0 else 0
+            if elapsed >= 60:
+                elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
+            else:
+                elapsed_str = f"{elapsed:.1f}s"
+            logger.info(
+                f"  [{label}] ✓ Finished — {total} texts in {elapsed_str} "
+                f"({speed:.1f} samples/s)"
+            )
+            if label == bert_label:
+                bert_results = results
+            else:
+                goe_results = results
+
+    total_elapsed = _time.time() - t0
+    if total_elapsed >= 60:
+        total_str = f"{int(total_elapsed // 60)}m {int(total_elapsed % 60)}s"
+    else:
+        total_str = f"{total_elapsed:.1f}s"
+    logger.info(
+        f"  [{label_prefix}] Parallel NLP complete — {total} texts × 2 models "
+        f"in {total_str} (wall-clock)"
+    )
+
+    if vader_analyzer:
+        return vader_results, bert_results, goe_results
+    return bert_results, goe_results
+
+
 # ── Data filtering ──────────────────────────────────────────────────────────────
 
 def filter_outliers(X: list, y: list, goe_list: list, has_cdm: list = None):

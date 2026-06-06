@@ -13,7 +13,7 @@ from shared.constants import (
 )
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
-from trainer.utils import _run_batch, _vader
+from trainer.utils import _run_batch, _run_parallel_batches, _vader
 from trainer.data.synthetic import build_synthetic_context_vector
 
 logger = get_logger("trainer")
@@ -149,11 +149,13 @@ def extract_empathetic_dialogues_features(
     if not texts:
         return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
 
-    # Pass 2: batch NLP inference (the expensive step)
+    # Pass 2: batch NLP inference (VADER + BERT + GoE all run in parallel)
     t0 = time.time()
-    vader_outs = [{f"vader_{k}": v for k, v in _vader(vader_analyzer, t).items()} for t in texts]
-    bert_outs  = _run_batch(bert_analyzer, texts, batch_size=batch_size, label=f"Empathetic/{split}/BERT")
-    goe_outs   = _run_batch(goe_analyzer,  texts, batch_size=batch_size, label=f"Empathetic/{split}/GoE")
+    vader_outs, bert_outs, goe_outs = _run_parallel_batches(
+        bert_analyzer, goe_analyzer, texts,
+        vader_analyzer=vader_analyzer,
+        batch_size=batch_size, label_prefix=f"Empathetic/{split}",
+    )
 
     # Pass 3: assemble feature vectors (cheap — no model calls)
     features, labels, gs_list = [], [], []
