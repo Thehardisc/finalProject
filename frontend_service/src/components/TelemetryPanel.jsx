@@ -19,7 +19,7 @@ const PARTIAL_MAP = {
   go_emotions:'goemotions',
 };
 
-export default function TelemetryPanel({ processing, lastAnalysis, partialModels = new Set() }) {
+export default function TelemetryPanel({ processing, lastAnalysis, partialModels = new Set(), dark = false }) {
   const [tab, setTab] = useState('pipeline'); // 'pipeline' | 'cdm'
 
   const d       = lastAnalysis?.data;
@@ -57,7 +57,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
       {/* ── Header ── */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 700, fontSize: '0.82rem', color: '#1c1c2e' }}>Pipeline Telemetry</span>
+          <span style={{ fontWeight: 700, fontSize: '0.82rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>Pipeline Telemetry</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{
               display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
@@ -108,8 +108,8 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
               const { color } = stage;
               return (
                 <div key={stage.key} style={{
-                  background: active ? `rgba(${color},.07)` : '#fafafa',
-                  border: `1px solid ${active ? `rgba(${color},.22)` : done ? `rgba(${color},.15)` : 'rgba(0,0,0,.06)'}`,
+                  background: active ? `rgba(${color},.07)` : (dark ? '#1a1a28' : '#fafafa'),
+                  border: `1px solid ${active ? `rgba(${color},.22)` : done ? `rgba(${color},.15)` : (dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.06)')}`,
                   borderRadius: 9, padding: '8px 11px',
                   transition: 'background .2s, border-color .2s',
                 }}>
@@ -122,7 +122,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
                         animation: active ? 'tp-pulse .65s ease-in-out infinite' : 'none',
                         transition: 'background .15s',
                       }} />
-                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: active ? `rgb(${color})` : '#374151' }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: active ? `rgb(${color})` : (dark ? '#c0c0c0' : '#374151') }}>
                         {stage.label}
                       </span>
                     </div>
@@ -135,7 +135,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
                       </span>
                     )}
                   </div>
-                  <div style={{ height: 3, borderRadius: 2, background: 'rgba(0,0,0,.07)', overflow: 'hidden' }}>
+                  <div style={{ height: 3, borderRadius: 2, background: dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.07)', overflow: 'hidden' }}>
                     <div style={{
                       height: '100%',
                       width: active ? '65%' : done ? '100%' : '0%',
@@ -153,8 +153,8 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
           {/* Logic Map (real data) */}
           {d && Object.keys(logMap).length > 0 && (
             <div style={{
-              background: domRgb ? `rgba(${domRgb},.05)` : '#f9fafb',
-              border: `1px solid ${domRgb ? `rgba(${domRgb},.15)` : 'rgba(0,0,0,.07)'}`,
+              background: domRgb ? `rgba(${domRgb},.05)` : (dark ? '#1a1a28' : '#f9fafb'),
+              border: `1px solid ${domRgb ? `rgba(${domRgb},.15)` : (dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.07)')}`,
               borderRadius: 10, padding: '11px 13px', marginBottom: 14,
             }}>
               <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 9 }}>

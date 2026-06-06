@@ -795,29 +795,29 @@ export default function IGDashboard({
               <button key={conv.conversation_id}
                 onClick={() => { onSelectConversation(conv.conversation_id); setShowProfileMenu(false); }}
                 style={{
-                  width: '100%', background: isActive ? '#f0f6ff' : 'none',
+                  width: '100%', background: isActive ? (dark ? 'rgba(0,119,255,0.12)' : '#f0f6ff') : 'none',
                   border: 'none', cursor: 'pointer',
                   display: 'flex', alignItems: 'center', gap: 12,
                   padding: '10px 16px', transition: 'background .12s', textAlign: 'left',
                   borderLeft: isActive ? '3px solid #0077ff' : '3px solid transparent',
                 }}
-                onMouseOver={e => { if (!isActive) e.currentTarget.style.background = '#f8f9fa'; }}
+                onMouseOver={e => { if (!isActive) e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.05)' : '#f8f9fa'; }}
                 onMouseOut={e => { if (!isActive) e.currentTarget.style.background = 'none'; }}
               >
                 <Avatar name={label} size={52} rgb={rgb} online={conv.type !== 'group' && onlineUsers.has(conv.other_user_id)} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.93rem', color: '#1c1c2e' }}>{label}</span>
+                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.93rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{label}</span>
                       {conv.type === 'group' && (
-                        <span style={{ fontSize: '0.65rem', background: '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6, letterSpacing: '.04em' }}>
+                        <span style={{ fontSize: '0.65rem', background: dark ? 'rgba(0,119,255,0.15)' : '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6, letterSpacing: '.04em' }}>
                           GROUP · {conv.member_count || 0}
                         </span>
                       )}
                     </div>
                     <span style={{ fontSize: '0.72rem', color: '#9ca3af', flexShrink: 0 }}>{timeAgo(conv.last_message_time || conv.conversation_id)}</span>
                   </div>
-                  <div style={{ fontSize: '0.82rem', color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
+                  <div style={{ fontSize: '0.82rem', color: dark ? '#8b8fa3' : '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
                     {typeof lastMsg === 'string' ? lastMsg : '…'}
                   </div>
                   {conv.dominant_emotion && (
@@ -833,7 +833,7 @@ export default function IGDashboard({
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 6 }}>
+        <div style={{ padding: '12px 16px', borderTop: dark ? '1px solid #2a2a35' : '1px solid #f0f0f0', display: 'flex', gap: 6 }}>
           <button onClick={() => setShowCompose(true)} style={{
             flex: 1, background: '#0077ff', color: '#fff', border: 'none',
             borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem',
@@ -847,18 +847,18 @@ export default function IGDashboard({
             New Message
           </button>
           <button onClick={() => setShowGroupModal(true)}
-            style={{ background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
+            style={{ background: dark ? '#222230' : '#f3f4f6', color: dark ? '#c0c0c0' : '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
             title="New Group Chat"
-            onMouseOver={e => e.currentTarget.style.background = '#e5e7eb'}
-            onMouseOut={e => e.currentTarget.style.background = '#f3f4f6'}
+            onMouseOver={e => e.currentTarget.style.background = dark ? '#2d2d3e' : '#e5e7eb'}
+            onMouseOut={e => e.currentTarget.style.background = dark ? '#222230' : '#f3f4f6'}
           >
             👥
           </button>
           <button onClick={onGoToAnalytics}
-            style={{ background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
+            style={{ background: dark ? '#222230' : '#f3f4f6', color: dark ? '#c0c0c0' : '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
             title="View Insights"
-            onMouseOver={e => e.currentTarget.style.background = '#e5e7eb'}
-            onMouseOut={e => e.currentTarget.style.background = '#f3f4f6'}
+            onMouseOver={e => e.currentTarget.style.background = dark ? '#2d2d3e' : '#e5e7eb'}
+            onMouseOut={e => e.currentTarget.style.background = dark ? '#222230' : '#f3f4f6'}
           >
             ◎
           </button>
@@ -869,10 +869,10 @@ export default function IGDashboard({
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {!activeConversationId ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-            <div style={{ width: 96, height: 96, borderRadius: '50%', border: '3px solid #1c1c2e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.6rem' }}>💬</div>
+            <div style={{ width: 96, height: 96, borderRadius: '50%', border: dark ? '3px solid #555' : '3px solid #1c1c2e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.6rem' }}>💬</div>
             <div style={{ textAlign: 'center' }}>
-              <h2 style={{ margin: '0 0 6px', fontWeight: 700, fontSize: '1.2rem', color: '#1c1c2e' }}>Your Messages</h2>
-              <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>Emotion-aware private messaging — select a conversation to begin.</p>
+              <h2 style={{ margin: '0 0 6px', fontWeight: 700, fontSize: '1.2rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>Your Messages</h2>
+              <p style={{ margin: 0, color: dark ? '#8b8fa3' : '#6b7280', fontSize: '0.9rem' }}>Emotion-aware private messaging — select a conversation to begin.</p>
             </div>
             <button onClick={() => setShowCompose(true)} style={{ background: '#0077ff', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 28px', cursor: 'pointer', fontWeight: 700, fontSize: '0.93rem', boxShadow: '0 4px 16px rgba(0,119,255,.25)' }}>
               Send message
@@ -950,8 +950,8 @@ export default function IGDashboard({
                 )}
 
                 <button onClick={onGoToAnalytics} title="View Insights"
-                  style={{ background: 'none', border: 'none', borderRadius: 10, width: 38, height: 38, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#1c1c2e', transition: 'background .12s' }}
-                  onMouseOver={e => e.currentTarget.style.background = '#f3f4f6'}
+                  style={{ background: 'none', border: 'none', borderRadius: 10, width: 38, height: 38, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: dark ? '#c0c0c0' : '#1c1c2e', transition: 'background .12s' }}
+                  onMouseOver={e => e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.05)' : '#f3f4f6'}
                   onMouseOut={e => e.currentTarget.style.background = 'none'}
                 >
                   <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
@@ -961,8 +961,8 @@ export default function IGDashboard({
 
             {/* Member panel for groups */}
             {isGroup && memberPanelOpen && (
-              <div style={{ borderBottom: '1px solid #efefef', padding: '12px 20px', background: '#fafafa', maxHeight: 220, overflowY: 'auto' }}>
-                <div style={{ fontWeight: 600, fontSize: '0.82rem', color: '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>
+              <div style={{ borderBottom: dark ? '1px solid #2a2a35' : '1px solid #efefef', padding: '12px 20px', background: dark ? '#1a1a28' : '#fafafa', maxHeight: 220, overflowY: 'auto' }}>
+                <div style={{ fontWeight: 600, fontSize: '0.82rem', color: dark ? '#8b8fa3' : '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>
                   Members ({activeConv?.member_count || 0})
                 </div>
                 {(activeConv?.members || []).map(m => {
@@ -971,12 +971,12 @@ export default function IGDashboard({
                   return (
                     <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
                       <Avatar name={m.display_name} size={28} rgb="0,119,255" online={onlineUsers.has(m.user_id)} />
-                      <span style={{ flex: 1, fontSize: '0.88rem', color: '#1c1c2e' }}>{m.display_name}{isMe ? ' (you)' : ''}</span>
-                      {isOwner && <span style={{ fontSize: '0.65rem', background: '#fef3c7', color: '#d97706', padding: '1px 6px', borderRadius: 6, fontWeight: 700 }}>★ Creator</span>}
+                      <span style={{ flex: 1, fontSize: '0.88rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{m.display_name}{isMe ? ' (you)' : ''}</span>
+                      {isOwner && <span style={{ fontSize: '0.65rem', background: dark ? 'rgba(217,119,6,0.15)' : '#fef3c7', color: '#d97706', padding: '1px 6px', borderRadius: 6, fontWeight: 700 }}>★ Creator</span>}
                       {isCreator && !isMe && (
                         <button onClick={() => handleRemoveMember(m.user_id)}
                           style={{ background: 'none', border: '1px solid #fca5a5', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', fontSize: '0.72rem', color: '#ef4444', transition: 'background .12s' }}
-                          onMouseOver={e => e.currentTarget.style.background = '#fff5f5'}
+                          onMouseOver={e => e.currentTarget.style.background = dark ? 'rgba(239,68,68,0.1)' : '#fff5f5'}
                           onMouseOut={e => e.currentTarget.style.background = 'none'}
                         >Remove</button>
                       )}
@@ -985,7 +985,7 @@ export default function IGDashboard({
                 })}
 
                 {isCreator && (
-                  <div style={{ marginTop: 10, borderTop: '1px solid #efefef', paddingTop: 10 }}>
+                  <div style={{ marginTop: 10, borderTop: dark ? '1px solid #2a2a35' : '1px solid #efefef', paddingTop: 10 }}>
                     <div style={{ fontWeight: 600, fontSize: '0.78rem', color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>Add member</div>
                     {globalUsers
                       .filter(u => !(activeConv?.members || []).some(m => m.user_id === u.user_id))
@@ -996,7 +996,7 @@ export default function IGDashboard({
                           onMouseOut={e => e.currentTarget.style.opacity = '1'}
                         >
                           <Avatar name={u.display_name} size={22} rgb="0,119,255" />
-                          <span style={{ fontSize: '0.85rem', color: '#374151' }}>{u.display_name}</span>
+                          <span style={{ fontSize: '0.85rem', color: dark ? '#c0c0c0' : '#374151' }}>{u.display_name}</span>
                           <span style={{ fontSize: '0.72rem', color: '#0077ff', marginLeft: 'auto', fontWeight: 600 }}>+ Add</span>
                         </button>
                       ))
@@ -1013,7 +1013,7 @@ export default function IGDashboard({
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 12, color: '#9ca3af' }}>
                   <Avatar name={activeLabel} size={72} rgb={activeRgb} />
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#1c1c2e', marginBottom: 4 }}>{activeLabel}</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: dark ? '#e0e0e0' : '#1c1c2e', marginBottom: 4 }}>{activeLabel}</div>
                     <div style={{ fontSize: '0.83rem', color: '#9ca3af' }}>Say hi and start the conversation ✌️</div>
                   </div>
                 </div>
@@ -1071,13 +1071,13 @@ export default function IGDashboard({
             </div>
 
             {/* Input bar */}
-            <div style={{ padding: '12px 20px', borderTop: '1px solid #efefef', background: '#ffffff' }}>
+            <div style={{ padding: '12px 20px', borderTop: dark ? '1px solid #2a2a35' : '1px solid #efefef', background: dark ? '#12121c' : '#ffffff' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10,
-                border: `1.5px solid ${dominantRgb ? `rgba(${dominantRgb},.35)` : 'rgba(0,0,0,.14)'}`,
+                border: `1.5px solid ${dominantRgb ? `rgba(${dominantRgb},.35)` : (dark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.14)')}`,
                 borderRadius: 28, padding: '4px 6px 4px 16px',
                 transition: 'border-color .4s',
-                background: dominantRgb ? `rgba(${dominantRgb},.04)` : 'transparent',
+                background: dominantRgb ? `rgba(${dominantRgb},${dark ? '.10' : '.04'})` : (dark ? 'rgba(255,255,255,0.04)' : 'transparent'),
               }}>
                 <button style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 0, flexShrink: 0 }}>😊</button>
                 <textarea
@@ -1086,7 +1086,7 @@ export default function IGDashboard({
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
-                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.95rem', color: '#1c1c2e', fontFamily: 'inherit', padding: '9px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.95rem', color: dark ? '#e0e0e0' : '#1c1c2e', fontFamily: 'inherit', padding: '9px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
                 />
                 {inputValue.trim() ? (
                   <button onClick={onSend} style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem', color: '#0077ff', padding: '6px 10px', flexShrink: 0 }}>Send</button>
@@ -1106,9 +1106,9 @@ export default function IGDashboard({
       {/* ── Right Panel: Telemetry / Analysis Drawer ──────────────────── */}
       {rightPanelOpen && (
         <div style={{
-          width: 280, borderLeft: '1px solid #efefef',
+          width: 280, borderLeft: dark ? '1px solid #2a2a35' : '1px solid #efefef',
           display: 'flex', flexDirection: 'column',
-          background: '#ffffff', flexShrink: 0,
+          background: dark ? '#181824' : '#ffffff', flexShrink: 0,
           animation: 'igModalIn .2s ease both',
         }}>
           {selectedMsg ? (
@@ -1116,12 +1116,14 @@ export default function IGDashboard({
               msg={selectedMsg}
               onClose={() => setSelectedMsg(null)}
               onFeedbackSent={() => {}}
+              dark={dark}
             />
           ) : (
             <TelemetryPanel
               processing={processing}
               lastAnalysis={currentAnalysis}
               partialModels={partialModels}
+              dark={dark}
             />
           )}
         </div>

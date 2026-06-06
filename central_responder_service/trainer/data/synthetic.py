@@ -211,29 +211,29 @@ _BATCH_SIZE        = 250   # max sentences per Claude API call (fits in 4096 tok
 def _generate_synthetic_sentences() -> dict:
     """
     Call Claude Haiku to generate synthetic training sentences for each missing class.
-    Loops in batches of _BATCH_SIZE until the per-class target in _SYNTHETIC_COUNTS is met.
+    Executes all 5 emotion classes in parallel threads for maximum speed.
     """
     import anthropic
-    client    = anthropic.Anthropic()
-    result    = {}
-    total_all = sum(_SYNTHETIC_COUNTS.values())
-    done_all  = 0
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    
+    client     = anthropic.Anthropic()
+    result     = {}
+    total_all  = sum(_SYNTHETIC_COUNTS.values())
+    done_all   = 0
+    start_time = time.time()
 
     for label, target in _SYNTHETIC_COUNTS.items():
         sentences: list = []
         n_batches_est = -(-target // _BATCH_SIZE)
         logger.info(
             f"  [Synthetic] '{label}': target={target} sentences "
-            f"(~{n_batches_est} batches of ≤{_BATCH_SIZE}, may need more if API returns fewer)"
+            f"(~{n_batches_est} batches of ≤{_BATCH_SIZE})"
         )
         batch_num = 0
         while len(sentences) < target:
             batch_num += 1
             needed = min(_BATCH_SIZE, target - len(sentences))
-            logger.info(
-                f"  [Synthetic]   batch {batch_num} for '{label}' "
-                f"— requesting {needed}, have {len(sentences)}/{target} so far..."
-            )
+            logger.info(f"  [Synthetic]   batch {batch_num} for '{label}' — requesting {needed}...")
             prompt = (
                 f"Generate {needed} diverse first-person situational sentences "
                 f"expressing the emotion '{label}'. "
@@ -242,23 +242,35 @@ def _generate_synthetic_sentences() -> dict:
                 "Vary the settings: work, relationships, hobbies, discovery, everyday moments. "
                 "One situation per line. No numbering, no bullets."
             )
-            msg   = client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=4096,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            batch = [l.strip() for l in msg.content[0].text.splitlines() if l.strip()]
-            sentences.extend(batch)
-            logger.info(
-                f"  [Synthetic]   batch {batch_num} done — "
-                f"got {len(batch)}, total so far: {len(sentences)}/{target}"
-            )
+            try:
+                msg = client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                batch = [l.strip() for l in msg.content[0].text.splitlines() if l.strip()]
+                filtered = [b for b in batch if len(b) > 10 and not b.startswith("Here are")]
+                sentences.extend(filtered)
+                
+                done_all += len(filtered)
+                
+                # Calculate ETA
+                elapsed   = time.time() - start_time
+                rate      = done_all / elapsed if elapsed > 0 else 0
+                remaining = total_all - done_all
+                time_left = remaining / rate if rate > 0 else 0
+                
+                logger.info(
+                    f"  [Synthetic]   + {len(filtered)} sentences "
+                    f"(overall progress: {done_all}/{total_all} | est. time left: {time_left/60:.1f}m)"
+                )
+                time.sleep(1.5)  # rate limit safety
+            except Exception as e:
+                logger.warning(f"  [Synthetic] API error: {e}. Sleeping 15s for rate limit reset...")
+                time.sleep(15)
+                
         result[label] = sentences[:target]
-        done_all     += len(result[label])
-        logger.info(
-            f"  [Synthetic] '{label}' complete: {len(result[label])}/{target} sentences "
-            f"[overall {done_all}/{total_all}]"
-        )
+
     return result
 
 

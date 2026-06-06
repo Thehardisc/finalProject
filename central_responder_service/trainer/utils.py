@@ -60,16 +60,6 @@ def print_report(
 def _get_analyzers(device):
     logger.info("Loading analyzers transiently into RAM...")
 
-    cpu_count = os.cpu_count() or 4
-    on_gpu = device != -1  # CUDA (int >= 0) or MPS (str)
-    if on_gpu:
-        n_threads = max(2, cpu_count // 4)
-        logger.info(f"GPU device — setting {n_threads} PyTorch CPU threads ({cpu_count} cores available)")
-    else:
-        n_threads = max(1, cpu_count - 1)
-        logger.info(f"CPU-only — setting {n_threads} PyTorch threads ({cpu_count} cores available)")
-    torch.set_num_threads(n_threads)
-
     from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
     from transformers import pipeline as hf_pipeline
 
@@ -114,10 +104,13 @@ def _run_batch(model, texts: list, batch_size: int = 32, label: str = "") -> lis
     for i in range(0, total, batch_size):
         chunk = [t[:512] for t in texts[i:i + batch_size]]
         try:
-            out = model(chunk)
+            # Crucial: HF pipeline needs batch_size passed explicitly, otherwise it defaults to 1
+            # and processes the list sequentially even if it's running on a GPU.
+            out = model(chunk, batch_size=batch_size)
             for item in out:
                 results.append({r['label']: r['score'] for r in item})
-        except Exception:
+        except Exception as e:
+            logger.warning(f"  {tag}Batch failed: {e}")
             results.extend([{} for _ in chunk])
         done = len(results)
         if done - last_logged >= 100 or done == total:
@@ -198,10 +191,12 @@ def _run_parallel_batches(
         for i in range(0, total, batch_size):
             chunk = [t[:512] for t in texts[i:i + batch_size]]
             try:
-                out = model(chunk)
+                # Crucial: HF pipeline needs batch_size explicitly passed!
+                out = model(chunk, batch_size=batch_size)
                 for item in out:
                     results.append({r['label']: r['score'] for r in item})
-            except Exception:
+            except Exception as e:
+                logger.warning(f"  [{label}] Batch failed: {e}")
                 results.extend([{} for _ in chunk])
             done = len(results)
             if done - last_logged >= 100:
@@ -219,35 +214,41 @@ def _run_parallel_batches(
                     f"{speed:.1f} samples/s  ETA={eta_str}"
                 )
                 last_logged = done
+                
+                # Prevent Apple Unified Memory from fragmenting and swapping to disk
+                if getattr(model.model, "device", None) is not None and model.model.device.type == "mps":
+                    import torch
+                    torch.mps.empty_cache()
+                    
         return label, results
 
     bert_label = f"{label_prefix}/BERT" if label_prefix else "BERT"
     goe_label  = f"{label_prefix}/GoE"  if label_prefix else "GoE"
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {
-            pool.submit(_run_hf, bert_model, bert_label): bert_label,
-            pool.submit(_run_hf, goe_model, goe_label): goe_label,
-        }
+    bert_results = None
+    goe_results  = None
 
-        bert_results = None
-        goe_results  = None
-        for future in as_completed(futures):
-            label, results = future.result()
-            elapsed = _time.time() - t0
-            speed = total / elapsed if elapsed > 0 else 0
-            if elapsed >= 60:
-                elapsed_str = f"{int(elapsed // 60)}m {int(elapsed % 60)}s"
-            else:
-                elapsed_str = f"{elapsed:.1f}s"
-            logger.info(
-                f"  [{label}] ✓ Finished — {total} texts in {elapsed_str} "
-                f"({speed:.1f} samples/s)"
-            )
-            if label == bert_label:
-                bert_results = results
-            else:
-                goe_results = results
+    # Check if GPU is used. If not CPU, run sequentially to avoid stream contention.
+    is_gpu = bert_model.device.type != "cpu"
+
+    if is_gpu:
+        logger.info(f"  [{label_prefix}] GPU detected — Running sequentially to prevent lock contention.")
+        _, bert_results = _run_hf(bert_model, bert_label)
+        _, goe_results  = _run_hf(goe_model, goe_label)
+    else:
+        logger.info(f"  [{label_prefix}] CPU detected — Running concurrently via threads.")
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {
+                pool.submit(_run_hf, bert_model, bert_label): bert_label,
+                pool.submit(_run_hf, goe_model, goe_label): goe_label,
+            }
+            for future in as_completed(futures):
+                label, results = future.result()
+                if label == bert_label:
+                    bert_results = results
+                else:
+                    goe_results = results
 
     total_elapsed = _time.time() - t0
     if total_elapsed >= 60:

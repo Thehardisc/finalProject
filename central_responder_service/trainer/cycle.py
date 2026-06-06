@@ -75,18 +75,39 @@ def run_one_cycle(reload_callback=None) -> None:
 
     is_bootstrap = not MODEL_PATH.exists()
 
+    cpu_count = os.cpu_count() or 4
+
     if torch.cuda.is_available():
         device = 0
         nlp_batch_size = 128
         logger.info("Training device: CUDA GPU — NLP batch_size=128")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = "mps"
-        nlp_batch_size = 64
-        logger.info("Training device: Apple MPS — NLP batch_size=64")
+        # Apple Unified Memory silently swaps to SSD if we exceed physical RAM.
+        # Batch size 1024 uses >12GB of RAM for attention matrices alone, causing swapping!
+        # We cap it at 128 to stay entirely within fast physical RAM.
+        nlp_batch_size = 128
+        logger.info(f"Training device: Apple MPS ({cpu_count} CPU cores) — NLP batch_size=128")
+
+
+
     else:
         device = -1
-        nlp_batch_size = 32
-        logger.info(f"Training device: CPU ({os.cpu_count()} cores) — NLP batch_size=32")
+        nlp_batch_size = 64
+        logger.info(f"Training device: CPU ({cpu_count} cores) — NLP batch_size=64")
+
+    # Maximize CPU utilization for NLP inference.
+    # BERT and GoEmotions run in parallel threads; PyTorch releases the GIL during
+    # C++ ops, so each model can use its own thread pool. Setting num_threads high
+    # lets each model saturate the CPU during its forward pass.
+    torch.set_num_threads(max(4, cpu_count - 1))
+    torch.set_num_interop_threads(2)  # 2 models run in parallel
+    os.environ["TOKENIZERS_PARALLELISM"] = "true"
+    logger.info(
+        f"  PyTorch: {torch.get_num_threads()} intra-op threads, "
+        f"{torch.get_num_interop_threads()} inter-op threads, "
+        f"tokenizer parallelism=ON"
+    )
 
     t_analyzers = time.time()
     vader, bert, goe = _get_analyzers(device)
@@ -121,7 +142,10 @@ def run_one_cycle(reload_callback=None) -> None:
             except Exception as e:
                 logger.warning(f"Cache load failed: {e}. Rebuilding.")
                 CACHE_PATH.unlink(missing_ok=True)
-                del vader, bert, goe
+                try:
+                    del vader, bert, goe
+                except UnboundLocalError:
+                    pass
                 gc.collect()
                 return run_one_cycle(reload_callback)
         else:
