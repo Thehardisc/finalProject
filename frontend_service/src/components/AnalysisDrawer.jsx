@@ -79,7 +79,7 @@ function Gauge({ label, value, lo, hi, color }) {
   );
 }
 
-export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
+export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = false }) {
   const [selected, setSelected] = useState('');
   const [sent, setSent]         = useState(false);
   const [loading, setLoading]   = useState(false);
@@ -115,21 +115,21 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 
       {/* ── Header (sticky) ── */}
       <div style={{
-        padding: '14px 14px 10px', borderBottom: '1px solid rgba(0,0,0,.07)',
+        padding: '14px 14px 10px', borderBottom: dark ? '1px solid rgba(255,255,255,.07)' : '1px solid rgba(0,0,0,.07)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, background: '#fff', zIndex: 5,
+        position: 'sticky', top: 0, background: dark ? '#181824' : '#fff', zIndex: 5,
       }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#1c1c2e' }}>ML Analysis</div>
+          <div style={{ fontWeight: 700, fontSize: '0.82rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>ML Analysis</div>
           <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 2 }}>
             {String(data.id).startsWith('demo') ? 'demo sample' : `msg:${String(data.id).substring(0, 8)}…`}
           </div>
         </div>
         <button onClick={onClose} style={{
-          background: '#f3f4f6', border: 'none', borderRadius: '50%',
+          background: dark ? '#2a2a3a' : '#f3f4f6', border: 'none', borderRadius: '50%',
           width: 26, height: 26, cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#6b7280', fontSize: '0.85rem', flexShrink: 0,
+          color: dark ? '#c0c0c0' : '#6b7280', fontSize: '0.85rem', flexShrink: 0,
         }}>✕</button>
       </div>
 
@@ -187,10 +187,10 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
             return (
               <div key={label} style={{ marginBottom: 9 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 500, color: '#374151', textTransform: 'capitalize' }}>{label}</span>
+                  <span style={{ fontSize: '0.78rem', fontWeight: 500, color: dark ? '#c0c0c0' : '#374151', textTransform: 'capitalize' }}>{label}</span>
                   <span style={{ fontSize: '0.72rem', fontWeight: 700, color: `rgb(${rgb})` }}>{pct.toFixed(0)}%</span>
                 </div>
-                <div style={{ height: 5, borderRadius: 3, background: 'rgba(0,0,0,.07)' }}>
+                <div style={{ height: 5, borderRadius: 3, background: dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.07)' }}>
                   <div style={{
                     height: '100%',
                     width: `${pct}%`,
@@ -250,7 +250,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{
                   padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
-                  background: 'rgba(0,0,0,0.06)', color: '#374151', textTransform: 'capitalize',
+                  background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: dark ? '#c0c0c0' : '#374151', textTransform: 'capitalize',
                 }}>
                   {data.context_snapshot.prev_emotion || 'none'}
                 </div>
@@ -271,7 +271,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                   { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#d97706' },
                   { label: 'Episodic Memory', value: data.context_snapshot.ce_available ? '✓ active' : '✗ off', color: data.context_snapshot.ce_available ? '#16a34a' : '#9ca3af' },
                 ].map(({ label, value, color }) => (
-                  <div key={label} style={{ padding: '7px 10px', background: 'rgba(255,255,255,0.7)', borderRadius: 8 }}>
+                  <div key={label} style={{ padding: '7px 10px', background: dark ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.7)', borderRadius: 8 }}>
                     <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
                     <div style={{ fontSize: '0.82rem', fontWeight: 700, color }}>{value ?? '—'}</div>
                   </div>
@@ -326,8 +326,8 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 
         {/* ── Human-in-the-loop ── */}
         <div style={{
-          background: '#f8f9fa', borderRadius: 12, padding: '13px',
-          border: '1px solid rgba(0,0,0,.06)',
+          background: dark ? '#1a1a28' : '#f8f9fa', borderRadius: 12, padding: '13px',
+          border: dark ? '1px solid rgba(255,255,255,.06)' : '1px solid rgba(0,0,0,.06)',
         }}>
           <div style={sectionTitle}>Correct the Model</div>
           {sent ? (
@@ -345,8 +345,8 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 onChange={e => setSelected(e.target.value)}
                 style={{
                   width: '100%', padding: '9px 12px',
-                  background: '#fff', border: '1px solid rgba(0,0,0,.12)',
-                  borderRadius: 8, fontSize: '0.84rem', color: '#1c1c2e',
+                  background: dark ? '#222230' : '#fff', border: dark ? '1px solid rgba(255,255,255,.12)' : '1px solid rgba(0,0,0,.12)',
+                  borderRadius: 8, fontSize: '0.84rem', color: dark ? '#e0e0e0' : '#1c1c2e',
                   outline: 'none', marginBottom: 9, cursor: 'pointer',
                   appearance: 'none',
                 }}
@@ -381,6 +381,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 }
 
 const sectionTitle = {
-  fontSize: '0.69rem', fontWeight: 700, color: '#1c1c2e',
+  fontSize: '0.69rem', fontWeight: 700, color: 'inherit',
   textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 10,
 };

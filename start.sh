@@ -56,6 +56,14 @@ echo ""
 
 echo "[Search] Detecting host environment..."
 
+if command -v uname &> /dev/null && [ "$(uname -s)" = "Darwin" ]; then
+    if [ ! -f "models/meta_weights.pkl" ] && [ -f "train.sh" ]; then
+        echo "   [INFO] No meta_weights.pkl found on Mac host."
+        echo "   [INFO] Running local MPS-accelerated trainer before starting services..."
+        ./train.sh
+    fi
+fi
+
 if command -v nvidia-smi &> /dev/null; then
     echo "   [OK] NVIDIA GPU detected! Launching with GPU acceleration..."
     COMPOSE_CMD="docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build"

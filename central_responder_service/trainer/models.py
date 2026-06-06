@@ -48,7 +48,12 @@ def train_gating_network(
       - Gradient clipping at 1.0 for training stability
     """
     if device is None:
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
     logger.info(f"  [Trainer] Training on device={device}")
 
     # ── CDM masking: zero out CDM block for samples without real context ──────
@@ -85,12 +90,14 @@ def train_gating_network(
     # ── DataLoader ────────────────────────────────────────────────────────────
     use_gpu   = device in ("cuda", "mps") or (isinstance(device, int) and device >= 0)
     pin_mem   = device == "cuda"          # pin_memory only helps CUDA, not MPS/CPU
+    n_workers = 2 if len(X_tr_s) > 5000 else 0  # parallel data loading for large datasets
     ds     = TensorDataset(
         torch.tensor(X_tr_s, dtype=torch.float32),
         torch.tensor(y_tr_idx, dtype=torch.long),
     )
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, drop_last=False,
-                        pin_memory=pin_mem)
+                        pin_memory=pin_mem, num_workers=n_workers,
+                        persistent_workers=(n_workers > 0))
 
     # ── Model + optimiser ─────────────────────────────────────────────────────
     model = GatingEnsembleNet(n_classes=len(classes), d=D_MODEL, dropout=DROPOUT).to(device)
