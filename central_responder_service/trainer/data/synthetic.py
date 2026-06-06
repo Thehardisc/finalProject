@@ -15,7 +15,7 @@ from shared.constants import (
 )
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
-from trainer.utils import _run_batch
+from trainer.utils import _run_batch, _vader
 
 logger = get_logger("trainer")
 
@@ -354,7 +354,7 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
     vader_results = []
     for text in all_texts:
         try:
-            vader_results.append(vader_analyzer(text) if callable(vader_analyzer) else {})
+            vader_results.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
         except Exception:
             vader_results.append({})
 

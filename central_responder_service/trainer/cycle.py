@@ -61,7 +61,9 @@ def run_one_cycle(reload_callback=None) -> None:
     On success, calls reload_callback(wrapper) so main.py hot-swaps the
     global META_LEARNER without restarting the container.
     """
+    cycle_start = time.time()
     logger.info(f"═══ Starting cycle at {datetime.datetime.utcnow():%H:%M:%S UTC} ═══")
+    phase_times = {}  # track wall-clock seconds per phase
 
     prev_meta: dict = {}
     if META_PATH.exists():
@@ -86,17 +88,15 @@ def run_one_cycle(reload_callback=None) -> None:
         nlp_batch_size = 32
         logger.info(f"Training device: CPU ({os.cpu_count()} cores) — NLP batch_size=32")
 
+    t_analyzers = time.time()
     vader, bert, goe = _get_analyzers(device)
+    phase_times["Analyzer loading"] = time.time() - t_analyzers
+    logger.info(f"  ⏱ Analyzers loaded in {phase_times['Analyzer loading']:.1f}s")
 
     if is_bootstrap:
         # ── One-time bootstrap from EmpatheticDialogues ────────────────────────
         CACHE_PATH = MODEL_PATH.parent / "dataset_features_cache.pkl"
         DATASET_ID = "empathetic_dialogues_v1"
-
-        from trainer.utils import _vader as _vader_fn, _run as _run_fn
-        _va = lambda t: {f"vader_{k}": v for k, v in _vader_fn(vader, t).items()}
-        _ba = lambda t: _run_fn(bert, t)
-        _ga = lambda t: _run_fn(goe,  t)
 
         if CACHE_PATH.exists():
             logger.info("Loading cached bootstrap features...")
@@ -129,9 +129,9 @@ def run_one_cycle(reload_callback=None) -> None:
                 f"No model found — bootstrapping from EmpatheticDialogues "
                 f"(MAX_EMPATHETIC_SAMPLES={MAX_EMPATHETIC_SAMPLES})..."
             )
-            X_tr, y_tr, gs_tr = extract_empathetic_dialogues_features(_va, _ba, _ga, split="train")
-            X_v,  y_v,  _     = extract_empathetic_dialogues_features(_va, _ba, _ga, split="val")
-            X_te, y_te, _     = extract_empathetic_dialogues_features(_va, _ba, _ga, split="test")
+            X_tr, y_tr, gs_tr = extract_empathetic_dialogues_features(vader, bert, goe, split="train", batch_size=nlp_batch_size)
+            X_v,  y_v,  _     = extract_empathetic_dialogues_features(vader, bert, goe, split="val",   batch_size=nlp_batch_size)
+            X_te, y_te, _     = extract_empathetic_dialogues_features(vader, bert, goe, split="test",  batch_size=nlp_batch_size)
 
             if not X_tr.size:
                 logger.error("EmpatheticDialogues extraction returned empty train set. Aborting.")
@@ -159,7 +159,7 @@ def run_one_cycle(reload_callback=None) -> None:
         n_ed = len(X_tr)
 
         # ── Synthetic augmentation for the 5 missing GoEmotions classes ────────
-        X_syn, y_syn, gs_syn = load_synthetic_features(_va, _ba, _ga, batch_size=nlp_batch_size)
+        X_syn, y_syn, gs_syn = load_synthetic_features(vader, bert, goe, batch_size=nlp_batch_size)
         n_syn = 0
         if len(X_syn) > 0:
             n_syn      = len(X_syn)
@@ -174,7 +174,7 @@ def run_one_cycle(reload_callback=None) -> None:
 
         # ── GoEmotions direct (NLP-aligned) augmentation ─────────────────────
         from sklearn.model_selection import train_test_split as _tts
-        X_goe_d, y_goe_d, gs_goe_d = extract_goemotions_direct_features(_va, _ba, _ga, batch_size=nlp_batch_size)
+        X_goe_d, y_goe_d, gs_goe_d = extract_goemotions_direct_features(vader, bert, goe, batch_size=nlp_batch_size)
         n_goe_d = 0
         n_goe_val = 0
         n_goe_test = 0
@@ -227,7 +227,7 @@ def run_one_cycle(reload_callback=None) -> None:
             )
 
         # ── MELD (real multi-turn context) augmentation ───────────────────────
-        X_meld, y_meld, has_cdm_meld = extract_meld_features(_va, _ba, _ga, batch_size=nlp_batch_size)
+        X_meld, y_meld, has_cdm_meld = extract_meld_features(vader, bert, goe, batch_size=nlp_batch_size)
         n_meld = 0
         n_meld_ctx = 0
         if len(X_meld) > 0:
@@ -284,7 +284,11 @@ def run_one_cycle(reload_callback=None) -> None:
 
     del vader, bert, goe
     gc.collect()
-    logger.info("Transient analysers purged.")
+    phase_times["Data loading (total)"] = time.time() - cycle_start
+    logger.info(
+        f"Transient analysers purged. "
+        f"⏱ Data phase complete in {phase_times['Data loading (total)']:.1f}s"
+    )
 
     # ── Dataset composition summary ────────────────────────────────────────────
     comp_rows = {src: cnt for src, cnt in dataset_composition.items() if cnt > 0}
@@ -295,6 +299,7 @@ def run_one_cycle(reload_callback=None) -> None:
     logger.log_stats("Dataset Composition (before training)", comp_rows)
 
     # ── Filters ────────────────────────────────────────────────────────────────
+    t_filter = time.time()
     dist_before = Counter(y_tr).most_common(5)
     logger.log_stats("Pre-Filter Distribution (Top 5)", dict(dist_before))
 
@@ -315,6 +320,8 @@ def run_one_cycle(reload_callback=None) -> None:
     )
 
     logger.log_stats("Post-Filter Distribution (Top 5)", dict(Counter(y_tr).most_common(5)))
+    phase_times["Filtering"] = time.time() - t_filter
+    logger.info(f"  ⏱ Filtering complete in {phase_times['Filtering']:.1f}s")
 
     if not X_tr:
         logger.error("No samples after filtering. Aborting.")
@@ -326,6 +333,7 @@ def run_one_cycle(reload_callback=None) -> None:
     X_te_arr = np.vstack([np.array(fv).flatten() for fv in X_te])
 
     # ── Train GatingEnsembleNet ────────────────────────────────────────────────
+    t_train = time.time()
     logger.info("⚡ PHASE: GatingEnsembleNet Training (v2)...")
     if torch.cuda.is_available():
         train_device = "cuda"
@@ -350,7 +358,16 @@ def run_one_cycle(reload_callback=None) -> None:
         device=train_device,
     )
 
+    phase_times["Model training"] = time.time() - t_train
+    _train_secs = phase_times['Model training']
+    if _train_secs >= 60:
+        _train_str = f"{int(_train_secs // 60)}m {int(_train_secs % 60)}s"
+    else:
+        _train_str = f"{_train_secs:.1f}s"
+    logger.info(f"  ⏱ Model training phase complete in {_train_str}")
+
     # ── Evaluation ────────────────────────────────────────────────────────────
+    t_eval = time.time()
     y_v_pred  = wrapper.predict(X_v_arr)
     y_te_pred = wrapper.predict(X_te_arr)
 
@@ -428,7 +445,11 @@ def run_one_cycle(reload_callback=None) -> None:
     except Exception as e:
         logger.warning(f"  [Calibration] Failed: {e} — using T=1.0")
 
+    phase_times["Evaluation"] = time.time() - t_eval
+    logger.info(f"  ⏱ Evaluation complete in {phase_times['Evaluation']:.1f}s")
+
     # ── Accuracy gate + deploy ─────────────────────────────────────────────────
+    t_deploy = time.time()
     deployed = test_acc >= ACCURACY_GATE
 
     if deployed:
@@ -505,6 +526,29 @@ def run_one_cycle(reload_callback=None) -> None:
         if not hasattr(start_trainer_thread, '_initial_trained'):
             logger.info("Training complete. Opening system gates.")
             setattr(start_trainer_thread, '_initial_trained', True)
+
+    phase_times["Deploy / gate"] = time.time() - t_deploy
+
+    # ── Cycle timing summary ──────────────────────────────────────────────────
+    total_cycle = time.time() - cycle_start
+    if total_cycle >= 60:
+        total_cycle_str = f"{int(total_cycle // 60)}m {int(total_cycle % 60)}s"
+    else:
+        total_cycle_str = f"{total_cycle:.1f}s"
+    phase_times["─── Total Cycle ───"] = ""
+    phase_times["  Wall-clock time"] = total_cycle_str
+
+    # Format all phase times for the summary table
+    phase_summary = {}
+    for k, v in phase_times.items():
+        if isinstance(v, float):
+            if v >= 60:
+                phase_summary[k] = f"{int(v // 60)}m {int(v % 60)}s"
+            else:
+                phase_summary[k] = f"{v:.1f}s"
+        else:
+            phase_summary[k] = v
+    logger.log_stats("⏱ Cycle Timing Breakdown", phase_summary)
 
     print_report(prev_meta, test_acc, test_f1, len(X_tr), n_filtered, deployed, dataset_composition)
 

@@ -13,6 +13,7 @@ from shared.constants import (
 )
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
+from trainer.utils import _run_batch, _vader
 from trainer.data.synthetic import build_synthetic_context_vector
 
 logger = get_logger("trainer")
@@ -100,6 +101,7 @@ def _empathetic_obs(emotion_label: str) -> int:
 def extract_empathetic_dialogues_features(
     vader_analyzer, bert_analyzer, goe_analyzer,
     split: str = "train",
+    batch_size: int = 32,
 ) -> tuple:
     """
     Build (X [N, FEATURE_DIM], y [N], gs [N]) from EmpatheticDialogues.
@@ -123,54 +125,51 @@ def extract_empathetic_dialogues_features(
         return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
 
     rows = list(emp)[:cap]
+    total = len(rows)
 
-    total    = len(rows)
-    mapped   = sum(1 for r in rows if _EMPATHETIC_TO_GOEMOTION.get(str(r.get('emotion', '')).lower()) is not None)
-    skipped  = total - mapped
-    logger.info(
-        f"  [EmpDialogues] {split}: {total} rows loaded, "
-        f"{mapped} mapped ({skipped} skipped — unmapped emotions: "
-        f"prepared/content/ashamed)"
-    )
-    t0 = time.time()
-
-    features, labels, gs_list = [], [], []
-    for i, row in enumerate(rows):
-        if i > 0 and i % 500 == 0:
-            elapsed  = time.time() - t0
-            rate     = i / elapsed
-            eta_s    = int((total - i) / rate) if rate > 0 else 0
-            logger.info(
-                f"  [EmpDialogues] {split} {i}/{total} rows "
-                f"({len(features)} kept so far, {rate:.1f} rows/s, ETA {eta_s}s)"
-            )
-
+    # Pass 1: filter rows and collect texts (cheap — no model calls)
+    texts, goemo_labels, contexts = [], [], []
+    for row in rows:
         text        = str(row.get('situation', '')).strip()
         raw_emotion = str(row.get('emotion', 'neutral')).lower()
         goemo_label = _EMPATHETIC_TO_GOEMOTION.get(raw_emotion)
-
         if not text or goemo_label is None:
             continue
-        try:
-            vader_out = vader_analyzer(text) if callable(vader_analyzer) else {}
-            bert_out  = bert_analyzer(text)  if callable(bert_analyzer)  else {}
-            goe_out   = goe_analyzer(text)   if callable(goe_analyzer)   else {}
-        except Exception:
-            continue
+        texts.append(text)
+        goemo_labels.append(goemo_label)
+        contexts.append(build_synthetic_context_vector(label=goemo_label, mode=ctx_mode))
 
-        ctx = build_synthetic_context_vector(label=goemo_label, mode=ctx_mode)
-        fv  = build_feature_vector(
-            {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
+    mapped  = len(texts)
+    skipped = total - mapped
+    logger.info(
+        f"  [EmpDialogues] {split}: {total} rows loaded, "
+        f"{mapped} mapped ({skipped} skipped — unmapped emotions: prepared/content/ashamed)"
+    )
+
+    if not texts:
+        return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+
+    # Pass 2: batch NLP inference (the expensive step)
+    t0 = time.time()
+    vader_outs = [{f"vader_{k}": v for k, v in _vader(vader_analyzer, t).items()} for t in texts]
+    bert_outs  = _run_batch(bert_analyzer, texts, batch_size=batch_size, label=f"Empathetic/{split}/BERT")
+    goe_outs   = _run_batch(goe_analyzer,  texts, batch_size=batch_size, label=f"Empathetic/{split}/GoE")
+
+    # Pass 3: assemble feature vectors (cheap — no model calls)
+    features, labels, gs_list = [], [], []
+    for goemo_label, v_out, b_out, g_out, ctx in zip(goemo_labels, vader_outs, bert_outs, goe_outs, contexts):
+        fv = build_feature_vector(
+            {"vader": v_out, "basic_bert": b_out, "go_emotions": g_out},
             context_vector=ctx[:CDM_CTX_DIM],
             trajectory_prior=ctx[CDM_CTX_DIM:],
         )
         features.append(fv.flatten())
         labels.append(goemo_label)
-        gs_list.append(goe_out)
+        gs_list.append(g_out)
 
     elapsed = time.time() - t0
     logger.info(
-        f"  [EmpDialogues] Extracted {len(features)} samples ({split}) "
+        f"  [EmpDialogues] {len(features)} samples ({split}) "
         f"in {elapsed:.0f}s ({len(features)/elapsed:.1f} samples/s)."
     )
     empty = np.empty((0, FEATURE_DIM), dtype=np.float32)

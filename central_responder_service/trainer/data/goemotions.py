@@ -12,7 +12,7 @@ import numpy as np
 from shared.constants import EMOTION_LABELS, FEATURE_DIM
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
-from trainer.utils import _run_batch
+from trainer.utils import _run_batch, _vader
 
 logger = get_logger("trainer")
 
@@ -106,7 +106,7 @@ def extract_goemotions_direct_features(
     vader_outs = []
     for text in all_texts:
         try:
-            vader_outs.append(vader_analyzer(text) if callable(vader_analyzer) else {})
+            vader_outs.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
         except Exception:
             vader_outs.append({})
 
