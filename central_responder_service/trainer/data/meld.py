@@ -23,7 +23,7 @@ from shared.constants import (
 )
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
-from trainer.utils import _run_batch, _vader
+from trainer.utils import _run_batch, _run_parallel_batches, _vader
 from trainer.data.synthetic import _LABEL_TO_INTENT
 
 logger = get_logger("trainer")
@@ -303,18 +303,25 @@ def extract_meld_features(
     t0 = time.time()
 
     total_texts = len(all_texts)
-    vader_outs = []
-    _chk = {int(total_texts * p) for p in (0.25, 0.50, 0.75)}
-    for i, text in enumerate(all_texts):
-        try:
-            vader_outs.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
-        except Exception:
-            vader_outs.append({})
-        if i + 1 in _chk:
-            logger.info(f"  [MELD/VADER] {i+1}/{total_texts} ({int((i+1)/total_texts*100)}%)")
 
-    bert_outs = _run_batch(bert_analyzer, all_texts, batch_size=batch_size, label="MELD/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
-    goe_outs  = _run_batch(goe_analyzer,  all_texts, batch_size=batch_size, label="MELD/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
+    if callable(bert_analyzer) and callable(goe_analyzer):
+        vader_outs, bert_outs, goe_outs = _run_parallel_batches(
+            bert_analyzer, goe_analyzer, all_texts,
+            vader_analyzer=vader_analyzer,
+            batch_size=batch_size, label_prefix="MELD",
+        )
+    else:
+        vader_outs = []
+        _chk = {int(total_texts * p) for p in (0.25, 0.50, 0.75)}
+        for i, text in enumerate(all_texts):
+            try:
+                vader_outs.append({f"vader_{k}": v for k, v in _vader(vader_analyzer, text).items()})
+            except Exception:
+                vader_outs.append({})
+            if i + 1 in _chk:
+                logger.info(f"  [MELD/VADER] {i+1}/{total_texts} ({int((i+1)/total_texts*100)}%)")
+        bert_outs = _run_batch(bert_analyzer, all_texts, batch_size=batch_size, label="MELD/BERT") if callable(bert_analyzer) else [{} for _ in all_texts]
+        goe_outs  = _run_batch(goe_analyzer,  all_texts, batch_size=batch_size, label="MELD/GoE")  if callable(goe_analyzer)  else [{} for _ in all_texts]
 
     logger.info(f"[MELD] NLP done in {time.time()-t0:.0f}s. Building CDM vectors from conversation history...")
 
