@@ -357,6 +357,23 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
           <span style={{ fontSize: '0.62rem', color: '#15803d', fontWeight: 600 }}>✓ corrected</span>
         )}
 
+        {/* ── Inline model attribution pills ── */}
+        {msg.analysis?.data?.logic_map && Object.keys(msg.analysis.data.logic_map).length > 0 && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2, flexWrap: 'wrap' }}>
+            {Object.entries(msg.analysis.data.logic_map).map(([model, v]) => (
+              <div key={model} style={{
+                fontSize: '0.58rem', fontWeight: 700, letterSpacing: '.02em',
+                padding: '1px 5px', borderRadius: 99,
+                background: `rgba(${domRgb || '88,86,214'},.09)`,
+                color: `rgb(${domRgb || '88,86,214'})`,
+                border: `1px solid rgba(${domRgb || '88,86,214'},.20)`,
+              }}>
+                {model} {(v * 100).toFixed(0)}%
+              </div>
+            ))}
+          </div>
+        )}
+
         {msg.analysis && hovered && !feedbackOpen && (
           <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
         )}

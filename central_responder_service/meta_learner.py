@@ -68,6 +68,19 @@ _PREV_EMOTION_VALENCE: dict = {
 DEFAULT_MODEL_PATH = os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")
 DEFAULT_META_PATH  = DEFAULT_MODEL_PATH.replace(".pkl", "_meta.json")
 
+# BERT Ekman label → set of valid GoEmotions sub-labels (used in NLP guard + fallback)
+_BERT_SUBTYPES: dict = {
+    "joy":     {"joy", "amusement", "excitement", "admiration", "love",
+                "approval", "caring", "gratitude", "optimism", "pride",
+                "desire", "relief"},
+    "sadness": {"sadness", "grief", "remorse", "disappointment"},
+    "anger":   {"anger", "annoyance", "disapproval"},
+    "fear":    {"fear", "nervousness"},
+    "neutral": {"neutral", "realization"},
+    "surprise":{"surprise", "realization", "confusion"},
+    "disgust": {"disgust", "disapproval"},
+}
+
 
 # ── Neural architecture ─────────────────────────────────────────────────────────
 
@@ -196,19 +209,20 @@ class GatingEnsembleNet(nn.Module):
         # Context path
         c_h              = self.enc_context(x_c)
         e_c              = self.enc_ctx_expert(x_c)
-        ctx_prior_logits = self.ctx_prior_head(e_c)           # [B, n_classes]
+        # Zero out context prior when no real CDM data — enc_ctx_expert(zeros) produces a
+        # non-zero output from learned biases that would act as a spurious class prior.
+        ctx_prior_logits = self.ctx_prior_head(e_c) * ctx_available           # [B, n_classes]
 
-        # NLP path — gate and residual are zeroed when no real context is present,
-        # so the NLP experts (vader/bert/goe) are weighted uniformly and no context
-        # bias leaks into the NLP representation.
+        # NLP path — residual is zeroed when no real context is present.
+        # The gate now learns from NLP content (mean of expert encodings) when context
+        # is absent, so vader/bert/goe get content-driven weights instead of forced 1/3.
         e_v       = self.enc_vader(x_v)
         e_b       = self.enc_bert(x_b)
         e_g       = self.enc_goe(x_g)
-        # When context is absent, force equal 1/3 weights on vader/bert/goe so the
-        # gate_nlp learned biases (trained on zero-context EmpatheticDialogues samples
-        # that were mostly love/joy) do not influence the no-context prediction.
-        ctx_gate  = F.softmax(self.gate_nlp(c_h * ctx_available), dim=-1)    # [B, 3]
-        alpha_nlp = ctx_gate * ctx_available + (1.0 - ctx_available) / 3.0   # [B, 3]
+        nlp_gate_signal = (e_v + e_b + e_g) / 3.0                            # [B, d]
+        gate_input      = c_h * ctx_available + nlp_gate_signal * (1.0 - ctx_available)
+        ctx_gate        = F.softmax(self.gate_nlp(gate_input), dim=-1)        # [B, 3]
+        alpha_nlp       = ctx_gate                                             # always learned
         nlp_mix   = (alpha_nlp.unsqueeze(-1) * torch.stack([e_v, e_b, e_g], dim=1)).sum(dim=1)
         nlp_repr  = nlp_mix + 0.3 * ctx_available * self.ctx_residual(c_h)
         nlp_logits = self.nlp_head(nlp_repr) / self.nlp_temp.clamp(0.5, 3.0)  # [B, n_classes]
@@ -413,11 +427,25 @@ def predict_with_meta_learner(
         On any error returns ("neutral", 0.0, {}, 0.0, None, None).
     """
     if model is None:
-        goe = feature_vector[0, 11:ML_DIM]
-        if goe.max() > 0:
-            idx    = int(goe.argmax())
-            scores = {e: float(goe[i]) for i, e in enumerate(EMOTION_LABELS)}
-            return EMOTION_LABELS[idx], float(goe[idx]), scores, 0.0, None, None
+        goe_raw  = feature_vector[0, 11:ML_DIM]   # [28]
+        bert_raw = feature_vector[0, 4:11]         # [7]
+        if goe_raw.max() > 0:
+            goe_scores = {e: float(goe_raw[i]) for i, e in enumerate(EMOTION_LABELS)}
+            goe_conf   = float(goe_raw.max())
+            bert_conf  = float(bert_raw.max()) if bert_raw.max() > 0 else 0.0
+            # When BERT is more confident, steer GoEmotions scores toward BERT's subtype set
+            # so the fallback doesn't blindly follow a low-confidence GoEmotions prediction.
+            if bert_conf > goe_conf and bert_conf > 0.50:
+                bert_top  = BERT_LABELS[int(bert_raw.argmax())]
+                subtypes  = _BERT_SUBTYPES.get(bert_top, {bert_top})
+                boost     = min(bert_conf / max(goe_conf, 0.05), 4.0)
+                composite = {e: v * (boost if e in subtypes else 1.0) for e, v in goe_scores.items()}
+                total     = sum(composite.values())
+                composite = {e: v / total for e, v in composite.items()}
+                top       = max(composite, key=composite.get)
+                return top, composite[top], composite, 0.0, None, None
+            top = max(goe_scores, key=goe_scores.get)
+            return top, goe_conf, goe_scores, 0.0, None, None
         return "neutral", 1.0, {"neutral": 1.0}, 0.0, None, None
 
     try:
@@ -480,36 +508,29 @@ def predict_with_meta_learner(
                 f"Blended (α={blend:.2f}) → {pred_label} ({confidence:.2f})"
             )
 
-        elif bert_goe_label and bert_max >= 0.80 and pred_label != bert_goe_label:
-            # GoEmotions was uncertain but BERT is highly confident (e.g. "furious"
-            # → GoE says "approval" at 43%, but BERT says "anger" at 99%).
+        elif bert_goe_label and bert_max >= 0.65 and pred_label != bert_goe_label:
+            # GoEmotions was uncertain but BERT is confident (e.g. "furious" → GoE says
+            # "approval" at 43%, but BERT says "anger" at 76%).
             #
             # CRITICAL: BERT has only 7 Ekman classes — "joy" covers love/admiration/
             # excitement/gratitude etc. Don't fire if meta's prediction is a valid
             # GoEmotions sub-type of BERT's coarser label (e.g. meta=love, BERT=joy
             # → love is correct, BERT is just too coarse to distinguish it).
-            _bert_subtypes = {
-                "joy":     {"joy", "amusement", "excitement", "admiration", "love",
-                            "approval", "caring", "gratitude", "optimism", "pride",
-                            "desire", "relief"},
-                "sadness": {"sadness", "grief", "remorse", "disappointment"},
-                "anger":   {"anger", "annoyance", "disapproval"},
-                "fear":    {"fear", "nervousness"},
-                "neutral": {"neutral", "realization"},
-                "surprise":{"surprise", "realization", "confusion"},
-                "disgust": {"disgust", "disapproval"},
-            }
-            if pred_label in _bert_subtypes.get(bert_top, {bert_goe_label}):
+            if pred_label in _BERT_SUBTYPES.get(bert_top, {bert_goe_label}):
                 pass   # meta is a valid fine-grained sub-type — BERT is just coarser
             else:
-                blend       = min(bert_max * 0.70, 0.55)
-                target_dist = {e: (1.0 if e == bert_goe_label else 0.0) for e in EMOTION_LABELS}
-                old_pred    = pred_label
-                blended     = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target_dist[e]
-                               for e in EMOTION_LABELS}
-                pred_label  = max(blended, key=blended.get)
-                confidence  = blended[pred_label]
-                all_scores  = blended
+                blend          = min(bert_max * 0.80, 0.65)
+                # Target: uniform over BERT's valid GoEmotions sub-labels so we steer toward
+                # the right category without over-committing to a single Ekman label.
+                valid_subtypes = _BERT_SUBTYPES.get(bert_top, {bert_goe_label})
+                n_sub          = len(valid_subtypes)
+                target_dist    = {e: (1.0 / n_sub if e in valid_subtypes else 0.0) for e in EMOTION_LABELS}
+                old_pred       = pred_label
+                blended        = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target_dist[e]
+                                  for e in EMOTION_LABELS}
+                pred_label     = max(blended, key=blended.get)
+                confidence     = blended[pred_label]
+                all_scores     = blended
                 logger.warning(
                     f"[NLP-guard/BERT] BERT={bert_top}({bert_max:.2f}) but meta={old_pred}. "
                     f"Blended (α={blend:.2f}) → {pred_label} ({confidence:.2f})"

@@ -292,7 +292,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         # Fallback to the most confident NLP model to preserve information
         original_conflict_desc = conflict_desc
         conflict_desc = "Anomaly Fallback: Dynamic Recovery"
-        if goe_max_prob >= bert_max_prob and goe_scores:
+        if goe_max_prob > bert_max_prob and goe_scores:
             final_scores = goe_scores
         elif bert_scores:
             final_scores = bert_scores

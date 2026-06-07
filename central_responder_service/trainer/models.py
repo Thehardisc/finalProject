@@ -12,7 +12,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import f1_score
 
-from shared.constants import EMOTION_LABELS, ML_DIM, CDM_CTX_DIM
+from shared.constants import EMOTION_LABELS, BERT_LABELS, ML_DIM, CDM_CTX_DIM
 from shared.utils.logger import get_logger
 from meta_learner import GatingEnsembleNet, GatingNetworkWrapper, D_MODEL, DROPOUT
 from trainer.data.synthetic import pretrain_context_encoder
@@ -29,10 +29,10 @@ def train_gating_network(
     has_cdm: np.ndarray = None,
     n_epochs: int = 80,
     batch_size: int = 256,
-    lr: float = 5e-4,
+    lr: float = 1e-3,
     weight_decay: float = 1e-4,
-    load_balance_coeff: float = 5e-4,
-    patience: int = 10,
+    load_balance_coeff: float = 1e-4,
+    patience: int = 15,
     device: str = None,
 ) -> GatingNetworkWrapper:
     """
@@ -115,17 +115,22 @@ def train_gating_network(
         max_lr=lr,
         steps_per_epoch=len(loader),
         epochs=n_epochs,
-        pct_start=0.1,
+        pct_start=0.15,
     )
     criterion = nn.CrossEntropyLoss(weight=cw_tensor, label_smoothing=0.10)
 
-    # ── NLP anchor: GoEmotions index → class_to_idx mapping ─────────────────
+    # ── NLP anchor index maps (built once, outside the loop) ─────────────────
     goe_to_class_idx = torch.tensor(
         [class_to_idx.get(lbl, -1) for lbl in EMOTION_LABELS],
         dtype=torch.long, device=device,
     )  # [28]  — -1 for labels absent from training classes
 
-    nlp_anchor_coeff  = 0.30
+    bert_to_class_idx = torch.tensor(
+        [class_to_idx.get(lbl, -1) for lbl in BERT_LABELS],
+        dtype=torch.long, device=device,
+    )  # [7]  — maps BERT Ekman index → GoEmotions class index
+
+    nlp_anchor_coeff  = 0.10
     nlp_anchor_thresh = 0.75
 
     uniform_gate  = torch.ones(4, device=device) / 4.0
@@ -163,18 +168,29 @@ def train_gating_network(
                 alpha_mean   = alpha.mean(dim=0)                         # [4]
                 balance_loss = ((alpha_mean - uniform_gate) ** 2).sum()
 
-                # NLP anchor: when GoEmotions is highly confident, steer logits toward
-                # its top prediction.
+                # GoEmotions anchor: steer toward GoE top prediction when it's confident.
                 goe_raw            = xb[:, 11:ML_DIM]                            # [B, 28]
                 goe_conf, goe_ridx = goe_raw.max(dim=1)                          # [B]
                 goe_cidx           = goe_to_class_idx[goe_ridx]                  # [B] class indices
-                anchor_mask        = (goe_conf > nlp_anchor_thresh) & (goe_cidx >= 0)
-                anchor_loss = (
-                    F.cross_entropy(logits[anchor_mask], goe_cidx[anchor_mask])
-                    if anchor_mask.any() else torch.tensor(0.0, device=device)
+                goe_anchor_mask    = (goe_conf > nlp_anchor_thresh) & (goe_cidx >= 0)
+                goe_anchor_loss = (
+                    F.cross_entropy(logits[goe_anchor_mask], goe_cidx[goe_anchor_mask])
+                    if goe_anchor_mask.any() else torch.tensor(0.0, device=device)
                 )
 
-                loss = ce_loss + load_balance_coeff * balance_loss + nlp_anchor_coeff * anchor_loss
+                # BERT anchor: symmetric — steer toward BERT Ekman label when BERT is confident.
+                # Prevents the model from ignoring BERT when GoEmotions predicts a different category.
+                bert_raw_b          = xb[:, 4:11]                                # [B, 7]
+                bert_conf_b, bert_ridx_b = bert_raw_b.max(dim=1)                 # [B]
+                bert_cidx_b         = bert_to_class_idx[bert_ridx_b]             # [B] class indices
+                bert_anchor_mask    = (bert_conf_b > nlp_anchor_thresh) & (bert_cidx_b >= 0)
+                bert_anchor_loss = (
+                    F.cross_entropy(logits[bert_anchor_mask], bert_cidx_b[bert_anchor_mask])
+                    if bert_anchor_mask.any() else torch.tensor(0.0, device=device)
+                )
+
+                loss = (ce_loss + load_balance_coeff * balance_loss
+                        + nlp_anchor_coeff * (goe_anchor_loss + bert_anchor_loss))
 
             if use_amp:
                 scaler_amp.scale(loss).backward()
