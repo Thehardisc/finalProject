@@ -9,6 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
+from implicit_detector import detect as detect_implicit_emotion
 
 logger = get_logger("llm_reasoning_service")
 
@@ -56,20 +57,23 @@ GROUP_NAME = "reasoning_group"
 CONSUMER_NAME = "reasoning_worker_1"
 REASONING_UPDATE_KEY = "reasoning_update_stream"
 
+# Implicit emotion request stream (Stage 0)
+IMPLICIT_STREAM      = "implicit_emotion_requests"
+IMPLICIT_GROUP       = "implicit_reasoning_group"
+IMPLICIT_CONSUMER    = "implicit_worker_1"
+
 explainer = RuleBasedExplainer()
 
-async def main():
-    await redis_client.connect()
-    r = redis_client.redis
-    
+
+async def run_explainer_loop(r):
     try:
         await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
     except Exception as e:
         if "BUSYGROUP" not in str(e):
-            logger.error(f"Error creating group: {e}")
+            logger.error(f"Error creating explainer group: {e}")
 
     logger.info("Cognitive Explainer Service ready.")
-    
+
     while True:
         try:
             streams = {STREAM_KEY: ">"}
@@ -90,7 +94,6 @@ async def main():
                                 context_shift = json.loads(context_shift_raw)
                             except (json.JSONDecodeError, TypeError):
                                 context_shift = None
-                            # context_shift is a dict object if a shift was detected, None otherwise
                             is_context_shift = isinstance(context_shift, dict)
                             msg_uuid = data.get("message_id")
 
@@ -118,13 +121,96 @@ async def main():
             if "NOGROUP" in str(e):
                 try:
                     await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
-                    logger.info("Re-created consumer group after NOGROUP error.")
+                    logger.info("Re-created explainer consumer group after NOGROUP error.")
                 except Exception as cg_err:
                     if "BUSYGROUP" not in str(cg_err):
-                        logger.error(f"Failed to re-create group: {cg_err}")
+                        logger.error(f"Failed to re-create explainer group: {cg_err}")
             else:
                 logger.log_exception("EXPLAINER SERVICE — Redis error, retrying in 1s", e)
             await asyncio.sleep(1)
+
+
+async def run_implicit_loop(r):
+    """Consumer loop for implicit_emotion_requests stream (Stage 0)."""
+    try:
+        await r.xgroup_create(IMPLICIT_STREAM, IMPLICIT_GROUP, id="0", mkstream=True)
+    except Exception as e:
+        if "BUSYGROUP" not in str(e):
+            logger.error(f"Error creating implicit group: {e}")
+
+    logger.info("Implicit emotion detector ready.")
+
+    while True:
+        try:
+            streams  = {IMPLICIT_STREAM: ">"}
+            messages = await r.xreadgroup(IMPLICIT_GROUP, IMPLICIT_CONSUMER, streams, count=4, block=2000)
+
+            if messages:
+                for stream, msgs in messages:
+                    for entry_id, data in msgs:
+                        try:
+                            message_id   = (data.get("message_id") or b"").decode() if isinstance(data.get("message_id"), bytes) else str(data.get("message_id", ""))
+                            text         = (data.get("text") or b"").decode() if isinstance(data.get("text"), bytes) else str(data.get("text", ""))
+                            response_key = (data.get("response_key") or b"").decode() if isinstance(data.get("response_key"), bytes) else str(data.get("response_key", ""))
+
+                            raw_hist = data.get("history", "[]")
+                            if isinstance(raw_hist, bytes):
+                                raw_hist = raw_hist.decode()
+                            try:
+                                history = json.loads(raw_hist)
+                            except Exception:
+                                history = []
+
+                            result = detect_implicit_emotion(text, history)
+
+                            if result is None:
+                                result = {
+                                    "emotion":    "neutral",
+                                    "confidence": 0.0,
+                                    "scores":     {"neutral": 1.0},
+                                    "method":     "rule-based",
+                                }
+
+                            logger.debug(
+                                f"[Implicit] {message_id}: → {result['emotion']} "
+                                f"(conf={result['confidence']:.2f}, method={result['method']})"
+                            )
+
+                            # LPUSH so the BLPOP in central_responder unblocks
+                            await r.lpush(response_key, json.dumps(result))
+                            # Short TTL — if BLPOP already timed out the key should not linger
+                            await r.expire(response_key, 5)
+                            await r.xack(IMPLICIT_STREAM, IMPLICIT_GROUP, entry_id)
+
+                        except Exception as msg_err:
+                            logger.error(f"[Implicit] Failed on entry {entry_id}: {msg_err}. ACKing.")
+                            try:
+                                await r.xack(IMPLICIT_STREAM, IMPLICIT_GROUP, entry_id)
+                            except Exception:
+                                pass
+
+        except Exception as e:
+            if "NOGROUP" in str(e):
+                try:
+                    await r.xgroup_create(IMPLICIT_STREAM, IMPLICIT_GROUP, id="0", mkstream=True)
+                    logger.info("Re-created implicit consumer group after NOGROUP error.")
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error(f"Failed to re-create implicit group: {cg_err}")
+            else:
+                logger.log_exception("IMPLICIT LOOP — Redis error, retrying in 1s", e)
+            await asyncio.sleep(1)
+
+
+async def main():
+    await redis_client.connect()
+    r = redis_client.redis
+
+    await asyncio.gather(
+        run_explainer_loop(r),
+        run_implicit_loop(r),
+    )
+
 
 if __name__ == "__main__":
     asyncio.run(main())

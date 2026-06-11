@@ -17,6 +17,7 @@ Public API (unchanged from v1):
   apply_context_correction()   → passthrough stub (superseded by native gating)
 """
 
+import io
 import os
 import pickle
 import json
@@ -27,6 +28,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.preprocessing import StandardScaler
+
+
+class _CPUUnpickler(pickle.Unpickler):
+    """Deserializes pkl files saved on MPS or CUDA into CPU tensors.
+    Needed when a trainer runs on Apple Silicon (MPS) and the container is CPU-only.
+    """
+    def find_class(self, module, name):
+        if module == "torch.storage" and name == "_load_from_bytes":
+            return lambda b: torch.load(io.BytesIO(b), map_location="cpu", weights_only=False)
+        return super().find_class(module, name)
 
 from shared.utils.logger import get_logger
 from shared.constants import (
@@ -296,11 +307,17 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             return None
 
         with open(model_path, 'rb') as f:
-            model = pickle.load(f)
+            model = _CPUUnpickler(f).load()
 
         if not hasattr(model, 'predict_proba'):
             logger.warning("Loaded object has no predict_proba. Fallback mode.")
             return None
+
+        # Ensure the wrapper and its nn.Module are both on CPU regardless of training device.
+        # Required when trainer saves on MPS (Apple Silicon) and inference runs in a CPU container.
+        if isinstance(model, GatingNetworkWrapper):
+            model.model_.cpu()
+            model._device = torch.device("cpu")
 
         # Dimension probe — catches stale pkl files after FEATURE_DIM changes
         try:
@@ -367,20 +384,20 @@ def build_feature_vector(
 
     cdm = list(
         context_vector
-        if (context_vector and len(context_vector) == CDM_CTX_DIM)
+        if (context_vector is not None and len(context_vector) == CDM_CTX_DIM)
         else [0.0] * CDM_CTX_DIM
     )
-    # Normalize large-valued CDM scalars so they don't overwhelm the context encoder.
-    # The scaler is fit on bootstrap data where these are all zeros; raw values at
-    # inference (e.g. message_length=200, latency_ms=3000) would produce ctx_L2 in
-    # the millions and cause the gate to over-weight context to ~52%.
+    # Normalize raw CDM scalars to bounded [0, ~1] ranges expected by the encoder.
+    # message_length (raw chars) and latency_ms (raw ms) come in as large integers.
+    # CTX_HMM_EMISSION is already normalised to [0,1] by context_engine (emit_norm),
+    # so no division is applied there — dividing by 50 would squash it to [0, 0.02].
     cdm[CTX_MSG_LENGTH]  = min(float(cdm[CTX_MSG_LENGTH])  / 500.0,  3.0)
     cdm[CTX_LATENCY_MS]  = min(float(cdm[CTX_LATENCY_MS])  / 2000.0, 3.0)
-    cdm[CTX_HMM_EMISSION] = max(float(cdm[CTX_HMM_EMISSION]) / 50.0, -3.0)
+    cdm[CTX_HMM_EMISSION] = float(np.clip(cdm[CTX_HMM_EMISSION], 0.0, 1.0))
 
     prior = (
         trajectory_prior
-        if (trajectory_prior and len(trajectory_prior) == PRIOR_DIM)
+        if (trajectory_prior is not None and len(trajectory_prior) == PRIOR_DIM)
         else [0.0] * PRIOR_DIM
     )
     vec.extend(cdm + prior)

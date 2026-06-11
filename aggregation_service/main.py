@@ -136,9 +136,17 @@ async def main():
                                 mlog.warning("xack_failed", extra={"event": "xack_failed", "error": str(ack_err)})
 
         except Exception as e:
-            logger.log_exception(
-                "AGGREGATION WORKER — Redis connection error, retrying in 2s", e
-            )
+            if "NOGROUP" in str(e):
+                try:
+                    await r.xgroup_create(STREAM_KEY, GROUP_NAME, mkstream=True)
+                    logger.warning("Re-created consumer group after NOGROUP error.")
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error(f"Failed to re-create group: {cg_err}")
+            else:
+                logger.log_exception(
+                    "AGGREGATION WORKER — Redis connection error, retrying in 2s", e
+                )
             await asyncio.sleep(2)
 
         if _shutdown:  # R1

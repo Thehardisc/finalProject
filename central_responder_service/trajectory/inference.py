@@ -2,7 +2,7 @@
 Trajectory inference module — integrates ConversationLSTM into the live pipeline.
 
 Responsibilities:
-  1. build_feature_vector()   — convert central_responder model_outputs → 67-dim tensor
+  1. build_feature_vector()   — convert central_responder model_outputs → 79-dim tensor
   2. load_hidden_state()      — fetch (h, c) for a conversation from Redis
   3. save_hidden_state()      — persist (h, c) back to Redis with 2-hour inactivity TTL
   4. run_trajectory_step()    — full inference: load → forward → save → return dict
@@ -33,7 +33,7 @@ EMOTION_LABELS_28 = [
 ]
 
 BERT_LABELS_7  = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
-VADER_KEYS_4   = ['neg', 'neu', 'pos', 'compound']
+VADER_KEYS_4   = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
 
 HIDDEN_KEY_PREFIX = "trajectory:"
 HIDDEN_TTL        = 7200         # 2 hours of inactivity — beyond that, state is stale

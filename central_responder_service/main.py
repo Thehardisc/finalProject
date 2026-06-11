@@ -35,6 +35,13 @@ from shared.constants import (
     CTX_RESIDENCY, CTX_ABRUPTNESS,
 )
 from shared.module_registry import ModuleRegistry
+from implicit_emotion import (
+    is_implicit_candidate,
+    should_override,
+    request_implicit_emotion,
+    store_message_for_history,
+    get_conv_history,
+)
 
 logger = get_logger("central_responder")
 
@@ -302,6 +309,26 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         dominant_emotion = max(final_scores, key=final_scores.get) if final_scores else "neutral"
         meta_confidence = final_scores.get(dominant_emotion, 0.0)
 
+    # ── Implicit emotion override (Stage 0) ─────────────────────────────────────
+    # Fetch prior history BEFORE storing the current message to avoid the
+    # current text contaminating its own context (async race condition).
+    _impl_override = False
+    _orig_text = original_data.get("original_text", "")
+    if is_implicit_candidate(dominant_emotion, goe_scores, _orig_text, meta_confidence):
+        _impl_history = await get_conv_history(r, conv_id)
+        _impl_result  = await request_implicit_emotion(r, message_id, _orig_text, _impl_history)
+        if _impl_result and should_override(dominant_emotion, meta_confidence, _impl_result):
+            _prev_dom        = dominant_emotion
+            dominant_emotion = _impl_result["emotion"]
+            meta_confidence  = float(_impl_result["confidence"])
+            final_scores     = _impl_result.get("scores", {dominant_emotion: meta_confidence})
+            _impl_override   = True
+            logger.info(
+                f"[ImplicitEmotion] {message_id}: {_prev_dom} → {dominant_emotion} "
+                f"(conf={meta_confidence:.2f}, method={_impl_result.get('method','?')})"
+            )
+    await store_message_for_history(r, conv_id, _orig_text)
+
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
 
@@ -364,7 +391,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "models":                model_outputs,
         "aggregated":            final_scores,
         "dominant_selected":     dominant_emotion,
-        "decision_mode":         "meta-learner",
+        "decision_mode":         "implicit-emotion-override" if _impl_override else ("meta-learner" if META_LEARNER is not None else "rule-based"),
         "meta_confidence":       meta_confidence,
         "logic_map":             logic_map,
         "ctx_correction_weight": ctx_correction_weight,
@@ -393,7 +420,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     vader_scalars = {k: v for k, v in model_outputs.get("vader", {}).items()}
 
     output_event                     = original_data.copy()
-    output_event["emotions"]         = json.dumps({**final_scores, **vader_scalars})
+    # vader_scalars are already captured in pipeline_log — keep emotions pure (28 GoEmotions only)
+    output_event["emotions"]         = json.dumps(final_scores)
+    output_event["vader"]            = json.dumps(vader_scalars)
     output_event["dominant_emotion"] = dominant_emotion
     output_event["pipeline_log"]     = json.dumps(pipeline_log)
     if reasoning:
@@ -620,7 +649,15 @@ async def main():
                 )
 
         except Exception as e:
-            logger.log_exception("CENTRAL RESPONDER CRITICAL ERROR", e)
+            if "NOGROUP" in str(e):
+                try:
+                    await r.xgroup_create(INPUT_STREAM, GROUP_NAME, mkstream=True)
+                    logger.warning("Re-created consumer group after NOGROUP error.")
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error(f"Failed to re-create group: {cg_err}")
+            else:
+                logger.log_exception("CENTRAL RESPONDER CRITICAL ERROR", e)
             await asyncio.sleep(1)
 
 

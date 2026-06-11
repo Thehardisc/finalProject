@@ -127,8 +127,9 @@ def build_synthetic_context_vector(
     acceleration   = float(np.clip(rng.normal(0.0, 0.12), -1.0, 1.0))
     resonance      = float(rng.beta(2.0, 2.0))
     volatility     = float(rng.beta(1.5, 3.0))
-    msg_length     = float(rng.beta(2.0, 5.0))
-    latency_norm   = float(rng.beta(1.0, 4.0))
+    # Raw char count and ms — build_feature_vector divides by 500 / 2000 respectively.
+    msg_length   = float(rng.uniform(10, 450))
+    latency_norm = float(rng.uniform(50, 3000))
 
     # ── Valence scalars: label-correlated but heavily noisy ───────────────────
     noise_sigma = 0.35 if mode == "train" else 0.20

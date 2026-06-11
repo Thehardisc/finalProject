@@ -117,7 +117,12 @@ def train_gating_network(
         epochs=n_epochs,
         pct_start=0.1,
     )
-    criterion = nn.CrossEntropyLoss(weight=cw_tensor, label_smoothing=0.10)
+    # Reduce label smoothing for GoEmotions-dominant datasets — the GoEmotions
+    # direct samples carry clean, single-label gold labels, so heavy smoothing hurts.
+    n_train = len(y_tr_idx)
+    label_smoothing = 0.05 if n_train > 5000 else 0.10
+    criterion = nn.CrossEntropyLoss(weight=cw_tensor, label_smoothing=label_smoothing)
+    logger.info(f"  [Trainer] label_smoothing={label_smoothing} (n_train={n_train})")
 
     # ── NLP anchor: GoEmotions index → class_to_idx mapping ─────────────────
     goe_to_class_idx = torch.tensor(
@@ -125,8 +130,10 @@ def train_gating_network(
         dtype=torch.long, device=device,
     )  # [28]  — -1 for labels absent from training classes
 
+    # Lower threshold on larger datasets — when GoE is 65%+ confident (vs 75%),
+    # the anchor provides stronger gradient signal across more samples.
     nlp_anchor_coeff  = 0.30
-    nlp_anchor_thresh = 0.75
+    nlp_anchor_thresh = 0.65 if n_train > 5000 else 0.75
 
     uniform_gate  = torch.ones(4, device=device) / 4.0
     X_v_t         = torch.tensor(X_v_s, dtype=torch.float32, device=device)
