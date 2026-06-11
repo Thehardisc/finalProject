@@ -164,9 +164,12 @@ def _meld_build_cdm(
     ctx[CTX_LATENCY_MS] = 0.0
 
     # ── HMM slots [33:39] — moderate confidence since we have real context ─
+    # CTX_HMM_EMISSION mirrors context_engine's emit_norm which is in [0,1]:
+    # emit_norm = clip((raw_lp - log(1e-12)) / (0 - log(1e-12)), 0, 1)
+    # 0.65 represents a reasonably likely emission (strong-ish HMM signal).
     ctx[CTX_HMM_CONF]    = 0.65
     ctx[CTX_HMM_ENTROPY] = 0.40
-    ctx[CTX_HMM_EMISSION] = -1.0
+    ctx[CTX_HMM_EMISSION] = 0.65
     ctx[CTX_HMM_NEXT3.start]     = 0.50
     ctx[CTX_HMM_NEXT3.start + 1] = 0.30
     ctx[CTX_HMM_NEXT3.start + 2] = 0.20
@@ -181,7 +184,7 @@ def extract_meld_features(
     vader_analyzer,
     bert_analyzer,
     goe_analyzer,
-    max_utterances: int = 1500,
+    max_utterances: int = 6000,
     batch_size: int = 32,
 ) -> tuple:
     """
@@ -201,7 +204,7 @@ def extract_meld_features(
     real gradient signal for the first time.
     """
     cache_path = MODEL_PATH.parent / "meld_features_cache.pkl"
-    cache_key  = f"meld_ctx_v1_{max_utterances}_{FEATURE_DIM}"
+    cache_key  = f"meld_ctx_v2_{max_utterances}_{FEATURE_DIM}"
     empty      = np.empty((0, FEATURE_DIM), dtype=np.float32)
 
     logger.info(f"[MELD] Starting feature extraction (max_utterances={max_utterances})...")

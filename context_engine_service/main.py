@@ -881,7 +881,16 @@ async def redis_listener():
                                 )
 
         except Exception as e:
-            logger.error("redis_listener_loop_error", extra={"event": "ce_listener_error", "error": str(e)})
+            if "NOGROUP" in str(e):
+                try:
+                    await context_engine.redis.xgroup_create(stream_name, group_name, mkstream=True)
+                    logger.warning("Re-created consumer group after NOGROUP error.",
+                                   extra={"stream": stream_name})
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error("xgroup_create_failed", extra={"error": str(cg_err)})
+            else:
+                logger.error("redis_listener_loop_error", extra={"event": "ce_listener_error", "error": str(e)})
             await asyncio.sleep(1)
 
 

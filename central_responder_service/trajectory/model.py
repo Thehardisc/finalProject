@@ -2,13 +2,12 @@
 Self-contained ConversationLSTM definition for inference inside central_responder.
 Mirrors conversation_state_learner/models/lstm.py exactly — kept in sync manually.
 
-Input  per timestep : 67-dim  (go_emotions 28 + bert 7 + vader 4 + emoji 28)
+Input  per timestep : 79-dim  (go_emotions 28 + bert 7 + vader 4 + cdm_context 40)
 Output per timestep : 28-dim  predicted next-message emotion distribution
 Hidden state h_t    : [num_layers, 1, hidden_dim] — the learned conversation state
 
-The checkpoint at central_responder_service/models/trajectory_lstm.pt was
-trained with the 67-dim layout; inference.py passes input_dim=67 to the
-constructor explicitly. The default below is the truth-as-trained.
+input_dim is read from trajectory_config.json at load time (default 79).
+See inference.py:load_trajectory_model and conversation_state_learner/features/schema.py.
 """
 
 import torch
@@ -16,7 +15,7 @@ import torch.nn as nn
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from typing import Tuple, Optional
 
-MSG_DIM    = 39
+MSG_DIM    = 79  # GoEmotions(28) + BERT(7) + VADER(4) + CDM context(40)
 N_EMOTIONS = 28
 
 
@@ -77,7 +76,7 @@ class ConversationLSTM(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor, Tuple]:
         """
         Single-step inference.
-        x: [1, 1, 67]
+        x: [1, 1, 79]
         Returns:
             next_emotions:     [28]        predicted next-message distribution
             trajectory_vector: [hidden_dim] conversation state embedding

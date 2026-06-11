@@ -31,7 +31,7 @@ EMOTION_LABELS_28 = [
 
 BERT_LABELS_7 = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
 
-VADER_KEYS_4 = ['neg', 'neu', 'pos', 'compound']
+VADER_KEYS_4 = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
 
 # Derived feature positions in window vector
 CDM_CTX_DIM  = 40               # must match shared/constants.py CDM_CTX_DIM

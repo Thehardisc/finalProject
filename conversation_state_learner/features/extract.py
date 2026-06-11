@@ -3,12 +3,12 @@ Feature extraction from enriched conversation JSONL.
 
 Produces two complementary dataset formats:
   1. Windowed (feedforward baseline)
-     X_windows:  [N, 210]  — flattened 3-message window + derived features
+     X_windows:  [N, 246]  — flattened 3-message window + derived features
      y_dist:     [N,  28]  — next message's go_emotions distribution (regression target)
      y_label:    [N]       — next message's dominant emotion (classification target)
 
   2. Sequence (LSTM training)
-     sequences:  list of [T, 67] arrays — one per conversation
+     sequences:  list of [T, 79] arrays — one per conversation
      seq_targets:list of [T, 28] arrays — shifted by 1 (predict next step)
 
 Run:
@@ -33,11 +33,11 @@ DEFAULT_JSONL  = Path(__file__).parent.parent / "training_data" / "conversations
 DEFAULT_OUT    = Path(__file__).parent.parent / "features"
 
 
-# ── Per-message feature vector (67 dims) ──────────────────────────────────────
+# ── Per-message feature vector (79 dims) ──────────────────────────────────────
 
 def msg_to_vec(pipeline: dict) -> np.ndarray:
     """
-    Convert a single message's pipeline dict to a 77-dim feature vector.
+    Convert a single message's pipeline dict to a 79-dim feature vector.
     Returns zeros if pipeline data is missing.
     """
     if not pipeline:
@@ -89,7 +89,7 @@ def window_to_derived(window_msgs: List[dict]) -> np.ndarray:
         bert     = stages.get("bert", {})
 
         # Valence
-        valences.append(float(vader.get("compound", 0.0)))
+        valences.append(float(vader.get("vader_compound", 0.0)))
 
         # Model agreement: does go_emotions top label appear in bert top label?
         go_top   = max(go,   key=go.get)   if go   else "neutral"
@@ -149,7 +149,7 @@ def extract(jsonl_path: Path) -> dict:
     print(f"Loaded {len(conversations)} conversations from {jsonl_path.name}")
 
     # Sequence dataset (variable length — for LSTM)
-    sequences:       List[np.ndarray] = []   # [T, 67] per conv
+    sequences:       List[np.ndarray] = []   # [T, 79] per conv
     seq_targets:     List[np.ndarray] = []   # [T-1, 28] next-step targets
     seq_trajectories: List[str]       = []
 
@@ -179,7 +179,7 @@ def extract(jsonl_path: Path) -> dict:
             continue
 
         # ── Sequence format ──────────────────────────────────────────────────
-        vecs = np.stack([msg_to_vec(m["pipeline"]) for m in valid])  # [T, 67]
+        vecs = np.stack([msg_to_vec(m["pipeline"]) for m in valid])  # [T, 79]
 
         # Targets: next-step go_emotions distribution
         # For timestep i, target is valid[i+1]'s go_emotions
@@ -199,7 +199,7 @@ def extract(jsonl_path: Path) -> dict:
             window     = valid[i : i + WINDOW_SIZE]
             target_msg = valid[i + WINDOW_SIZE]
 
-            base    = np.concatenate([msg_to_vec(m["pipeline"]) for m in window])  # 201
+            base    = np.concatenate([msg_to_vec(m["pipeline"]) for m in window])  # 237
             derived = window_to_derived(window)                                     # 9
             x       = np.concatenate([base, derived])                               # 210
 
@@ -219,7 +219,7 @@ def extract(jsonl_path: Path) -> dict:
     print(f"\nExtraction summary:")
     print(f"  Valid conversations : {n_seq}  (skipped {skipped})")
     print(f"  Windowed samples    : {n_win}  (each window = {WINDOW_DIM} dims)")
-    print(f"  Sequence samples    : {n_seq}  (variable length, 67 dims/step)")
+    print(f"  Sequence samples    : {n_seq}  (variable length, 79 dims/step)")
 
     if n_win > 0:
         unique_labels, counts = np.unique(y_label, return_counts=True)

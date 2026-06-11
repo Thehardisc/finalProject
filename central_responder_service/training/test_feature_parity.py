@@ -136,10 +136,10 @@ def test_cdm_block_used_when_correct_length():
     for i, (actual, expected) in enumerate(zip(cdm_out, ctx)):
         if i not in normalized_idx:
             assert actual == pytest.approx(expected, abs=1e-6), f"CDM index {i} mismatch"
-    # confirm normalized slots are present (non-NaN) and within sane range
-    assert -3.0 <= cdm_out[CTX_MSG_LENGTH]  <= 3.0
-    assert -3.0 <= cdm_out[CTX_LATENCY_MS]  <= 3.0
-    assert -3.0 <= cdm_out[CTX_HMM_EMISSION] <= 3.0
+    # confirm normalized slots are present (non-NaN) and within their expected ranges
+    assert 0.0 <= cdm_out[CTX_MSG_LENGTH]  <= 3.0   # raw_chars / 500, capped at 3
+    assert 0.0 <= cdm_out[CTX_LATENCY_MS]  <= 3.0   # raw_ms / 2000, capped at 3
+    assert 0.0 <= cdm_out[CTX_HMM_EMISSION] <= 1.0  # already [0,1] from context_engine, clipped
 
 def test_prior_block_zeros_when_missing():
     fv = build_feature_vector(_model_outputs(), trajectory_prior=None).flatten()

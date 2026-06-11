@@ -100,8 +100,14 @@ def run_one_cycle(reload_callback=None) -> None:
     # BERT and GoEmotions run in parallel threads; PyTorch releases the GIL during
     # C++ ops, so each model can use its own thread pool. Setting num_threads high
     # lets each model saturate the CPU during its forward pass.
-    torch.set_num_threads(max(4, cpu_count - 1))
-    torch.set_num_interop_threads(2)  # 2 models run in parallel
+    try:
+        torch.set_num_threads(max(4, cpu_count - 1))
+    except RuntimeError:
+        pass
+    try:
+        torch.set_num_interop_threads(2)  # 2 models run in parallel
+    except RuntimeError:
+        pass
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
     logger.info(
         f"  PyTorch: {torch.get_num_threads()} intra-op threads, "
@@ -117,7 +123,7 @@ def run_one_cycle(reload_callback=None) -> None:
     if is_bootstrap:
         # ── One-time bootstrap from EmpatheticDialogues ────────────────────────
         CACHE_PATH = MODEL_PATH.parent / "dataset_features_cache.pkl"
-        DATASET_ID = "empathetic_dialogues_v1"
+        DATASET_ID = "empathetic_dialogues_multiturn_v1"
 
         if CACHE_PATH.exists():
             logger.info("Loading cached bootstrap features...")
@@ -132,9 +138,9 @@ def run_one_cycle(reload_callback=None) -> None:
                     del vader, bert, goe
                     gc.collect()
                     return run_one_cycle(reload_callback)
-                X_tr, y_tr, gs_tr = cached["train"]
-                X_v,  y_v,  _     = cached["val"]
-                X_te, y_te, _     = cached["test"]
+                X_tr, y_tr, has_cdm_emp_tr = cached["train"]
+                X_v,  y_v,  _              = cached["val"]
+                X_te, y_te, _              = cached["test"]
                 logger.info(
                     f"Bootstrap cache loaded — "
                     f"{len(X_tr)} train / {len(X_v)} val / {len(X_te)} test samples."
@@ -153,9 +159,9 @@ def run_one_cycle(reload_callback=None) -> None:
                 f"No model found — bootstrapping from EmpatheticDialogues "
                 f"(MAX_EMPATHETIC_SAMPLES={MAX_EMPATHETIC_SAMPLES})..."
             )
-            X_tr, y_tr, gs_tr = extract_empathetic_dialogues_features(vader, bert, goe, split="train", batch_size=nlp_batch_size)
-            X_v,  y_v,  _     = extract_empathetic_dialogues_features(vader, bert, goe, split="val",   batch_size=nlp_batch_size)
-            X_te, y_te, _     = extract_empathetic_dialogues_features(vader, bert, goe, split="test",  batch_size=nlp_batch_size)
+            X_tr, y_tr, has_cdm_emp_tr = extract_empathetic_dialogues_features(vader, bert, goe, split="train", batch_size=nlp_batch_size)
+            X_v,  y_v,  _              = extract_empathetic_dialogues_features(vader, bert, goe, split="val",   batch_size=nlp_batch_size)
+            X_te, y_te, _              = extract_empathetic_dialogues_features(vader, bert, goe, split="test",  batch_size=nlp_batch_size)
 
             if not X_tr.size:
                 logger.error("EmpatheticDialogues extraction returned empty train set. Aborting.")
@@ -172,14 +178,15 @@ def run_one_cycle(reload_callback=None) -> None:
                     "dataset_id":  DATASET_ID,
                     "feature_dim": FEATURE_DIM,
                     "n_train_cap": MAX_EMPATHETIC_SAMPLES,
-                    "train": (list(X_tr), y_tr, gs_tr),
+                    "train": (list(X_tr), y_tr, list(has_cdm_emp_tr)),
                     "val":   (list(X_v),  y_v,  None),
                     "test":  (list(X_te), y_te, None),
                 }, f)
 
             X_tr, X_v, X_te = list(X_tr), list(X_v), list(X_te)
 
-        has_cdm_tr: list = [False] * len(X_tr)
+        has_cdm_tr: list = list(has_cdm_emp_tr)
+        gs_tr = [{label: 1.0} for label in y_tr]
         n_ed = len(X_tr)
 
         # ── Synthetic augmentation for the 5 missing GoEmotions classes ────────
@@ -276,35 +283,65 @@ def run_one_cycle(reload_callback=None) -> None:
         }
 
     else:
-        # ── Continuous learning from database ──────────────────────────────────
+        # ── Continuous learning from database + cached external datasets ────────
         from sklearn.model_selection import train_test_split as _tts
 
         X_live, y_live = fetch_live_data(vader, bert, goe)
         X_rel,  y_rel  = load_relabeled_conversations()
 
-        X_all = X_live * 3 + list(X_rel) * 3
-        y_all = y_live * 3 + list(y_rel) * 3
+        X_db = X_live * 3 + list(X_rel) * 3
+        y_db = y_live * 3 + list(y_rel) * 3
 
-        if len(X_all) < MIN_DB_SAMPLES:
+        if len(X_db) < MIN_DB_SAMPLES:
             logger.info(
-                f"Only {len(X_all)} DB samples (need ≥ MIN_DB_SAMPLES={MIN_DB_SAMPLES}). "
+                f"Only {len(X_db)} DB samples (need ≥ MIN_DB_SAMPLES={MIN_DB_SAMPLES}). "
                 f"Skipping cycle — waiting for more verified data."
             )
             del vader, bert, goe
             gc.collect()
             return
 
-        logger.info(f"  [DB] {len(X_all)} samples available for continuous learning.")
+        logger.info(f"  [DB] {len(X_db)} samples available for continuous learning.")
 
-        X_tr, X_v, y_tr, y_v = _tts(X_all, y_all, test_size=0.20, random_state=42)
+        # GoEmotions direct (balanced 500/class × 28 classes) — loads from disk cache
+        # when available, no NLP inference needed. Dramatically expands training set.
+        X_goe_d, y_goe_d, _ = extract_goemotions_direct_features(
+            vader, bert, goe, batch_size=nlp_batch_size
+        )
+        n_goe_cont = len(X_goe_d)
+        if n_goe_cont > 0:
+            logger.info(f"  [GoEDirect] +{n_goe_cont} cached GoEmotions samples added to continuous cycle.")
+
+        # MELD (multi-turn with real CDM context) — loads from cache if available,
+        # otherwise runs NLP inference on meld_raw_cache.json.
+        X_meld_c, y_meld_c, has_cdm_meld_c = extract_meld_features(
+            vader, bert, goe, batch_size=nlp_batch_size
+        )
+        n_meld_cont = len(X_meld_c)
+        if n_meld_cont > 0:
+            logger.info(f"  [MELD] +{n_meld_cont} MELD samples added to continuous cycle.")
+
+        X_all = X_db + list(X_goe_d) + list(X_meld_c)
+        y_all = y_db + list(y_goe_d) + list(y_meld_c)
+        has_cdm_all = [False] * len(X_db) + [False] * n_goe_cont + list(has_cdm_meld_c)
+
+        X_tr, X_v, y_tr, y_v, hc_tr, _ = _tts(
+            X_all, y_all, has_cdm_all,
+            test_size=0.20, random_state=42, stratify=y_all,
+        )
         X_te, y_te = X_v, y_v
         gs_tr      = [{label: 1.0} for label in y_tr]
-        has_cdm_tr = [False] * len(X_tr)
+        has_cdm_tr = hc_tr
         dataset_composition = {
-            "Live DB samples (3×)":      len(X_live) * 3,
-            "Relabeled conversations (3×)": len(X_rel) * 3,
+            "Live DB samples (3×)":           len(X_live) * 3,
+            "Relabeled conversations (3×)":   len(X_rel)  * 3,
+            "GoEmotions-direct (cache)":      n_goe_cont,
+            f"MELD (cache, {sum(has_cdm_meld_c)} w/ real ctx)": n_meld_cont,
         }
-        logger.info(f"DB cycle: {len(X_tr)} train / {len(X_v)} val samples.")
+        logger.info(
+            f"Continuous cycle: {len(X_tr)} train / {len(X_v)} val samples "
+            f"({len(X_db)} DB + {n_goe_cont} GoE + {n_meld_cont} MELD)."
+        )
 
     del vader, bert, goe
     gc.collect()
@@ -366,6 +403,18 @@ def run_one_cycle(reload_callback=None) -> None:
     else:
         train_device = "cpu"
 
+    # Scale epochs and batch size to dataset size: larger datasets train better
+    # with bigger batches (less noisy gradients) and more epochs.
+    n_samples = len(X_tr_arr)
+    dynamic_epochs    = 120 if n_samples > 5000 else 80
+    dynamic_batch     = 512 if n_samples > 5000 else 256
+    dynamic_patience  = 20  if n_samples > 5000 else 10
+    dynamic_lb_coeff  = 1e-3 if n_samples > 5000 else 5e-4  # stronger balance on large sets
+    logger.info(
+        f"  [HParams] n={n_samples}: epochs={dynamic_epochs}  batch={dynamic_batch}  "
+        f"patience={dynamic_patience}  lb_coeff={dynamic_lb_coeff}"
+    )
+
     wrapper = train_gating_network(
         X_tr=X_tr_arr,
         y_tr=y_tr,
@@ -373,12 +422,12 @@ def run_one_cycle(reload_callback=None) -> None:
         y_v=y_v,
         classes=EMOTION_LABELS,
         has_cdm=np.array(has_cdm_tr, dtype=bool),
-        n_epochs=80,
-        batch_size=256,
+        n_epochs=dynamic_epochs,
+        batch_size=dynamic_batch,
         lr=5e-4,
         weight_decay=1e-4,
-        load_balance_coeff=5e-4,
-        patience=10,
+        load_balance_coeff=dynamic_lb_coeff,
+        patience=dynamic_patience,
         device=train_device,
     )
 
@@ -478,6 +527,10 @@ def run_one_cycle(reload_callback=None) -> None:
 
     if deployed:
         tmp = MODEL_PATH.with_suffix(".tmp.pkl")
+        # Move to CPU before pickling — the pkl must be portable to Docker (Linux/CPU)
+        # even when training ran on MPS or CUDA.
+        wrapper.model_.cpu()
+        wrapper._device = torch.device("cpu")
         with open(tmp, "wb") as f:
             pickle.dump(wrapper, f)
         tmp.rename(MODEL_PATH)
