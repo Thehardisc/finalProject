@@ -53,7 +53,8 @@ class ConversationLSTM(nn.Module):
             dropout=dropout if num_layers > 1 else 0.0,
         )
 
-        self.dropout = nn.Dropout(dropout)
+        self.dropout   = nn.Dropout(dropout)
+        self.lstm_norm = nn.LayerNorm(hidden_dim)
 
         # Output head — predict next-message emotion distribution
         self.output_head = nn.Sequential(
@@ -93,8 +94,9 @@ class ConversationLSTM(nn.Module):
         else:
             lstm_out, (h_n, c_n) = self.lstm(x_proj, hidden)
 
-        lstm_out = self.dropout(lstm_out)         # [B, T, hidden_dim]
-        predictions = self.output_head(lstm_out)  # [B, T, 28]
+        lstm_out    = self.dropout(lstm_out)          # [B, T, hidden_dim]
+        lstm_out    = self.lstm_norm(lstm_out)        # stabilize LSTM output scale
+        predictions = self.output_head(lstm_out)      # [B, T, 28]
 
         return predictions, (h_n, c_n)
 
