@@ -47,6 +47,7 @@ class ConversationLSTM(nn.Module):
         )
 
         self.dropout    = nn.Dropout(dropout)
+        self.lstm_norm  = nn.LayerNorm(hidden_dim)
 
         self.output_head = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
@@ -66,6 +67,7 @@ class ConversationLSTM(nn.Module):
             lstm_out, (h_n, c_n) = self.lstm(x_proj, hidden)
 
         lstm_out    = self.dropout(lstm_out)
+        lstm_out    = self.lstm_norm(lstm_out)
         predictions = self.output_head(lstm_out)
         return predictions, (h_n, c_n)
 
