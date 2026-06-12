@@ -53,7 +53,7 @@ class ConversationLSTM(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim // 2, output_dim),
-            nn.Sigmoid(),
+            nn.Softmax(dim=-1),
         )
 
     def forward(self, x, lengths=None, hidden=None):

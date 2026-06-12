@@ -1,7 +1,7 @@
 """
 ConversationLSTM — learns emotional trajectory dynamics from conversation sequences.
 
-Input  at each timestep: 39-dim feature vector (go_emotions + bert + vader)
+Input  at each timestep: 79-dim feature vector (GoEmotions(28) + BERT(7) + VADER(4) + CDM(40))
 Output at each timestep: 28-dim predicted emotion distribution for the NEXT message
 
 The LSTM hidden state h_t IS the "conversation state" — a continuous learned
@@ -9,11 +9,11 @@ representation of where the conversation has been and where it's heading.
 After training, h_t is extracted and injected into the main pipeline as context.
 
 Architecture:
-  Linear(67 → input_dim)  — projection + normalisation
+  Linear(79 → input_dim)  — projection + normalisation
   LSTM(input_dim, hidden_dim, num_layers)
   Dropout
   Linear(hidden_dim → 28)
-  Sigmoid  — output is a probability-like distribution over 28 emotions
+  Softmax  — proper probability distribution over 28 emotions (sums to 1)
 """
 
 import torch
@@ -27,7 +27,7 @@ from features.schema import MSG_DIM, N_EMOTIONS
 class ConversationLSTM(nn.Module):
     def __init__(
         self,
-        input_dim:  int = MSG_DIM,     # 67
+        input_dim:  int = MSG_DIM,     # 79
         hidden_dim: int = 128,
         num_layers: int = 2,
         output_dim: int = N_EMOTIONS,  # 28
@@ -37,7 +37,7 @@ class ConversationLSTM(nn.Module):
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
 
-        # Input projection — maps raw 67-dim vector to model's internal dim
+        # Input projection — maps raw 79-dim vector to model's internal dim
         self.input_proj = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
@@ -61,18 +61,18 @@ class ConversationLSTM(nn.Module):
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim // 2, output_dim),
-            nn.Sigmoid(),   # outputs in [0, 1] — emotion scores
+            nn.Softmax(dim=-1),   # proper probability distribution over 28 emotions
         )
 
     def forward(
         self,
-        x: torch.Tensor,                          # [B, T, 67]
+        x: torch.Tensor,                          # [B, T, 79]
         lengths: Optional[torch.Tensor] = None,   # [B] actual sequence lengths
         hidden: Optional[Tuple] = None,           # (h_0, c_0) for stateful inference
     ) -> Tuple[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """
         Args:
-            x:       [B, T, 67]  padded input sequences
+            x:       [B, T, 79]  padded input sequences
             lengths: [B]         actual lengths (for packing); None = all equal
             hidden:  (h, c)      initial hidden state; None = zeros
 
@@ -115,7 +115,7 @@ class ConversationLSTM(nn.Module):
         Single-step inference — feed one message, get prediction + updated state.
 
         Args:
-            x:      [1, 1, 67]  single message features (batch=1, seq_len=1)
+            x:      [1, 1, 79]  single message features (batch=1, seq_len=1)
             hidden: previous (h, c) or None
 
         Returns:
