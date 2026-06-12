@@ -570,7 +570,7 @@ def train(
         if top3 > best_top3 or (top3 == best_top3 and top1 > best_top1):
             best_top3 = top3
             best_top1 = top1
-            torch.save(model.state_dict(), MODEL_OUT)
+            torch.save({"model_state": model.state_dict()}, MODEL_OUT)
 
         if epoch % 10 == 0 or epoch == 1:
             print(f"Epoch {epoch:3d}/{epochs}  "
