@@ -67,8 +67,9 @@ N_CDM_STATES = len(CDM_STATES)  # 15
 ML_DIM      = 39    # VADER(4) + BERT(7) + GoE(28)
 CDM_CTX_DIM = 40    # context_engine_service output: CDM one-hot(15) + 18 scalars + 7 HMM
 PRIOR_DIM   = 28    # trajectory LSTM predicted_next distribution (one per GoEmotions label)
-CONTEXT_DIM = CDM_CTX_DIM + PRIOR_DIM  # = 68  (full context block in feature vector)
-FEATURE_DIM = ML_DIM + CONTEXT_DIM     # = 107
+SARCASM_DIM = 1     # learned sarcasm/passive-aggression score from sarcasm_classifier.py
+CONTEXT_DIM = CDM_CTX_DIM + PRIOR_DIM + SARCASM_DIM  # = 69
+FEATURE_DIM = ML_DIM + CONTEXT_DIM                   # = 108
 
 # Named index map — import these instead of hardcoding integers.
 # Any layout change must update both these constants AND context_engine_service/main.py.
