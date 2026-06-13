@@ -22,6 +22,7 @@ from meta_learner import (
 from trainer import start_trainer_thread
 
 from trajectory.inference import load_trajectory_model, run_trajectory_step
+from sarcasm_classifier import load_sarcasm_model
 
 import metrics as METRICS  # noqa: F401  (kept so the module is imported once at startup)
 from prometheus_client import start_http_server as _start_metrics_server
@@ -100,6 +101,13 @@ TRAJECTORY_MODEL = load_trajectory_model(
 )
 if TRAJECTORY_MODEL is not None:
     logger.info("EDE loaded — conversation phase + trajectory prior ACTIVE.")
+
+SARCASM_MODEL = load_sarcasm_model(
+    model_path=os.path.join(_model_dir, 'sarcasm_clf.pt'),
+    config_path=os.path.join(_model_dir, 'sarcasm_clf_config.json'),
+)
+if SARCASM_MODEL is not None:
+    logger.info("Sarcasm classifier loaded — learned sarcasm_score ACTIVE.")
 
 
 # ── Aggregation helpers ─────────────────────────────────────────────────────────
@@ -260,7 +268,25 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     except Exception as _tpe:
         logger.debug(f"Could not load trajectory prior for {conv_id}: {_tpe}")
 
-    fv = build_feature_vector(model_outputs, context_vector=context_vector, trajectory_prior=traj_prior)
+    # Fetch message text and conversation history before build_feature_vector.
+    # History is read here (prior messages only) and reused by the implicit emotion
+    # section below — avoids a second Redis round-trip for the same key.
+    _orig_text    = original_data.get("original_text", "")
+    _conv_history = await get_conv_history(r, conv_id)
+
+    learned_sarcasm = (
+        SARCASM_MODEL.predict(_orig_text, _conv_history)
+        if SARCASM_MODEL is not None and _orig_text
+        else 0.0
+    )
+    logger.debug(f"[Sarcasm] {message_id}: learned={learned_sarcasm:.3f}")
+
+    fv = build_feature_vector(
+        model_outputs,
+        context_vector=context_vector,
+        trajectory_prior=traj_prior,
+        sarcasm_score=learned_sarcasm,
+    )
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc, gate_alpha = \
         predict_with_meta_learner(META_LEARNER, fv)
 
@@ -310,13 +336,10 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         meta_confidence = final_scores.get(dominant_emotion, 0.0)
 
     # ── Implicit emotion override (Stage 0) ─────────────────────────────────────
-    # Fetch prior history BEFORE storing the current message to avoid the
-    # current text contaminating its own context (async race condition).
+    # _orig_text and _conv_history were already fetched before build_feature_vector.
     _impl_override = False
-    _orig_text = original_data.get("original_text", "")
     if is_implicit_candidate(dominant_emotion, goe_scores, _orig_text, meta_confidence):
-        _impl_history = await get_conv_history(r, conv_id)
-        _impl_result  = await request_implicit_emotion(r, message_id, _orig_text, _impl_history)
+        _impl_result  = await request_implicit_emotion(r, message_id, _orig_text, _conv_history)
         if _impl_result and should_override(dominant_emotion, meta_confidence, _impl_result):
             _prev_dom        = dominant_emotion
             dominant_emotion = _impl_result["emotion"]

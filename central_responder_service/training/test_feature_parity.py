@@ -1,15 +1,15 @@
 """
-Feature-vector sanity test for the 107-dim architecture.
+Feature-vector sanity test for the 108-dim architecture.
 
-Layout: VADER(4) + BERT(7) + GoE(28) + CDM_CTX(40) + TRAJ_PRIOR(28) = 107
+Layout: VADER(4) + BERT(7) + GoE(28) + CDM_CTX(40) + TRAJ_PRIOR(28) + SARCASM(1) = 108
 
 Both inference (meta_learner.py:build_feature_vector) and training
-(trainer.py) share the same build_feature_vector from meta_learner.py,
-so this test verifies:
+share the same build_feature_vector from meta_learner.py, so this test verifies:
   1. The function produces a (1, FEATURE_DIM) array with the right shape.
   2. VADER / BERT / GoEmotions values land in the correct index blocks.
   3. CDM context and trajectory prior default to zeros when missing.
-  4. FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM match constants.
+  4. sarcasm_score lands at index [107] and is clipped to [0, 1].
+  5. FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, SARCASM_DIM match constants.
 
 Run from project root:
     python -m pytest central_responder_service/training/test_feature_parity.py -v
@@ -29,7 +29,7 @@ for p in (_PROJECT_ROOT, _SVC_ROOT):
 from meta_learner import build_feature_vector
 from shared.constants import (
     EMOTION_LABELS, BERT_LABELS, VADER_KEYS,
-    FEATURE_DIM, ML_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM,
+    FEATURE_DIM, ML_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, SARCASM_DIM,
 )
 
 
@@ -55,8 +55,11 @@ def _prior(length=PRIOR_DIM, value=0.0):
 
 # ── Constant layout checks ────────────────────────────────────────────────────
 
-def test_feature_dim_is_107():
-    assert FEATURE_DIM == 107
+def test_feature_dim_is_108():
+    assert FEATURE_DIM == 108
+
+def test_sarcasm_dim_is_1():
+    assert SARCASM_DIM == 1
 
 def test_ml_dim_is_39():
     assert ML_DIM == 39
@@ -67,8 +70,8 @@ def test_cdm_ctx_dim_is_40():
 def test_prior_dim_is_28():
     assert PRIOR_DIM == 28
 
-def test_context_dim_is_68():
-    assert CONTEXT_DIM == 68
+def test_context_dim_is_69():
+    assert CONTEXT_DIM == 69
 
 def test_ml_plus_context_equals_feature():
     assert ML_DIM + CONTEXT_DIM == FEATURE_DIM
@@ -151,9 +154,35 @@ def test_prior_block_used_when_correct_length():
     np.testing.assert_allclose(fv[79:107], prior, atol=1e-6)
 
 
+# ── Sarcasm slot [107] ────────────────────────────────────────────────────────
+
+def test_sarcasm_slot_default_zero():
+    fv = build_feature_vector(_model_outputs()).flatten()
+    assert fv[107] == pytest.approx(0.0, abs=1e-6)
+
+def test_sarcasm_slot_value_stored():
+    fv = build_feature_vector(_model_outputs(), sarcasm_score=0.83).flatten()
+    assert fv[107] == pytest.approx(0.83, abs=1e-5)
+
+def test_sarcasm_slot_clipped_above_one():
+    fv = build_feature_vector(_model_outputs(), sarcasm_score=1.5).flatten()
+    assert fv[107] == pytest.approx(1.0, abs=1e-5)
+
+def test_sarcasm_slot_clipped_below_zero():
+    fv = build_feature_vector(_model_outputs(), sarcasm_score=-0.3).flatten()
+    assert fv[107] == pytest.approx(0.0, abs=1e-5)
+
+def test_sarcasm_does_not_affect_prior_block():
+    prior = [float(i) / 100 for i in range(PRIOR_DIM)]
+    fv = build_feature_vector(_model_outputs(), trajectory_prior=prior, sarcasm_score=0.7).flatten()
+    np.testing.assert_allclose(fv[79:107], prior, atol=1e-6)
+    assert fv[107] == pytest.approx(0.7, abs=1e-5)
+
+
 # ── Missing keys default to zero ──────────────────────────────────────────────
 
 def test_missing_model_keys_default_to_zero():
+    # All model outputs missing, no sarcasm_score → entire vector should be zeros.
     fv = build_feature_vector({}).flatten()
     assert fv.shape == (FEATURE_DIM,)
     np.testing.assert_array_equal(fv, [0.0] * FEATURE_DIM)

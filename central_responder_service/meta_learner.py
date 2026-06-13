@@ -359,16 +359,18 @@ def build_feature_vector(
     model_outputs: dict,
     context_vector: list = None,
     trajectory_prior: list = None,
+    sarcasm_score: float = 0.0,
 ) -> np.ndarray:
     """
-    Assemble a fixed 107-dim float32 feature vector.
+    Assemble a fixed 108-dim float32 feature vector.
 
     Layout:
-      [0:4]    VADER (4)
-      [4:11]   BERT Ekman (7)
-      [11:39]  GoEmotions (28)
-      [39:79]  CDM Context — context_engine output (40)
-      [79:107] Trajectory Prior — predicted_next from previous message (28)
+      [0:4]     VADER (4)
+      [4:11]    BERT Ekman (7)
+      [11:39]   GoEmotions (28)
+      [39:79]   CDM Context — context_engine output (40)
+      [79:107]  Trajectory Prior — predicted_next from previous message (28)
+      [107]     Sarcasm score — learned binary classifier output [0, 1]
     """
     vader_scores      = model_outputs.get("vader",       {})
     bert_scores       = model_outputs.get("basic_bert",  {})
@@ -400,7 +402,7 @@ def build_feature_vector(
         if (trajectory_prior is not None and len(trajectory_prior) == PRIOR_DIM)
         else [0.0] * PRIOR_DIM
     )
-    vec.extend(cdm + prior)
+    vec.extend(cdm + prior + [float(np.clip(sarcasm_score, 0.0, 1.0))])
 
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
