@@ -95,11 +95,11 @@ else:
 
 _model_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
 TRAJECTORY_MODEL = load_trajectory_model(
-    model_path=os.path.join(_model_dir, 'trajectory_lstm.pt'),
-    config_path=os.path.join(_model_dir, 'trajectory_config.json'),
+    model_path=os.path.join(_model_dir, 'ede_model.pt'),
+    config_path=os.path.join(_model_dir, 'ede_config.json'),
 )
 if TRAJECTORY_MODEL is not None:
-    logger.info("Trajectory LSTM loaded — conversation direction prediction ACTIVE.")
+    logger.info("EDE loaded — conversation phase + trajectory prior ACTIVE.")
 
 
 # ── Aggregation helpers ─────────────────────────────────────────────────────────

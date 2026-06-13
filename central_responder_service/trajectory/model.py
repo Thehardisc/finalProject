@@ -1,91 +1,100 @@
 """
-Self-contained ConversationLSTM definition for inference inside central_responder.
-Mirrors conversation_state_learner/models/lstm.py exactly — kept in sync manually.
+EmotionalDialogueEncoder — replaces ConversationLSTM.
 
-Input  per timestep : 79-dim  (go_emotions 28 + bert 7 + vader 4 + cdm_context 40)
-Output per timestep : 28-dim  predicted next-message emotion distribution
-Hidden state h_t    : [num_layers, 1, hidden_dim] — the learned conversation state
+Input:  GoE history window [B, N, 28] — last N real GoE distributions (oldest first)
+Output: prior [B, 28] Softmax, phase_logits [B, 6]
 
-input_dim is read from trajectory_config.json at load time (default 79).
-See inference.py:load_trajectory_model and conversation_state_learner/features/schema.py.
+prior is stored at trajectory:{conv_id}:prior and consumed by meta_learner.py
+as feature vector slot [79:107].  FEATURE_DIM=107 and the slot width are unchanged.
 """
 
 import torch
 import torch.nn as nn
-from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
-MSG_DIM    = 79  # GoEmotions(28) + BERT(7) + VADER(4) + CDM context(40)
-N_EMOTIONS = 28
+PHASES   = ["opening", "escalation", "peak", "turning_point", "resolution", "sustained"]
+N_PHASES = len(PHASES)
+PHASE_IDX = {p: i for i, p in enumerate(PHASES)}
 
 
-class ConversationLSTM(nn.Module):
+class EmotionalDialogueEncoder(nn.Module):
     def __init__(
         self,
-        input_dim:  int   = MSG_DIM,
-        hidden_dim: int   = 128,
-        num_layers: int   = 2,
-        output_dim: int   = N_EMOTIONS,
-        dropout:    float = 0.3,
+        n_emotions: int   = 28,
+        n_phases:   int   = N_PHASES,
+        d_model:    int   = 64,
+        n_heads:    int   = 4,
+        n_layers:   int   = 2,
+        max_window: int   = 12,
+        dropout:    float = 0.15,
     ):
         super().__init__()
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
+        self.n_emotions = n_emotions
+        self.n_phases   = n_phases
+        self.max_window = max_window
+        self.d_model    = d_model
 
         self.input_proj = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.LayerNorm(hidden_dim),
-            nn.ReLU(),
+            nn.Linear(n_emotions, d_model),
+            nn.LayerNorm(d_model),
         )
 
-        self.lstm = nn.LSTM(
-            input_size=hidden_dim,
-            hidden_size=hidden_dim,
-            num_layers=num_layers,
+        self.cls_token = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
+        self.pos_embed = nn.Embedding(max_window + 1, d_model)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
             batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
+            norm_first=True,
+            activation="gelu",
+        )
+        self.transformer = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=n_layers,
+            enable_nested_tensor=False,
         )
 
-        self.dropout    = nn.Dropout(dropout)
-        self.lstm_norm  = nn.LayerNorm(hidden_dim)
-
-        self.output_head = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.ReLU(),
+        self.prior_head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_dim // 2, output_dim),
+            nn.Linear(d_model, n_emotions),
             nn.Softmax(dim=-1),
         )
 
-    def forward(self, x, lengths=None, hidden=None):
-        x_proj = self.input_proj(x)
-        if lengths is not None:
-            packed    = pack_padded_sequence(x_proj, lengths.cpu(), batch_first=True, enforce_sorted=False)
-            lstm_out, (h_n, c_n) = self.lstm(packed, hidden)
-            lstm_out, _ = pad_packed_sequence(lstm_out, batch_first=True, total_length=x.shape[1])
-        else:
-            lstm_out, (h_n, c_n) = self.lstm(x_proj, hidden)
+        self.phase_head = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, n_phases),
+        )
 
-        lstm_out    = self.dropout(lstm_out)
-        lstm_out    = self.lstm_norm(lstm_out)
-        predictions = self.output_head(lstm_out)
-        return predictions, (h_n, c_n)
-
-    def predict_next(
+    def forward(
         self,
-        x:      torch.Tensor,
-        hidden: Optional[Tuple] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Tuple]:
-        """
-        Single-step inference.
-        x: [1, 1, 79]
-        Returns:
-            next_emotions:     [28]        predicted next-message distribution
-            trajectory_vector: [hidden_dim] conversation state embedding
-            (h_n, c_n):        updated hidden state
-        """
-        with torch.no_grad():
-            preds, (h_n, c_n) = self.forward(x, hidden=hidden)
-        next_emotions     = preds[0, 0]       # [28]
-        trajectory_vector = h_n[-1, 0]        # [hidden_dim]  last-layer hidden
-        return next_emotions, trajectory_vector, (h_n, c_n)
+        history:      torch.Tensor,                    # [B, N, 28]
+        padding_mask: Optional[torch.Tensor] = None,   # [B, N] True = padding
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        B, N, _ = history.shape
+
+        x   = self.input_proj(history)                       # [B, N, d]
+        cls = self.cls_token.expand(B, -1, -1)               # [B, 1, d]
+        x   = torch.cat([cls, x], dim=1)                     # [B, N+1, d]
+
+        positions = torch.arange(N + 1, device=x.device)
+        x = x + self.pos_embed(positions).unsqueeze(0)
+
+        if padding_mask is not None:
+            cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=padding_mask.device)
+            mask = torch.cat([cls_mask, padding_mask], dim=1)  # [B, N+1]
+        else:
+            mask = None
+
+        h       = self.transformer(x, src_key_padding_mask=mask)
+        cls_out = h[:, 0]                                    # [B, d]
+
+        prior = self.prior_head(cls_out)   # [B, 28] — Softmax
+        phase = self.phase_head(cls_out)   # [B,  6] — raw logits
+
+        return prior, phase
