@@ -21,8 +21,8 @@ export default function SyntaxText({ text, theme = 'prism', dark = false }) {
         const { color, tint } = roleColor(theme, r, dark);
 
         return (
+          <React.Fragment key={idx}>
           <span
-            key={idx}
             onMouseEnter={() => setHoveredIdx(idx)}
             onMouseLeave={() => setHoveredIdx(null)}
             style={{
@@ -40,7 +40,7 @@ export default function SyntaxText({ text, theme = 'prism', dark = false }) {
             }}
           >
             {t.text}
-            
+
             {/* Tooltip */}
             {isHovered && (
               <div
@@ -94,8 +94,9 @@ export default function SyntaxText({ text, theme = 'prism', dark = false }) {
               </div>
             )}
             
-            <span style={{ color: roleColor(theme, 'default', dark).color }}>{t.ws}</span>
           </span>
+          <span style={{ color: roleColor(theme, 'default', dark).color }}>{t.ws}</span>
+          </React.Fragment>
         );
       })}
       

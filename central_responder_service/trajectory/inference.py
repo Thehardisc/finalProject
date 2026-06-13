@@ -1,28 +1,26 @@
 """
-Trajectory inference module — integrates ConversationLSTM into the live pipeline.
+Trajectory inference — EmotionalDialogueEncoder (EDE) integration.
 
-Responsibilities:
-  1. build_feature_vector()   — convert central_responder model_outputs → 79-dim tensor
-  2. load_hidden_state()      — fetch (h, c) for a conversation from Redis
-  3. save_hidden_state()      — persist (h, c) back to Redis with 2-hour inactivity TTL
-  4. run_trajectory_step()    — full inference: load → forward → save → return dict
+Public API (unchanged from LSTM version):
+  run_trajectory_step(model, model_outputs, conv_id, redis, context_vector=None)
+  load_trajectory_model(model_path, config_path)
 
-The returned dict is merged into pipeline_log["trajectory"] by central_responder.
-Falls back silently (returns empty dict) if model is None or any error occurs.
+Changes from LSTM:
+  - No hidden state serialization (no h/c tensors, no distributed lock)
+  - Redis stores plain JSON list of last N GoE distributions (trajectory:{conv_id}:goe_history)
+  - Trajectory prior [79:107] is still written to trajectory:{conv_id}:prior
+  - Phase label written to trajectory:{conv_id}:phase
 """
 
 import json
-import secrets
 import numpy as np
-from typing import Optional, Dict, Tuple
+from typing import Optional, List
 
 import torch
 
 from shared.utils.logger import get_logger
 
 logger = get_logger("trajectory")
-
-# ── Label constants (must match training schema) ──────────────────────────────
 
 EMOTION_LABELS_28 = [
     'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
@@ -32,111 +30,78 @@ EMOTION_LABELS_28 = [
     'relief', 'remorse', 'sadness', 'surprise', 'neutral',
 ]
 
-BERT_LABELS_7  = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
-VADER_KEYS_4   = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
+_EMOTION_VALENCE = {
+    "anger": -0.80, "annoyance": -0.60, "disapproval": -0.70, "disgust": -0.80,
+    "disappointment": -0.60, "embarrassment": -0.50, "fear": -0.70, "grief": -0.90,
+    "nervousness": -0.50, "remorse": -0.70, "sadness": -0.70,
+    "admiration": 0.80, "amusement": 0.60, "approval": 0.60, "caring": 0.70,
+    "curiosity": 0.30, "desire": 0.50, "excitement": 0.80, "gratitude": 0.80,
+    "joy": 0.90, "love": 0.90, "optimism": 0.70, "pride": 0.70,
+    "relief": 0.60, "neutral": 0.00, "confusion": -0.10,
+    "realization": 0.10, "surprise": 0.20,
+}
 
-HIDDEN_KEY_PREFIX = "trajectory:"
-HIDDEN_TTL        = 7200         # 2 hours of inactivity — beyond that, state is stale
-LOCK_PREFIX       = "trajectory:lock:"
-LOCK_TTL          = 5            # lock auto-expires if holder crashes
-
-# Must match shared/constants.py CDM_CTX_DIM — kept local to avoid import-path complexity
-CDM_CTX_DIM = 40
-
-# Atomic lock-release script: only deletes the key if the stored token matches ours
-_RELEASE_SCRIPT = """
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-    return redis.call("DEL", KEYS[1])
-else
-    return 0
-end
-"""
+HISTORY_KEY_PREFIX = "trajectory:"
+HISTORY_TTL        = 7200   # 2-hour inactivity TTL
+MAX_HISTORY        = 12
 
 
-# ── Feature construction ──────────────────────────────────────────────────────
-
-def build_feature_vector(model_outputs: dict, context_vector: list = None) -> torch.Tensor:
-    """
-    Convert central_responder model_outputs dict → [1, 1, 79] float tensor.
-    model_outputs keys: go_emotions, basic_bert, vader
-
-    Layout: GoEmotions(28) + BERT(7) + VADER(4) + CDM context(40) = 79
-    """
-    go    = model_outputs.get("go_emotions", {})
-    bert  = model_outputs.get("basic_bert",  {})
-    vader = model_outputs.get("vader",       {})
-
-    go_vec    = [float(go.get(e,    0.0)) for e in EMOTION_LABELS_28]   # 28
-    bert_vec  = [float(bert.get(e,  0.0)) for e in BERT_LABELS_7]       # 7
-    vader_vec = [float(vader.get(k, 0.0)) for k in VADER_KEYS_4]        # 4
-
-    ce_vec = context_vector if (context_vector and len(context_vector) == CDM_CTX_DIM) else [0.0] * CDM_CTX_DIM
-
-    vec = go_vec + bert_vec + vader_vec + ce_vec   # 79
-    return torch.tensor(vec, dtype=torch.float32).unsqueeze(0).unsqueeze(0)  # [1, 1, 79]
+def _goe_dict_to_vec(goe: dict) -> np.ndarray:
+    return np.array([float(goe.get(e, 0.0)) for e in EMOTION_LABELS_28], dtype=np.float32)
 
 
-# ── Redis hidden state I/O ────────────────────────────────────────────────────
+def _goe_vec_to_valence(vec: np.ndarray) -> float:
+    return float(sum(vec[i] * _EMOTION_VALENCE.get(e, 0.0)
+                     for i, e in enumerate(EMOTION_LABELS_28)))
 
-async def load_hidden_state(
-    conv_id: str,
-    redis,
-    hidden_dim: int,
-    num_layers: int,
-) -> Optional[Tuple[torch.Tensor, torch.Tensor]]:
-    """
-    Load (h, c) from Redis for a conversation.
-    Returns None if no state exists (first message in conversation).
-    """
-    key = f"{HIDDEN_KEY_PREFIX}{conv_id}:hidden"
+
+def _derive_phase(valence_window: List[float]) -> str:
+    from trajectory.model import PHASES
+    if len(valence_window) < 3:
+        return "opening"
+
+    v           = np.array(valence_window[-8:], dtype=np.float32)
+    net_delta   = float(v[-1] - v[0])
+    volatility  = float(np.std(v))
+    mean_recent = float(np.mean(v[-3:]))
+    velocity    = float(v[-1] - v[-2]) if len(v) >= 2 else 0.0
+
+    if volatility > 0.25 and abs(mean_recent) > 0.20:
+        return "peak"
+    if abs(velocity) > 0.20:
+        return "turning_point"
+    if net_delta < -0.15 and mean_recent < 0.0:
+        return "escalation"
+    if net_delta > 0.15 and mean_recent >= -0.05:
+        return "resolution"
+    if volatility < 0.05:
+        return "sustained"
+    return "opening"
+
+
+async def _load_goe_history(conv_id: str, redis) -> List[np.ndarray]:
+    key = f"{HISTORY_KEY_PREFIX}{conv_id}:goe_history"
     try:
         raw = await redis.get(key)
         if not raw:
-            return None
+            return []
         data = json.loads(raw)
-        h = torch.tensor(data["h"], dtype=torch.float32)   # [num_layers, 1, hidden_dim]
-        c = torch.tensor(data["c"], dtype=torch.float32)
-        return (h, c)
-    except Exception as e:
-        logger.warning(f"Failed to load hidden state for {conv_id}: {e}")
-        return None
-
-
-async def save_hidden_state(
-    conv_id: str,
-    h_n: torch.Tensor,
-    c_n: torch.Tensor,
-    redis,
-):
-    """Persist (h, c) to Redis with 2-hour inactivity TTL."""
-    key = f"{HIDDEN_KEY_PREFIX}{conv_id}:hidden"
-    try:
-        data = {
-            "h": h_n.detach().cpu().tolist(),
-            "c": c_n.detach().cpu().tolist(),
-        }
-        await redis.set(key, json.dumps(data), ex=HIDDEN_TTL)
-    except Exception as e:
-        logger.warning(f"Failed to save hidden state for {conv_id}: {e}")
-
-
-# ── Distributed lock helpers ─────────────────────────────────────────────────
-
-async def _acquire_lock(redis, conv_id: str):
-    """Try to acquire a per-conversation lock. Returns token if acquired, None if busy."""
-    token = secrets.token_hex(8)
-    ok = await redis.set(f"{LOCK_PREFIX}{conv_id}", token, nx=True, ex=LOCK_TTL)
-    return token if ok else None
-
-async def _release_lock(redis, conv_id: str, token: str):
-    """Atomically release lock only if we still own it (prevents releasing another holder's lock)."""
-    try:
-        await redis.eval(_RELEASE_SCRIPT, 1, f"{LOCK_PREFIX}{conv_id}", token)
+        return [_goe_dict_to_vec(d) for d in data]
     except Exception:
-        pass  # Lock expired naturally — that's fine
+        return []
 
 
-# ── Main inference step ───────────────────────────────────────────────────────
+async def _save_goe_history(conv_id: str, goe_scores: dict, redis):
+    key = f"{HISTORY_KEY_PREFIX}{conv_id}:goe_history"
+    try:
+        raw = await redis.get(key)
+        history = json.loads(raw) if raw else []
+        history.append({e: float(goe_scores.get(e, 0.0)) for e in EMOTION_LABELS_28})
+        history = history[-MAX_HISTORY:]
+        await redis.set(key, json.dumps(history), ex=HISTORY_TTL)
+    except Exception as e:
+        logger.warning(f"Failed to save GoE history for {conv_id}: {e}")
+
 
 async def run_trajectory_step(
     model,
@@ -146,105 +111,112 @@ async def run_trajectory_step(
     context_vector: list = None,
 ) -> dict:
     """
-    Full trajectory inference step for one message.
+    EDE inference step.  Drop-in for the old LSTM run_trajectory_step.
 
-    Returns dict ready to be stored as pipeline_log["trajectory"]:
-    {
-        "predicted_next":  {"joy": 0.7, "anger": 0.3, ...}  top-5 predicted emotions
-        "trajectory_vec":  [64 floats]                       conversation state embedding
-        "top_predicted":   "joy"                             most likely next emotion
-        "model_available": true
-    }
-
-    Returns {} if model is None or inference fails.
+    Extracts go_emotions scores from model_outputs, runs EDE over stored
+    history window, writes trajectory prior [79:107] to Redis, returns dict.
     """
     if model is None:
         return {}
 
-    # Acquire per-conversation distributed lock before touching hidden state.
-    # If the lock is busy (another message for this conv is mid-inference),
-    # skip trajectory for this message rather than corrupting the LSTM sequence.
-    token = await _acquire_lock(redis, conv_id)
-    if token is None:
-        logger.debug(f"Trajectory lock busy for {conv_id} — skipping step to preserve sequence integrity")
-        return {}
-
     try:
-        x = build_feature_vector(model_outputs, context_vector)
+        goe_scores = model_outputs.get("go_emotions", {})
+        if not goe_scores:
+            return {}
 
-        hidden = await load_hidden_state(
-            conv_id, redis,
-            hidden_dim=model.hidden_dim,
-            num_layers=model.num_layers,
-        )
+        history_vecs = await _load_goe_history(conv_id, redis)
 
-        next_emotions, traj_vec, (h_n, c_n) = model.predict_next(x, hidden=hidden)
+        N = model.max_window
+        if history_vecs:
+            arr = np.stack(history_vecs[-N:])           # [k, 28]
+            k   = len(arr)
+            if k < N:
+                pad     = np.zeros((N - k, 28), dtype=np.float32)
+                hist    = np.concatenate([pad, arr], axis=0)
+                mask    = np.array([True] * (N - k) + [False] * k, dtype=bool)
+            else:
+                hist    = arr
+                mask    = np.zeros(N, dtype=bool)
+        else:
+            hist = np.zeros((N, 28), dtype=np.float32)
+            mask = np.ones(N, dtype=bool)
 
-        await save_hidden_state(conv_id, h_n, c_n, redis)
+        x = torch.tensor(hist, dtype=torch.float32).unsqueeze(0)   # [1, N, 28]
+        m = torch.tensor(mask, dtype=torch.bool).unsqueeze(0)      # [1, N]
 
-        scores = next_emotions.cpu().tolist()
-        # Persist full 28-dim distribution as trajectory prior for the next message.
-        # central_responder reads this before meta-learner inference on message T+1.
+        with torch.no_grad():
+            prior, phase_logits = model(x, padding_mask=m)
+
+        scores    = prior[0].cpu().tolist()                         # [28]
+        phase_idx = int(phase_logits[0].argmax())
+
+        # Derive phase from valence computed from real GoE history if available
+        if history_vecs:
+            valence_window = [_goe_vec_to_valence(v) for v in history_vecs]
+            phase_name     = _derive_phase(valence_window)
+        else:
+            from trajectory.model import PHASES
+            phase_name = PHASES[phase_idx]
+
+        # Save updated history (current message)
+        await _save_goe_history(conv_id, goe_scores, redis)
+
+        # Write trajectory prior for meta-learner [79:107]
         try:
             await redis.set(
                 f"trajectory:{conv_id}:prior",
                 json.dumps(scores),
-                ex=HIDDEN_TTL,
+                ex=HISTORY_TTL,
             )
-        except Exception as _pe:
-            logger.warning(f"Failed to save trajectory prior for {conv_id}: {_pe}")
+            await redis.set(
+                f"trajectory:{conv_id}:phase",
+                phase_name,
+                ex=HISTORY_TTL,
+            )
+        except Exception as pe:
+            logger.warning(f"Failed to persist trajectory prior for {conv_id}: {pe}")
+
         emotion_scores = dict(zip(EMOTION_LABELS_28, scores))
         top5 = sorted(emotion_scores.items(), key=lambda kv: kv[1], reverse=True)[:5]
-        top5_dict = {k: round(float(v), 4) for k, v in top5}
-        top_predicted = top5[0][0] if top5 else "neutral"
 
         return {
-            "predicted_next":  top5_dict,
-            "top_predicted":   top_predicted,
-            "trajectory_vec":  [round(float(v), 4) for v in traj_vec.cpu().tolist()],
+            "predicted_next":  {k: round(v, 4) for k, v in top5},
+            "top_predicted":   top5[0][0] if top5 else "neutral",
+            "phase":           phase_name,
             "model_available": True,
         }
 
     except Exception as e:
-        logger.warning(f"Trajectory inference failed for {conv_id}: {e}")
+        logger.warning(f"EDE inference failed for {conv_id}: {e}")
         return {}
 
-    finally:
-        await _release_lock(redis, conv_id, token)
-
-
-# ── Model loader ──────────────────────────────────────────────────────────────
 
 def load_trajectory_model(model_path: str, config_path: str):
     """
-    Load ConversationLSTM from checkpoint.
+    Load EmotionalDialogueEncoder from checkpoint.
     Returns model in eval mode, or None if files are missing.
     """
     import os
-    from trajectory.model import ConversationLSTM
+    from trajectory.model import EmotionalDialogueEncoder
 
     if not os.path.exists(model_path):
-        logger.warning(f"Trajectory model not found at {model_path} — running without trajectory context.")
+        logger.warning(f"EDE model not found at {model_path} — trajectory context disabled.")
         return None
 
     try:
-        # Load config to get architecture
         config = {}
         if os.path.exists(config_path):
             with open(config_path) as fh:
                 config = json.load(fh)
 
-        hidden_dim = config.get("hidden_dim", 64)
-        num_layers = config.get("num_layers", 1)
-        dropout    = config.get("dropout",    0.1)
-
-        input_dim = config.get("input_dim", 79)
-        model = ConversationLSTM(
-            input_dim=input_dim,
-            hidden_dim=hidden_dim,
-            num_layers=num_layers,
-            output_dim=28,
-            dropout=dropout,
+        model = EmotionalDialogueEncoder(
+            n_emotions  = config.get("n_emotions",  28),
+            n_phases    = config.get("n_phases",    6),
+            d_model     = config.get("d_model",     64),
+            n_heads     = config.get("n_heads",     4),
+            n_layers    = config.get("n_layers",    2),
+            max_window  = config.get("max_window",  12),
+            dropout     = config.get("dropout",     0.15),
         )
 
         ckpt = torch.load(model_path, map_location="cpu")
@@ -252,11 +224,12 @@ def load_trajectory_model(model_path: str, config_path: str):
         model.eval()
 
         logger.info(
-            f"Trajectory model loaded: hidden={hidden_dim} layers={num_layers} "
-            f"(epoch {ckpt.get('epoch', '?')}, val_loss={ckpt.get('val_loss', 0):.4f})"
+            f"EDE loaded: d={config.get('d_model', 64)} "
+            f"window={config.get('max_window', 12)} "
+            f"top1={config.get('top1_acc', 0):.3f}"
         )
         return model
 
     except Exception as e:
-        logger.error(f"Failed to load trajectory model: {e}")
+        logger.error(f"Failed to load EDE model: {e}")
         return None
