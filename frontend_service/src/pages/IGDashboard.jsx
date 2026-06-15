@@ -4,17 +4,11 @@ import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
 import TelemetryPanel  from '../components/TelemetryPanel';
 import AnalysisDrawer  from '../components/AnalysisDrawer';
 import DemoRunner      from '../components/DemoRunner';
+import AmbientOrb      from '../components/AmbientOrb';
 import SyntaxText from '../syntax/SyntaxText';
 import { THEMES } from '../syntax/highlighter';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
-
-const EMOTION_LABELS = [
-  'admiration','amusement','anger','annoyance','approval','caring','confusion',
-  'curiosity','desire','disappointment','disapproval','disgust','embarrassment',
-  'excitement','fear','gratitude','grief','joy','love','nervousness','optimism',
-  'pride','realization','relief','remorse','sadness','surprise','neutral',
-];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -195,25 +189,8 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
 
 // ── MsgBubble ─────────────────────────────────────────────────────────────────
 
-const PIPELINE_MODELS = [
-  { key: 'vader',       label: 'VADER' },
-  { key: 'basic_bert',  label: 'BERT'  },
-  { key: 'go_emotions', label: 'GoE'   },
-];
-
-function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModels, theme = 'prism', dark = false }) {
-  const [hovered, setHovered]           = useState(false);
-  const [feedbackOpen, setFeedbackOpen] = useState(false);
-  const [feedbackSent, setFeedbackSent] = useState(false);
-
-  const submitFeedback = async (emotion, e) => {
-    e.stopPropagation();
-    setFeedbackOpen(false);
-    try {
-      await axios.post(`${API_BASE}/message/${msg.id}/feedback`, { label: emotion });
-      setFeedbackSent(true);
-    } catch {}
-  };
+function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'prism', dark = false }) {
+  const [hovered, setHovered] = useState(false);
 
   const bert = msg.analysis?.data?.bert_emotions;
   let emotionDict = {};
@@ -241,7 +218,7 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
         position: 'relative',
       }}
     >
-      <div style={{
+      <div className="glass-bubble" style={{
         padding: '10px 14px',
         borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
         background: dark 
@@ -258,22 +235,14 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
             : isOwn
               ? '0 2px 12px rgba(0,119,255,.09), inset 0 1px 0 rgba(255,255,255,.75)'
               : '0 1px 3px rgba(0,0,0,.07)',
-        backdropFilter: isOwn || dark ? 'blur(20px) saturate(180%)' : 'none',
-        WebkitBackdropFilter: isOwn || dark ? 'blur(20px) saturate(180%)' : 'none',
+        backdropFilter: 'blur(12px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
         animation: 'igMsgIn .26s cubic-bezier(.34,1.2,.64,1) both',
         position: 'relative', overflow: 'hidden',
         outline: hovered && msg.analysis ? `2px solid rgba(${domRgb || '0,119,255'},.30)` : 'none',
         outlineOffset: 1,
         transition: 'outline-color .15s, background .3s, border .3s',
       }}>
-        {isOwn && (
-          <div style={{
-            position: 'absolute', top: 0, left: 0, right: 0, height: '38%',
-            background: dark ? 'linear-gradient(180deg,rgba(255,255,255,.06) 0%,transparent 100%)' : 'linear-gradient(180deg,rgba(255,255,255,.50) 0%,transparent 100%)',
-            pointerEvents: 'none',
-          }} />
-        )}
-
         {isRegenerating ? (
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#9ca3af', fontStyle: 'italic', fontSize: '0.87rem' }}>
             <span className="regen-spinner" style={{
@@ -287,100 +256,8 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
-        {dom && dom.toLowerCase() !== 'neutral' && (
-          <div style={{
-            fontSize: '0.66rem', color: domRgb ? `rgb(${domRgb})` : '#9ca3af',
-            fontWeight: 600, letterSpacing: '.04em', opacity: .75,
-            textTransform: 'capitalize',
-          }}>
-            {dom}
-          </div>
-        )}
-
-        {/* ── Feedback button + inline picker ── */}
-        {msg.analysis && dom && !feedbackSent && hovered && (
-          <div style={{ position: 'relative' }}>
-            <button
-              onClick={e => { e.stopPropagation(); setFeedbackOpen(o => !o); }}
-              title="Wrong emotion? Click to correct"
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer',
-                fontSize: '0.72rem', lineHeight: 1, padding: '0 2px',
-                opacity: 0.55, transition: 'opacity .15s',
-              }}
-              onMouseEnter={e => e.currentTarget.style.opacity = 1}
-              onMouseLeave={e => e.currentTarget.style.opacity = 0.55}
-            >👎</button>
-
-            {feedbackOpen && (
-              <>
-                {/* Transparent overlay to close on outside click */}
-                <div
-                  onClick={e => { e.stopPropagation(); setFeedbackOpen(false); }}
-                  style={{ position: 'fixed', inset: 0, zIndex: 99 }}
-                />
-                <div style={{
-                  position: 'absolute', bottom: '120%', left: 0,
-                  background: '#fff', border: '1px solid rgba(0,0,0,.12)',
-                  borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,.15)',
-                  zIndex: 100, padding: '6px 4px',
-                  maxHeight: 220, overflowY: 'auto', width: 160,
-                }}>
-                  <div style={{
-                    fontSize: '0.62rem', fontWeight: 700, color: '#9ca3af',
-                    padding: '2px 8px 6px', textTransform: 'uppercase', letterSpacing: '.05em',
-                  }}>Correct emotion</div>
-                  {EMOTION_LABELS.map(emo => (
-                    <button
-                      key={emo}
-                      onClick={e => submitFeedback(emo, e)}
-                      style={{
-                        display: 'block', width: '100%', textAlign: 'left',
-                        background: 'none', border: 'none', cursor: 'pointer',
-                        padding: '5px 10px', fontSize: '0.78rem',
-                        color: emo === dom ? '#0077ff' : '#1c1c2e',
-                        fontWeight: emo === dom ? 700 : 400,
-                        borderRadius: 6,
-                      }}
-                      onMouseEnter={e => e.currentTarget.style.background = '#f3f4f6'}
-                      onMouseLeave={e => e.currentTarget.style.background = 'none'}
-                    >
-                      {emo === dom ? `✓ ${emo}` : emo}
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
-        {feedbackSent && (
-          <span style={{ fontSize: '0.62rem', color: '#15803d', fontWeight: 600 }}>✓ corrected</span>
-        )}
-
-        {msg.analysis && hovered && !feedbackOpen && (
+        {msg.analysis && hovered && (
           <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
-        )}
-        {!msg.analysis && msg.sender === 'user' && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            {PIPELINE_MODELS.map(({ key, label }) => {
-              const done = partialModels?.has(key);
-              return (
-                <div key={key} style={{
-                  fontSize: '0.60rem', fontWeight: 700,
-                  padding: '1px 5px', borderRadius: 99,
-                  background: done ? 'rgba(0,119,255,0.13)' : 'rgba(0,0,0,0.05)',
-                  color: done ? '#0077ff' : '#b0b7c3',
-                  border: `1px solid ${done ? 'rgba(0,119,255,0.30)' : 'rgba(0,0,0,0.08)'}`,
-                  transition: 'all 0.25s ease',
-                }}>
-                  {done ? '✓ ' : ''}{label}
-                </div>
-              );
-            })}
-            <span style={{ fontSize: '0.64rem', color: '#9ca3af', marginLeft: 2 }}>
-              {partialModels?.size === 3 ? 'Finalizing…' : 'Processing…'}
-            </span>
-          </div>
         )}
         {isOwn && hovered && onDelete && (
           <button
@@ -400,7 +277,7 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, partialModel
 
 // ── Group Modal ───────────────────────────────────────────────────────────────
 
-function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
+function GroupModal({ globalUsers, currentUser, onConfirm, onClose, dark = false }) {
   const [groupName, setGroupName]     = useState('');
   const [selected, setSelected]       = useState([]);
   const [search, setSearch]           = useState('');
@@ -429,18 +306,29 @@ function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
     }
   };
 
+  const modalBg    = dark ? '#1a1a2c' : '#fff';
+  const textClr    = dark ? '#e0e0e0' : '#1c1c2e';
+  const inputBg    = dark ? 'rgba(255,255,255,0.06)' : '#f3f4f6';
+  const divider    = dark ? '1px solid rgba(255,255,255,0.08)' : '1px solid #f0f0f0';
+  const hoverBg    = dark ? 'rgba(255,255,255,0.05)' : '#f8f9fa';
+  const selBg      = dark ? 'rgba(0,119,255,0.15)' : '#f0f6ff';
+  const cancelBg   = dark ? 'rgba(255,255,255,0.07)' : '#f3f4f6';
+  const cancelClr  = dark ? '#c0c0c0' : '#374151';
+  const checkBdr   = dark ? 'rgba(255,255,255,0.22)' : '#d1d5db';
+  const modalBdr   = dark ? '1px solid rgba(255,255,255,0.08)' : 'none';
+
   return (
     <div
-      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.50)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
+      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
       onClick={onClose}
     >
       <div
         onClick={e => e.stopPropagation()}
-        style={{ background: '#fff', borderRadius: 20, width: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,.20)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
+        style={{ background: modalBg, border: modalBdr, borderRadius: 20, width: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,.35)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
       >
         <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#1c1c2e', lineHeight: 1 }}>✕</button>
-          <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>New Group</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: textClr, lineHeight: 1 }}>✕</button>
+          <span style={{ fontWeight: 700, fontSize: '1rem', color: textClr }}>New Group</span>
           <div style={{ width: 24 }} />
         </div>
 
@@ -450,18 +338,18 @@ function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
             placeholder="Group name…"
             value={groupName}
             onChange={e => setGroupName(e.target.value)}
-            style={{ width: '100%', boxSizing: 'border-box', background: '#f3f4f6', border: 'none', borderRadius: 12, padding: '10px 14px', fontSize: '0.93rem', color: '#1c1c2e', outline: 'none' }}
+            style={{ width: '100%', boxSizing: 'border-box', background: inputBg, border: 'none', borderRadius: 12, padding: '10px 14px', fontSize: '0.93rem', color: textClr, outline: 'none' }}
           />
         </div>
 
         <div style={{ padding: '10px 20px 4px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: inputBg, borderRadius: 12, padding: '10px 14px' }}>
             <svg width="15" height="15" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input
               placeholder="Search people…"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: '#1c1c2e', flex: 1 }}
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: textClr, flex: 1 }}
             />
           </div>
         </div>
@@ -469,13 +357,13 @@ function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
         <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 8px' }}>
           {eligible.map(u => (
             <button key={u.user_id} onClick={() => toggle(u.user_id)}
-              style={{ width: '100%', background: selected.includes(u.user_id) ? '#f0f6ff' : 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left', transition: 'background .12s' }}
-              onMouseOver={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = '#f8f9fa'; }}
+              style={{ width: '100%', background: selected.includes(u.user_id) ? selBg : 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left', transition: 'background .12s' }}
+              onMouseOver={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = hoverBg; }}
               onMouseOut={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = 'none'; }}
             >
               <Avatar name={u.display_name} size={36} rgb="0,119,255" />
-              <span style={{ flex: 1, fontWeight: 500, fontSize: '0.93rem', color: '#1c1c2e' }}>{u.display_name}</span>
-              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${selected.includes(u.user_id) ? '#0077ff' : '#d1d5db'}`, background: selected.includes(u.user_id) ? '#0077ff' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: '#fff', transition: 'all .15s' }}>
+              <span style={{ flex: 1, fontWeight: 500, fontSize: '0.93rem', color: textClr }}>{u.display_name}</span>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${selected.includes(u.user_id) ? '#0077ff' : checkBdr}`, background: selected.includes(u.user_id) ? '#0077ff' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: '#fff', transition: 'all .15s' }}>
                 {selected.includes(u.user_id) ? '✓' : ''}
               </div>
             </button>
@@ -487,8 +375,8 @@ function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
 
         {error && <div style={{ padding: '0 20px 8px', fontSize: '0.82rem', color: '#ef4444' }}>{error}</div>}
 
-        <div style={{ padding: '12px 20px 20px', borderTop: '1px solid #f0f0f0', display: 'flex', gap: 10 }}>
-          <button onClick={onClose} style={{ flex: 1, background: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>
+        <div style={{ padding: '12px 20px 20px', borderTop: divider, display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, background: cancelBg, color: cancelClr, border: 'none', borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>
             Cancel
           </button>
           <button onClick={handleSubmit} disabled={submitting}
@@ -534,7 +422,7 @@ export default function IGDashboard({
   onDemoStart,
 }) {
   const [theme, setTheme] = useState(() => localStorage.getItem('il_theme') || 'prism');
-  const [dark, setDark]   = useState(() => localStorage.getItem('il_dark') === 'true');
+  const [dark, setDark]   = useState(() => localStorage.getItem('il_dark') !== 'false');
   const [search, setSearch]                   = useState('');
 
   useEffect(() => {
@@ -548,6 +436,8 @@ export default function IGDashboard({
   const [composeSearch, setComposeSearch]     = useState('');
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [selectedMsg, setSelectedMsg]         = useState(null);
+  const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
+  const [escalationDismissed, setEscalationDismissed] = useState(false);
   const [memberPanelOpen, setMemberPanelOpen] = useState(false);
   const [memberError, setMemberError]         = useState('');
   const messagesContainerRef = useRef(null);
@@ -563,7 +453,13 @@ export default function IGDashboard({
     if (activeConversationId) inputRef.current?.focus();
   }, [activeConversationId]);
 
-  useEffect(() => { setSelectedMsg(null); setMemberPanelOpen(false); setMemberError(''); }, [activeConversationId]);
+  useEffect(() => {
+    setSelectedMsg(null);
+    setMemberPanelOpen(false);
+    setMemberError('');
+    setInsightsPanelOpen(false);
+    setEscalationDismissed(false);
+  }, [activeConversationId]);
 
   // Conversation filtering — works for both direct (other_display_name) and group (name)
   const filteredConvs = conversations.filter(c => {
@@ -586,7 +482,20 @@ export default function IGDashboard({
   const convLabel = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
   const activeLabel = activeConv ? convLabel(activeConv) : '';
 
-  const rightPanelOpen = !!activeConversationId;
+  const rightPanelOpen = insightsPanelOpen || !!selectedMsg;
+
+  const isEscalation = (() => {
+    const analyzed = messages
+      .filter(m => m.analysis?.data?.final_valence != null)
+      .slice(-4);
+    if (analyzed.length < 2) return false;
+    const last2 = analyzed.slice(-2);
+    const negCount = last2.filter(m => m.analysis.data.final_valence < -0.25).length;
+    const hasHighShift = analyzed.slice(-1).some(
+      m => m.analysis?.data?.context_shift?.significance === 'High'
+    );
+    return negCount >= 2 || (negCount >= 1 && hasHighShift);
+  })();
 
   const handleAddMember = async (userId) => {
     setMemberError('');
@@ -606,37 +515,41 @@ export default function IGDashboard({
     }
   };
 
+  const orbValence   = currentAnalysis?.data?.final_valence ?? 0;
+  const orbVolatility = currentAnalysis?.data?.context_snapshot?.volatility ?? 0;
+
   return (
     <div style={{
       display: 'flex', height: '100vh',
-      background: dark ? '#12121c' : '#ffffff',
-      fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      background: dark ? 'var(--surface-base, #0b0d17)' : '#ffffff',
+      fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       position: 'relative',
     }}>
+      <AmbientOrb valence={orbValence} volatility={orbVolatility} />
 
       {/* ── Compose Modal ─────────────────────────────────────────────── */}
       {showCompose && (
         <div
-          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.50)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
+          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
           onClick={() => { setShowCompose(false); setComposeSearch(''); }}
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{ background: '#fff', borderRadius: 20, width: 400, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,.20)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
+            style={{ background: dark ? '#1a1a2c' : '#fff', border: dark ? '1px solid rgba(255,255,255,0.08)' : 'none', borderRadius: 20, width: 400, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,.35)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
           >
             <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <button onClick={() => { setShowCompose(false); setComposeSearch(''); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#1c1c2e', lineHeight: 1 }}>✕</button>
-              <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>New Message</span>
+              <button onClick={() => { setShowCompose(false); setComposeSearch(''); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: dark ? '#e0e0e0' : '#1c1c2e', lineHeight: 1 }}>✕</button>
+              <span style={{ fontWeight: 700, fontSize: '1rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>New Message</span>
               <div style={{ width: 24 }} />
             </div>
 
             <div style={{ padding: '14px 20px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: dark ? 'rgba(255,255,255,0.06)' : '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
                 <svg width="16" height="16" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 <input
                   autoFocus placeholder="Search people…"
                   value={composeSearch} onChange={e => setComposeSearch(e.target.value)}
-                  style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.93rem', color: '#1c1c2e', flex: 1 }}
+                  style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.93rem', color: dark ? '#e0e0e0' : '#1c1c2e', flex: 1 }}
                 />
               </div>
             </div>
@@ -650,12 +563,12 @@ export default function IGDashboard({
                 return (
                   <button key={u.user_id} onClick={() => { onCreateChat(u.user_id); setShowCompose(false); setComposeSearch(''); }}
                     style={{ width: '100%', background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', transition: 'background .12s', textAlign: 'left' }}
-                    onMouseOver={e => e.currentTarget.style.background = '#f8f9fa'}
+                    onMouseOver={e => e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.05)' : '#f8f9fa'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
                   >
                     <Avatar name={u.display_name} size={44} rgb="0,119,255" online={isOnline} />
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.93rem', color: '#1c1c2e' }}>{u.display_name}</div>
+                      <div style={{ fontWeight: 600, fontSize: '0.93rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{u.display_name}</div>
                       <div style={{ fontSize: '0.78rem', color: isOnline ? '#22c55e' : '#9ca3af' }}>
                         {isOnline ? 'Active now' : 'Offline'}
                       </div>
@@ -675,6 +588,7 @@ export default function IGDashboard({
           currentUser={currentUser}
           onConfirm={onCreateGroup}
           onClose={() => setShowGroupModal(false)}
+          dark={dark}
         />
       )}
 
@@ -821,9 +735,8 @@ export default function IGDashboard({
                     {typeof lastMsg === 'string' ? lastMsg : '…'}
                   </div>
                   {conv.dominant_emotion && (
-                    <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginTop: 3, fontSize: '0.68rem', color: `rgb(${rgb})`, fontWeight: 600, letterSpacing: '.04em', textTransform: 'capitalize' }}>
+                    <div style={{ display: 'inline-flex', alignItems: 'center', marginTop: 3 }}>
                       <div style={{ width: 6, height: 6, borderRadius: '50%', background: `rgb(${rgb})`, boxShadow: `0 0 4px rgba(${rgb},.5)` }} />
-                      {conv.dominant_emotion}
                     </div>
                   )}
                 </div>
@@ -893,12 +806,7 @@ export default function IGDashboard({
                       </span>
                     )}
                   </div>
-                  {dominant ? (
-                    <div style={{ fontSize: '0.73rem', fontWeight: 600, color: dominantRgb ? `rgb(${dominantRgb})` : '#22c55e', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: dominantRgb ? `rgb(${dominantRgb})` : '#22c55e', display: 'inline-block' }} />
-                      {dominant}
-                    </div>
-                  ) : !isGroup && onlineUsers.has(activeConv?.other_user_id) ? (
+                  {!isGroup && onlineUsers.has(activeConv?.other_user_id) ? (
                     <div style={{ fontSize: '0.73rem', color: '#22c55e' }}>Active now</div>
                   ) : (
                     <div style={{ fontSize: '0.73rem', color: '#9ca3af' }}>{isGroup ? 'Group chat' : 'Offline'}</div>
@@ -949,7 +857,20 @@ export default function IGDashboard({
                   </button>
                 )}
 
-                <button onClick={onGoToAnalytics} title="View Insights"
+                <button
+                  onClick={() => { setInsightsPanelOpen(p => !p); setSelectedMsg(null); }}
+                  title={insightsPanelOpen ? 'Hide pipeline panel' : 'Show pipeline panel'}
+                  style={{
+                    background: insightsPanelOpen ? (dark ? 'rgba(88,86,214,.15)' : '#f0f0ff') : 'none',
+                    border: `1px solid ${insightsPanelOpen ? 'rgba(88,86,214,.30)' : (dark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.10)')}`,
+                    borderRadius: 8, padding: '5px 10px', cursor: 'pointer',
+                    fontSize: '0.75rem', fontWeight: 500, transition: 'all .15s',
+                    color: insightsPanelOpen ? '#4f46e5' : (dark ? '#c0c0c0' : '#6b7280'),
+                  }}
+                >
+                  Pipeline
+                </button>
+                <button onClick={onGoToAnalytics} title="View Analytics"
                   style={{ background: 'none', border: 'none', borderRadius: 10, width: 38, height: 38, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: dark ? '#c0c0c0' : '#1c1c2e', transition: 'background .12s' }}
                   onMouseOver={e => e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.05)' : '#f3f4f6'}
                   onMouseOut={e => e.currentTarget.style.background = 'none'}
@@ -1069,6 +990,25 @@ export default function IGDashboard({
               })}
               <div ref={messagesEndRef} />
             </div>
+
+            {/* ── Escalation strip — invisible until point of no return ── */}
+            {currentUser?.role === 'admin' && isEscalation && !escalationDismissed && (
+              <div style={{
+                padding: '8px 20px',
+                background: dark ? 'rgba(245,158,11,0.10)' : 'rgba(245,158,11,0.07)',
+                borderTop: '1px solid rgba(245,158,11,0.25)',
+                display: 'flex', alignItems: 'center', gap: 10,
+              }}>
+                <div style={{ width: 3, alignSelf: 'stretch', minHeight: 20, borderRadius: 2, background: 'rgba(245,158,11,0.65)', flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: '0.79rem', color: dark ? '#fbbf24' : '#92400e', lineHeight: 1.4 }}>
+                  Conversation intensity rising — consider pausing before responding.
+                </span>
+                <button
+                  onClick={() => setEscalationDismissed(true)}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.75rem', color: '#9ca3af', padding: '2px 6px', flexShrink: 0, lineHeight: 1 }}
+                >✕</button>
+              </div>
+            )}
 
             {/* Input bar */}
             <div style={{ padding: '12px 20px', borderTop: dark ? '1px solid #2a2a35' : '1px solid #efefef', background: dark ? '#12121c' : '#ffffff' }}>

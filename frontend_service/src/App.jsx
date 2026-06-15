@@ -440,38 +440,69 @@ export default function App() {
 
   // ── Render: loading gate ──────────────────────────────────────────────────
   if (currentUser && !systemReady) {
+    const ready = Object.values(componentStatus).filter(Boolean).length;
+    const total = Math.max(Object.keys(componentStatus).length, 1);
     return (
-      <div className="crystal-shell">
-        <div className="crystal-gate">
-          <div style={{ '--bubble-rgb': '0, 119, 255' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', background: '#0b0d17',
+        fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      }}>
+        <div style={{
+          position: 'fixed', width: 600, height: 600, borderRadius: '50%',
+          right: -180, bottom: -180,
+          background: 'radial-gradient(circle, hsl(215 68% 58% / 0.12) 0%, transparent 68%)',
+          filter: 'blur(80px)', pointerEvents: 'none',
+        }} />
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          textAlign: 'center', position: 'relative', zIndex: 1,
+        }}>
+          <div style={{
+            width: 52, height: 52, borderRadius: 18, marginBottom: 28,
+            background: 'linear-gradient(135deg, #0077ff 0%, #7000ff 100%)',
+            boxShadow: '0 0 40px rgba(0,119,255,0.30), 0 8px 24px rgba(0,0,0,0.4)',
+          }} />
+          <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#e8eaf2', letterSpacing: '-0.02em', marginBottom: 6 }}>
+            InnerLink
+          </div>
+          <div style={{ fontSize: '0.82rem', color: '#555870', marginBottom: 40 }}>
+            Preparing your secure session
+          </div>
+          <div style={{ position: 'relative', width: 56, height: 56, marginBottom: 28 }}>
+            <svg width="56" height="56" style={{ transform: 'rotate(-90deg)' }}>
+              <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+              <circle
+                cx="28" cy="28" r="22" fill="none" stroke="url(#gate-grad)"
+                strokeWidth="3" strokeLinecap="round"
+                strokeDasharray={`${2 * Math.PI * 22}`}
+                strokeDashoffset={`${2 * Math.PI * 22 * (1 - ready / total)}`}
+                style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+              />
+              <defs>
+                <linearGradient id="gate-grad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#0077ff" />
+                  <stop offset="100%" stopColor="#7000ff" />
+                </linearGradient>
+              </defs>
+            </svg>
             <div style={{
-              width: 48, height: 48, borderRadius: 16,
-              background: 'linear-gradient(135deg, #0077ff 0%, #7000ff 100%)',
-              boxShadow: '0 6px 20px rgba(0,119,255,0.35)',
-              marginBottom: 24,
-            }} />
+              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', fontSize: '0.72rem', fontWeight: 700,
+              color: ready === total ? '#22c55e' : '#0077ff',
+            }}>
+              {ready}/{total}
+            </div>
           </div>
-          <h2 style={{ margin: '0 0 6px', fontSize: '1.2rem', fontWeight: 700, color: '#1c1c2e' }}>
-            InnerLink is Initializing
-          </h2>
-          <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '0.88rem' }}>
-            Warming up neural pipelines…
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 260 }}>
-            {[
-              { key: 'redis',        label: 'Redis Stream Engine' },
-              { key: 'database',     label: 'PostgreSQL Database' },
-              { key: 'meta_learner', label: 'Meta-Learner Intelligence' },
-            ].map(({ key, label }) => (
-              <div key={key} className={`crystal-gate-check ${componentStatus[key] ? 'ready' : ''}`}>
-                <span style={{ fontSize: '0.85rem' }}>{componentStatus[key] ? '✓' : '◌'}</span>
-                {label}
-              </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {Object.entries(componentStatus).map(([key, done]) => (
+              <div key={key} style={{
+                width: 8, height: 8, borderRadius: '50%',
+                background: done ? '#22c55e' : 'rgba(255,255,255,0.12)',
+                boxShadow: done ? '0 0 8px rgba(34,197,94,0.5)' : 'none',
+                transition: 'all 0.4s ease',
+              }} />
             ))}
-          </div>
-          <div style={{ marginTop: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-            <div className="crystal-gate-spinner" style={{ '--bubble-rgb': '0, 119, 255' }} />
-            <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>Checking every 3 seconds…</span>
           </div>
         </div>
       </div>

@@ -1,0 +1,46 @@
+%%{init: {"flowchart": {"curve": "stepAfter"}}}%%
+flowchart TD
+    linkStyle default stroke:#000000,stroke-width:4px,fill:none;
+    classDef default fill:#FFFFFF,stroke:#000000,stroke-width:4px,color:#000000,font-family:Arial,font-weight:bold;
+    classDef user fill:#FFFFFF,stroke:#000000,stroke-width:4px,color:#000000,stroke-dasharray: 8 8,font-family:Arial,font-weight:bold;
+    classDef container fill:none,stroke:#000000,stroke-width:4px,stroke-dasharray: 8 8,color:#000000,font-weight:bold;
+
+    User(("User Message")):::user
+    UI["Frontend (React)"]
+    API["API / WebSocket"]
+    Prep["Preprocessing"]
+    
+    subgraph Analyzers ["Parallel NLP Analyzers"]
+        direction TB
+        VADER["VADER (Sentiment)"]
+        BERT["BERT (7 Emotions)"]
+        GO["GoEmotions (28)"]
+        EMOJI["EmojiNet (Slang)"]
+    end
+    class Analyzers container
+    
+    Central["Meta-Learner"]
+    Context["Context Engine (LSTM)"]
+    DB[("PostgreSQL")]
+    Dashboard(("Live Dashboard")):::user
+
+    User --> UI
+    UI --> API
+    API --> Prep
+    
+    Prep --> VADER
+    Prep --> BERT
+    Prep --> GO
+    Prep --> EMOJI
+    
+    VADER --> Central
+    BERT --> Central
+    GO --> Central
+    EMOJI --> Central
+    
+    Central --> Context
+    
+    Context --> DB
+    Context --> API
+    
+    API --> Dashboard
