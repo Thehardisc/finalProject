@@ -1,14 +1,14 @@
 {
-  "n_conversations": 3,
-  "n_valid": 3,
-  "n_windows": 21,
-  "window_dim": 240,
-  "msg_dim": 77,
+  "n_conversations": 67,
+  "n_valid": 67,
+  "n_windows": 456,
+  "window_dim": 246,
+  "msg_dim": 79,
   "n_emotions": 28,
   "window_size": 3,
   "split": {
-    "train": 14,
-    "val": 3,
-    "test": 4
+    "train": 314,
+    "val": 63,
+    "test": 79
   }
 }

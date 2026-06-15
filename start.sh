@@ -1,3 +1,4 @@
+
 #!/bin/bash
 # start.sh - Universal AI Stack Launcher (Mac & Linux)
 # Automatically detects NVIDIA GPU, launches Docker, waits for readiness, and verifies health.

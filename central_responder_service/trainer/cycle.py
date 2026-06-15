@@ -164,26 +164,47 @@ def run_one_cycle(reload_callback=None) -> None:
             X_te, y_te, _              = extract_empathetic_dialogues_features(vader, bert, goe, split="test",  batch_size=nlp_batch_size)
 
             if not X_tr.size:
-                logger.error("EmpatheticDialogues extraction returned empty train set. Aborting.")
-                del vader, bert, goe
-                gc.collect()
-                return
+                logger.warning(
+                    "EmpatheticDialogues extraction returned empty "
+                    "(dataset script deprecated). Falling back to GoEmotions-direct as bootstrap source."
+                )
+                from sklearn.model_selection import train_test_split as _tts
+                X_goe_boot, y_goe_boot, _ = extract_goemotions_direct_features(
+                    vader, bert, goe, batch_size=nlp_batch_size
+                )
+                if not len(X_goe_boot):
+                    logger.error("GoEmotions-direct fallback also returned empty. Aborting bootstrap.")
+                    del vader, bert, goe
+                    gc.collect()
+                    return
+                X_arr = np.array(X_goe_boot, dtype=np.float32)
+                X_tr, X_hold, y_tr, y_hold = _tts(
+                    X_arr, y_goe_boot, test_size=0.30, random_state=42, stratify=y_goe_boot
+                )
+                X_v, X_te, y_v, y_te = _tts(
+                    X_hold, y_hold, test_size=0.50, random_state=42, stratify=y_hold
+                )
+                X_tr, X_v, X_te = list(X_tr), list(X_v), list(X_te)
+                has_cdm_emp_tr = [False] * len(X_tr)
+                logger.info(
+                    f"GoEmotions-direct bootstrap: {len(X_tr)} train / {len(X_v)} val / {len(X_te)} test."
+                )
+            else:
+                logger.info(
+                    f"Bootstrap: {len(X_tr)} train / {len(X_v)} val / {len(X_te)} test samples. "
+                    f"Saving feature cache..."
+                )
+                with open(CACHE_PATH, "wb") as f:
+                    pickle.dump({
+                        "dataset_id":  DATASET_ID,
+                        "feature_dim": FEATURE_DIM,
+                        "n_train_cap": MAX_EMPATHETIC_SAMPLES,
+                        "train": (list(X_tr), y_tr, list(has_cdm_emp_tr)),
+                        "val":   (list(X_v),  y_v,  None),
+                        "test":  (list(X_te), y_te, None),
+                    }, f)
 
-            logger.info(
-                f"Bootstrap: {len(X_tr)} train / {len(X_v)} val / {len(X_te)} test samples. "
-                f"Saving feature cache..."
-            )
-            with open(CACHE_PATH, "wb") as f:
-                pickle.dump({
-                    "dataset_id":  DATASET_ID,
-                    "feature_dim": FEATURE_DIM,
-                    "n_train_cap": MAX_EMPATHETIC_SAMPLES,
-                    "train": (list(X_tr), y_tr, list(has_cdm_emp_tr)),
-                    "val":   (list(X_v),  y_v,  None),
-                    "test":  (list(X_te), y_te, None),
-                }, f)
-
-            X_tr, X_v, X_te = list(X_tr), list(X_v), list(X_te)
+                X_tr, X_v, X_te = list(X_tr), list(X_v), list(X_te)
 
         has_cdm_tr: list = list(has_cdm_emp_tr)
         gs_tr = [{label: 1.0} for label in y_tr]
