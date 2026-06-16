@@ -51,29 +51,32 @@ function computeVAD(bertEmotions, valence) {
 function Gauge({ label, value, lo, hi, color }) {
   const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-        <span style={{ fontSize: '0.77rem', fontWeight: 600, color: '#374151' }}>{label}</span>
-        <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>{pct}%</span>
+        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#d1d5db' }}>{label}</span>
+        <span style={{ fontSize: '0.70rem', color: '#4b5563' }}>{pct}%</span>
       </div>
-      <div style={{ position: 'relative', height: 6, borderRadius: 3, background: 'rgba(0,0,0,.08)' }}>
+      <div style={{ position: 'relative', height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.07)' }}>
         <div style={{
           position: 'absolute', top: 0, left: 0, height: '100%',
-          width: `${pct}%`, background: `rgb(${color})`, borderRadius: 3,
+          width: `${pct}%`,
+          background: `linear-gradient(90deg, rgba(${color},0.9), rgba(${color},0.5))`,
+          borderRadius: 3,
+          boxShadow: `0 0 6px rgba(${color},0.4)`,
           transition: 'width .55s cubic-bezier(.34,1.2,.64,1)',
         }} />
         <div style={{
           position: 'absolute', top: '50%', left: `${pct}%`,
           transform: 'translate(-50%,-50%)',
-          width: 12, height: 12, borderRadius: '50%',
-          background: `rgb(${color})`, border: '2.5px solid #fff',
-          boxShadow: `0 0 6px rgba(${color},.5)`,
+          width: 11, height: 11, borderRadius: '50%',
+          background: `rgb(${color})`,
+          boxShadow: `0 0 8px rgba(${color},0.8)`,
           transition: 'left .55s cubic-bezier(.34,1.2,.64,1)',
         }} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-        <span style={{ fontSize: '0.62rem', color: '#b0b7c3' }}>{lo}</span>
-        <span style={{ fontSize: '0.62rem', color: '#b0b7c3' }}>{hi}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+        <span style={{ fontSize: '0.60rem', color: '#374151' }}>{lo}</span>
+        <span style={{ fontSize: '0.60rem', color: '#374151' }}>{hi}</span>
       </div>
     </div>
   );
@@ -134,26 +137,31 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
     finally { setLoading(false); }
   };
 
+  const BG    = '#080810';
+  const BORDER = 'rgba(255,255,255,0.07)';
+  const MUTED  = '#4b5563';
+  const TEXT   = '#d1d5db';
+
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', background: BG }}>
 
       {/* ── Header (sticky) ── */}
       <div style={{
-        padding: '14px 14px 10px', borderBottom: dark ? '1px solid rgba(255,255,255,.07)' : '1px solid rgba(0,0,0,.07)',
+        padding: '14px 14px 10px', borderBottom: `1px solid ${BORDER}`,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, background: dark ? '#181824' : '#fff', zIndex: 5,
+        position: 'sticky', top: 0, background: BG, zIndex: 5,
       }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: '0.82rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>ML Analysis</div>
-          <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 2 }}>
+          <div style={{ fontWeight: 700, fontSize: '0.82rem', color: TEXT }}>Message Analysis</div>
+          <div style={{ fontSize: '0.67rem', color: MUTED, marginTop: 2 }}>
             {String(data.id).startsWith('demo') ? 'demo sample' : `msg:${String(data.id).substring(0, 8)}…`}
           </div>
         </div>
         <button onClick={onClose} style={{
-          background: dark ? '#2a2a3a' : '#f3f4f6', border: 'none', borderRadius: '50%',
+          background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '50%',
           width: 26, height: 26, cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: dark ? '#c0c0c0' : '#6b7280', fontSize: '0.85rem', flexShrink: 0,
+          color: MUTED, fontSize: '0.85rem', flexShrink: 0,
         }}>✕</button>
       </div>
 
@@ -161,19 +169,23 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
 
         {/* ── Dominant + confidence ── */}
         <div style={{
-          background: `rgba(${domRgb},.08)`, border: `1px solid rgba(${domRgb},.20)`,
+          background: `radial-gradient(ellipse at top, rgba(${domRgb},.16) 0%, rgba(${domRgb},.04) 80%)`,
+          border: `1px solid rgba(${domRgb},.22)`,
           borderRadius: 12, padding: '13px', marginBottom: 16,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
             <div>
-              <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Dominant</div>
-              <div style={{ fontSize: '1.08rem', fontWeight: 800, color: `rgb(${domRgb})`, textTransform: 'capitalize' }}>
+              <div style={{ fontSize: '0.63rem', color: MUTED, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Dominant</div>
+              <div style={{ fontSize: '1.08rem', fontWeight: 800, textTransform: 'capitalize',
+                background: `linear-gradient(135deg, rgb(${domRgb}), rgba(${domRgb},0.6))`,
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+              }}>
                 {data.final_dominant_emotion || 'Neutral'}
               </div>
             </div>
             {data.meta_confidence != null && (
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Confidence</div>
+                <div style={{ fontSize: '0.63rem', color: MUTED, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Confidence</div>
                 <div style={{ fontSize: '1.08rem', fontWeight: 800, color: `rgb(${domRgb})` }}>
                   {(data.meta_confidence * 100).toFixed(0)}%
                 </div>
@@ -241,15 +253,15 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
             return (
               <div key={label} style={{ marginBottom: 9 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 500, color: dark ? '#c0c0c0' : '#374151', textTransform: 'capitalize' }}>{label}</span>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 500, color: TEXT, textTransform: 'capitalize' }}>{label}</span>
                   <span style={{ fontSize: '0.72rem', fontWeight: 700, color: `rgb(${rgb})` }}>{pct.toFixed(0)}%</span>
                 </div>
-                <div style={{ height: 5, borderRadius: 3, background: dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.07)' }}>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)' }}>
                   <div style={{
-                    height: '100%',
-                    width: `${pct}%`,
-                    background: `linear-gradient(90deg, rgb(${rgb}), rgba(${rgb},.60))`,
-                    borderRadius: 3,
+                    height: '100%', width: `${pct}%`,
+                    background: `linear-gradient(90deg, rgba(${rgb},0.9), rgba(${rgb},0.45))`,
+                    borderRadius: 2,
+                    boxShadow: `0 0 5px rgba(${rgb},0.3)`,
                     transition: 'width .6s cubic-bezier(.34,1.2,.64,1)',
                   }} />
                 </div>
@@ -394,8 +406,8 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
 
         {/* ── Human-in-the-loop ── */}
         <div style={{
-          background: dark ? '#1a1a28' : '#f8f9fa', borderRadius: 12, padding: '13px',
-          border: dark ? '1px solid rgba(255,255,255,.06)' : '1px solid rgba(0,0,0,.06)',
+          background: 'rgba(255,255,255,0.03)', borderRadius: 12, padding: '13px',
+          border: '1px solid rgba(255,255,255,0.07)',
         }}>
           <div style={sectionTitle}>Correct the Model</div>
           {sent ? (
@@ -413,8 +425,8 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
                 onChange={e => setSelected(e.target.value)}
                 style={{
                   width: '100%', padding: '9px 12px',
-                  background: dark ? '#222230' : '#fff', border: dark ? '1px solid rgba(255,255,255,.12)' : '1px solid rgba(0,0,0,.12)',
-                  borderRadius: 8, fontSize: '0.84rem', color: dark ? '#e0e0e0' : '#1c1c2e',
+                  background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.10)',
+                  borderRadius: 8, fontSize: '0.84rem', color: '#d1d5db',
                   outline: 'none', marginBottom: 9, cursor: 'pointer',
                   appearance: 'none',
                 }}
@@ -449,6 +461,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
 }
 
 const sectionTitle = {
-  fontSize: '0.69rem', fontWeight: 700, color: 'inherit',
-  textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 10,
+  fontSize: '0.60rem', fontWeight: 700, color: '#4b5563',
+  textTransform: 'uppercase', letterSpacing: '.10em', marginBottom: 10,
 };
