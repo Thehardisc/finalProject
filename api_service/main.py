@@ -272,6 +272,7 @@ async def _handle_conversation_update(message_id, data):
             "sender_id":              data.get("user_id"),
             "context_snapshot":       pipeline_log.get("context_snapshot"),
             "lstm_trajectory":        pipeline_log.get("trajectory"),
+            "sarcasm_score":          float(pipeline_log.get("sarcasm_score", 0)),
         },
         "vibe": {
             "valence":     conv_state.get("average_valence", 0),

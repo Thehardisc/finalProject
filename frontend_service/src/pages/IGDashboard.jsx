@@ -10,6 +10,16 @@ import { THEMES } from '../syntax/highlighter';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
+const EMOTION_EMOJI = {
+  joy:'😄', happiness:'😊', sadness:'😢', anger:'😠', fear:'😨',
+  surprise:'😲', disgust:'🤢', neutral:'😐', excitement:'🤩',
+  love:'❤️', caring:'🤗', gratitude:'🙏', amusement:'😂',
+  admiration:'🤩', annoyance:'😒', confusion:'😕', curiosity:'🤔',
+  desire:'😍', disappointment:'😞', disapproval:'👎', embarrassment:'😳',
+  grief:'😭', nervousness:'😬', optimism:'🌟', pride:'😌',
+  realization:'💡', relief:'😮‍💨', remorse:'😔', approval:'👍',
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const emotionRgb = (emo) => EmotionPalette[emo?.toLowerCase()] || EmotionPalette.neutral;
@@ -187,6 +197,49 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
   );
 }
 
+// ── ValenceSparkline ──────────────────────────────────────────────────────────
+
+function ValenceSparkline({ messages, dark }) {
+  const vals = messages
+    .filter(m => m.analysis?.data?.final_valence != null)
+    .map(m => ({ v: m.analysis.data.final_valence, emo: m.analysis.data.final_dominant_emotion }))
+    .slice(-14);
+  if (vals.length < 2) return null;
+
+  const W = 110, H = 26;
+  const toY = v => H - ((v + 1) / 2) * H;
+  const toX = i => (i / (vals.length - 1)) * W;
+  const pts = vals.map((p, i) => `${toX(i)},${toY(p.v)}`).join(' ');
+  const last = vals[vals.length - 1].v;
+  const prev = vals[vals.length - 2].v;
+  const trend = last - prev;
+  const moodColor = last > 0.25 ? '#22c55e' : last < -0.25 ? '#ef4444' : '#9ca3af';
+  const moodLabel = last > 0.25 ? 'Positive' : last < -0.25 ? 'Negative' : 'Neutral';
+  const arrow = trend > 0.12 ? '↑' : trend < -0.12 ? '↓' : '→';
+  const dom = vals[vals.length - 1].emo;
+
+  return (
+    <div style={{
+      padding: '5px 20px',
+      background: dark ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.015)',
+      borderBottom: dark ? '1px solid rgba(255,255,255,0.06)' : '1px solid rgba(0,0,0,0.06)',
+      display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+    }}>
+      <span style={{ fontSize: '0.63rem', fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.07em', flexShrink: 0 }}>Mood Arc</span>
+      <svg width={W} height={H} style={{ flexShrink: 0, overflow: 'visible' }}>
+        <line x1="0" y1={H / 2} x2={W} y2={H / 2} stroke={dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'} strokeWidth="1" strokeDasharray="3 3" />
+        <polyline fill="none" stroke={moodColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" points={pts} />
+        <circle cx={toX(vals.length - 1)} cy={toY(last)} r="3.5" fill={moodColor} />
+      </svg>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+        <span style={{ fontSize: '0.73rem', fontWeight: 700, color: moodColor }}>{moodLabel}</span>
+        <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>{arrow}</span>
+        {dom && <span style={{ fontSize: '0.75rem' }}>{EMOTION_EMOJI[dom.toLowerCase()] || ''}</span>}
+      </div>
+    </div>
+  );
+}
+
 // ── MsgBubble ─────────────────────────────────────────────────────────────────
 
 function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'prism', dark = false }) {
@@ -197,8 +250,9 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'pri
   if (bert?.length) bert.forEach(({ label, score }) => { emotionDict[label] = score; });
   const hasAnalysis = Object.keys(emotionDict).length > 0;
 
-  const dom    = msg.analysis?.data?.final_dominant_emotion;
-  const domRgb = dom ? emotionRgb(dom) : null;
+  const dom          = msg.analysis?.data?.final_dominant_emotion;
+  const domRgb       = dom ? emotionRgb(dom) : null;
+  const sarcasmScore = msg.analysis?.data?.sarcasm_score ?? msg.analysis?.data?.llm_sarcasm_score ?? 0;
 
   const ownBg    = hasAnalysis ? (bubbleGradient(emotionDict) || 'rgba(0,119,255,0.10)') : 'rgba(0,119,255,0.10)';
   const borderClr = isOwn
@@ -255,7 +309,25 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'pri
         ) : <SyntaxText text={msg.text} theme={theme} dark={dark} />}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+      {hasAnalysis && dom && !isRegenerating && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 4, marginTop: 3,
+          justifyContent: isOwn ? 'flex-end' : 'flex-start',
+        }}>
+          <span style={{ fontSize: '0.78rem' }}>{EMOTION_EMOJI[dom.toLowerCase()] || '●'}</span>
+          <span style={{ fontSize: '0.67rem', fontWeight: 600, color: `rgb(${domRgb})`, textTransform: 'capitalize' }}>{dom}</span>
+          {sarcasmScore > 0.35 && (
+            <span style={{
+              fontSize: '0.62rem', fontWeight: 700,
+              background: 'rgba(245,158,11,0.12)', color: '#d97706',
+              border: '1px solid rgba(245,158,11,0.28)', borderRadius: 99,
+              padding: '1px 6px', marginLeft: 2,
+            }}>sarcasm {Math.round(sarcasmScore * 100)}%</span>
+          )}
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
         {msg.analysis && hovered && (
           <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
         )}
@@ -927,6 +999,9 @@ export default function IGDashboard({
                 {memberError && <div style={{ fontSize: '0.78rem', color: '#ef4444', marginTop: 6 }}>{memberError}</div>}
               </div>
             )}
+
+            {/* Mood arc sparkline */}
+            <ValenceSparkline messages={messages} dark={dark} />
 
             {/* Messages */}
             <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 4 }}>

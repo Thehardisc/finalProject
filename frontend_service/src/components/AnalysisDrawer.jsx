@@ -79,6 +79,28 @@ function Gauge({ label, value, lo, hi, color }) {
   );
 }
 
+function generateAutoInsight(data) {
+  if (!data) return null;
+  const parts = [];
+  const sarcasm = data.sarcasm_score ?? data.llm_sarcasm_score ?? 0;
+  const shift   = data.context_shift;
+  const traj    = data.lstm_trajectory;
+  const snap    = data.context_snapshot;
+  const v       = data.final_valence ?? 0;
+  const emo     = data.final_dominant_emotion;
+
+  if (sarcasm > 0.40) parts.push(`Sarcasm likely (${Math.round(sarcasm * 100)}%) — positive surface, negative intent.`);
+  if (shift?.significance === 'High') parts.push(`Mood shift: ${shift.from} → ${shift.to}.`);
+  if (traj?.top_predicted && traj.top_predicted !== emo) parts.push(`Trajectory predicts ${traj.top_predicted} next.`);
+  const vol = snap?.volatility ?? 0;
+  if (vol > 0.65) parts.push(`High volatility (${Math.round(vol * 100)}%).`);
+  else if (v > 0.4) parts.push(`Positive tone (valence ${v.toFixed(2)}).`);
+  else if (v < -0.3) parts.push(`Negative tone (valence ${v.toFixed(2)}).`);
+  if (snap?.cdm_current_state) parts.push(`State: ${snap.cdm_current_state}.`);
+
+  return parts.length ? parts.join(' ') : null;
+}
+
 export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = false }) {
   const [selected, setSelected] = useState('');
   const [sent, setSent]         = useState(false);
@@ -92,12 +114,14 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
     </div>
   );
 
-  const emotions   = data.bert_emotions || [];
-  const topEmos    = [...emotions].sort((a, b) => b.score - a.score).slice(0, 8);
-  const totalScore = topEmos.reduce((s, e) => s + e.score, 0) || 1;
-  const vad        = computeVAD(emotions, data.final_valence);
-  const domRgb     = EmotionPalette[data.final_dominant_emotion?.toLowerCase()] || EmotionPalette.neutral;
-  const logicMap   = data.logic_map || {};
+  const emotions    = data.bert_emotions || [];
+  const topEmos     = [...emotions].sort((a, b) => b.score - a.score).slice(0, 8);
+  const totalScore  = topEmos.reduce((s, e) => s + e.score, 0) || 1;
+  const vad         = computeVAD(emotions, data.final_valence);
+  const domRgb      = EmotionPalette[data.final_dominant_emotion?.toLowerCase()] || EmotionPalette.neutral;
+  const logicMap    = data.logic_map || {};
+  const sarcasmScore = data.sarcasm_score ?? data.llm_sarcasm_score ?? 0;
+  const displayInsight = msg?.analysis?.ai_insight || generateAutoInsight(data);
 
   const submitFeedback = async () => {
     if (!selected || !data.id) return;
@@ -167,16 +191,46 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
             </div>
           )}
 
-          {msg?.analysis?.ai_insight && (
+          {displayInsight && (
             <div style={{
-              marginTop: 8, padding: '8px 10px', background: 'rgba(0,0,0,.03)',
-              borderRadius: 6, fontSize: '0.72rem', color: '#374151', lineHeight: 1.55,
+              marginTop: 8, padding: '8px 10px',
+              background: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,.03)',
+              borderRadius: 6, fontSize: '0.72rem',
+              color: dark ? '#c0c0c0' : '#374151', lineHeight: 1.55,
               fontStyle: 'italic',
             }}>
-              "{msg.analysis.ai_insight}"
+              "{displayInsight}"
             </div>
           )}
         </div>
+
+        {/* ── Sarcasm ── */}
+        {sarcasmScore > 0.05 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={sectionTitle}>Sarcasm Detector</div>
+            <div style={{
+              background: sarcasmScore > 0.4 ? 'rgba(245,158,11,0.08)' : (dark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'),
+              border: sarcasmScore > 0.4 ? '1px solid rgba(245,158,11,0.25)' : (dark ? '1px solid rgba(255,255,255,0.07)' : '1px solid rgba(0,0,0,0.07)'),
+              borderRadius: 10, padding: '10px 12px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: sarcasmScore > 0.4 ? '#d97706' : (dark ? '#9ca3af' : '#6b7280') }}>
+                  {sarcasmScore > 0.6 ? 'High' : sarcasmScore > 0.4 ? 'Moderate' : 'Low'} likelihood
+                </span>
+                <span style={{ fontSize: '0.82rem', fontWeight: 800, color: sarcasmScore > 0.4 ? '#d97706' : '#9ca3af' }}>
+                  {Math.round(sarcasmScore * 100)}%
+                </span>
+              </div>
+              <div style={{ height: 5, borderRadius: 3, background: dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.08)' }}>
+                <div style={{
+                  height: '100%', width: `${sarcasmScore * 100}%`,
+                  background: sarcasmScore > 0.4 ? 'linear-gradient(90deg,#f59e0b,#d97706)' : '#9ca3af',
+                  borderRadius: 3, transition: 'width .6s cubic-bezier(.34,1.2,.64,1)',
+                }} />
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Emotion breakdown ── */}
         <div style={{ marginBottom: 16 }}>
@@ -266,10 +320,10 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
               {/* Stats grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 {[
-                  { label: 'Avg Valence', value: data.context_snapshot.avg_valence?.toFixed(3), color: data.context_snapshot.avg_valence >= 0 ? '#16a34a' : '#dc2626' },
+                  { label: 'Valence', value: data.context_snapshot.cur_valence?.toFixed(3), color: (data.context_snapshot.cur_valence ?? 0) >= 0 ? '#16a34a' : '#dc2626' },
                   { label: 'Topic Resonance', value: `${((data.context_snapshot.topic_resonance || 0) * 100).toFixed(0)}%`, color: '#7c3aed' },
                   { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#d97706' },
-                  { label: 'Episodic Memory', value: data.context_snapshot.ce_available ? '✓ active' : '✗ off', color: data.context_snapshot.ce_available ? '#16a34a' : '#9ca3af' },
+                  { label: 'Episodic Memory', value: data.context_snapshot.ce_available ? 'active' : 'off', color: data.context_snapshot.ce_available ? '#16a34a' : '#9ca3af' },
                 ].map(({ label, value, color }) => (
                   <div key={label} style={{ padding: '7px 10px', background: dark ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.7)', borderRadius: 8 }}>
                     <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
@@ -277,6 +331,20 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
                   </div>
                 ))}
               </div>
+
+              {/* CDM state + abruptness */}
+              {data.context_snapshot.cdm_current_state && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ padding: '3px 9px', borderRadius: 99, background: dark ? 'rgba(112,0,255,0.15)' : 'rgba(112,0,255,0.08)', border: '1px solid rgba(112,0,255,0.20)', fontSize: '0.68rem', fontWeight: 700, color: '#7000ff' }}>
+                    CDM: {data.context_snapshot.cdm_current_state}
+                  </div>
+                  {data.context_snapshot.cdm_entry_abruptness > 0.5 && (
+                    <div style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.18)', fontSize: '0.68rem', fontWeight: 700, color: '#dc2626' }}>
+                      Abrupt entry {Math.round(data.context_snapshot.cdm_entry_abruptness * 100)}%
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
