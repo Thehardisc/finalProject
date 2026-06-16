@@ -104,16 +104,16 @@ function generateAutoInsight(data) {
   return parts.length ? parts.join(' ') : null;
 }
 
-export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = false }) {
+export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
   const [selected, setSelected] = useState('');
   const [sent, setSent]         = useState(false);
   const [loading, setLoading]   = useState(false);
 
   const data = msg?.analysis?.data;
   if (!data) return (
-    <div style={{ padding: 24, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>
+    <div style={{ padding: 24, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center', background: 'var(--bg-void,#03030a)', height: '100%' }}>
       No analysis available for this message yet.
-      <button onClick={onClose} style={{ display: 'block', margin: '16px auto 0', background: 'none', border: 'none', color: '#0077ff', cursor: 'pointer', fontWeight: 600 }}>← Back</button>
+      <button onClick={onClose} style={{ display: 'block', margin: '16px auto 0', background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer', fontWeight: 600 }}>← Back</button>
     </div>
   );
 
@@ -137,7 +137,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
     finally { setLoading(false); }
   };
 
-  const BG    = '#080810';
+  const BG    = 'var(--bg-void, #03030a)';
   const BORDER = 'rgba(255,255,255,0.07)';
   const MUTED  = '#4b5563';
   const TEXT   = '#d1d5db';
@@ -206,9 +206,9 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
           {displayInsight && (
             <div style={{
               marginTop: 8, padding: '8px 10px',
-              background: dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,.03)',
+              background: 'rgba(255,255,255,0.04)',
               borderRadius: 6, fontSize: '0.72rem',
-              color: dark ? '#c0c0c0' : '#374151', lineHeight: 1.55,
+              color: '#9ca3af', lineHeight: 1.55,
               fontStyle: 'italic',
             }}>
               "{displayInsight}"
@@ -221,22 +221,22 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Sarcasm Detector</div>
             <div style={{
-              background: sarcasmScore > 0.4 ? 'rgba(245,158,11,0.08)' : (dark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.03)'),
-              border: sarcasmScore > 0.4 ? '1px solid rgba(245,158,11,0.25)' : (dark ? '1px solid rgba(255,255,255,0.07)' : '1px solid rgba(0,0,0,0.07)'),
+              background: sarcasmScore > 0.4 ? 'rgba(245,158,11,0.08)' : 'rgba(255,255,255,0.03)',
+              border: sarcasmScore > 0.4 ? '1px solid rgba(245,158,11,0.25)' : '1px solid rgba(255,255,255,0.07)',
               borderRadius: 10, padding: '10px 12px',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: sarcasmScore > 0.4 ? '#d97706' : (dark ? '#9ca3af' : '#6b7280') }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: sarcasmScore > 0.4 ? '#d97706' : '#9ca3af' }}>
                   {sarcasmScore > 0.6 ? 'High' : sarcasmScore > 0.4 ? 'Moderate' : 'Low'} likelihood
                 </span>
                 <span style={{ fontSize: '0.82rem', fontWeight: 800, color: sarcasmScore > 0.4 ? '#d97706' : '#9ca3af' }}>
                   {Math.round(sarcasmScore * 100)}%
                 </span>
               </div>
-              <div style={{ height: 5, borderRadius: 3, background: dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.08)' }}>
+              <div style={{ height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.07)' }}>
                 <div style={{
                   height: '100%', width: `${sarcasmScore * 100}%`,
-                  background: sarcasmScore > 0.4 ? 'linear-gradient(90deg,#f59e0b,#d97706)' : '#9ca3af',
+                  background: sarcasmScore > 0.4 ? 'linear-gradient(90deg,#f59e0b,#d97706)' : '#6b7280',
                   borderRadius: 3, transition: 'width .6s cubic-bezier(.34,1.2,.64,1)',
                 }} />
               </div>
@@ -286,15 +286,15 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
               <div key={model} style={{ marginBottom: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
                   <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{model}</span>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: v >= 0 ? '#0077ff' : '#ef4444' }}>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: v >= 0 ? '#60a5fa' : '#ef4444' }}>
                     {v >= 0 ? '+' : ''}{(v * 100).toFixed(0)}%
                   </span>
                 </div>
-                <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,.07)', overflow: 'hidden' }}>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
                   <div style={{
                     height: '100%',
                     width: `${Math.min(Math.abs(v) * 100, 100)}%`,
-                    background: v >= 0 ? 'linear-gradient(90deg,#0077ff,#7000ff)' : '#ef4444',
+                    background: v >= 0 ? 'linear-gradient(90deg,#3b82f6,#8b5cf6)' : '#ef4444',
                     borderRadius: 2, transition: 'width .5s ease',
                   }} />
                 </div>
@@ -308,37 +308,37 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Context Engine</div>
             <div style={{
-              background: 'rgba(0,119,255,0.05)',
-              border: '1px solid rgba(0,119,255,0.15)',
+              background: 'rgba(6,182,212,0.05)',
+              border: '1px solid rgba(6,182,212,0.13)',
               borderRadius: 12, padding: '12px 14px',
             }}>
-              {/* Valence arc */}
+              {/* Emotion transition */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{
                   padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
-                  background: dark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)', color: dark ? '#c0c0c0' : '#374151', textTransform: 'capitalize',
+                  background: 'rgba(255,255,255,0.06)', color: '#9ca3af', textTransform: 'capitalize',
                 }}>
                   {data.context_snapshot.prev_emotion || 'none'}
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>→</div>
+                <div style={{ fontSize: '0.75rem', color: '#4b5563' }}>→</div>
                 <div style={{
                   padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
-                  background: `rgba(${domRgb},0.15)`, color: `rgb(${domRgb})`, textTransform: 'capitalize',
+                  background: `rgba(${domRgb},0.14)`, color: `rgb(${domRgb})`, textTransform: 'capitalize',
                 }}>
                   {data.final_dominant_emotion}
                 </div>
               </div>
 
               {/* Stats grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 }}>
                 {[
-                  { label: 'Valence', value: data.context_snapshot.cur_valence?.toFixed(3), color: (data.context_snapshot.cur_valence ?? 0) >= 0 ? '#16a34a' : '#dc2626' },
-                  { label: 'Topic Resonance', value: `${((data.context_snapshot.topic_resonance || 0) * 100).toFixed(0)}%`, color: '#7c3aed' },
-                  { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#d97706' },
-                  { label: 'Episodic Memory', value: data.context_snapshot.ce_available ? 'active' : 'off', color: data.context_snapshot.ce_available ? '#16a34a' : '#9ca3af' },
+                  { label: 'Valence', value: data.context_snapshot.cur_valence?.toFixed(3), color: (data.context_snapshot.cur_valence ?? 0) >= 0 ? '#4ade80' : '#f87171' },
+                  { label: 'Topic Fit', value: `${((data.context_snapshot.topic_resonance || 0) * 100).toFixed(0)}%`, color: '#a78bfa' },
+                  { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#fbbf24' },
+                  { label: 'Episodic', value: data.context_snapshot.ce_available ? 'active' : 'off', color: data.context_snapshot.ce_available ? '#4ade80' : '#4b5563' },
                 ].map(({ label, value, color }) => (
-                  <div key={label} style={{ padding: '7px 10px', background: dark ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.7)', borderRadius: 8 }}>
-                    <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
+                  <div key={label} style={{ padding: '7px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
+                    <div style={{ fontSize: '0.60rem', color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
                     <div style={{ fontSize: '0.82rem', fontWeight: 700, color }}>{value ?? '—'}</div>
                   </div>
                 ))}
@@ -347,12 +347,12 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
               {/* CDM state + abruptness */}
               {data.context_snapshot.cdm_current_state && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <div style={{ padding: '3px 9px', borderRadius: 99, background: dark ? 'rgba(112,0,255,0.15)' : 'rgba(112,0,255,0.08)', border: '1px solid rgba(112,0,255,0.20)', fontSize: '0.68rem', fontWeight: 700, color: '#7000ff' }}>
+                  <div style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(139,92,246,0.14)', border: '1px solid rgba(139,92,246,0.22)', fontSize: '0.68rem', fontWeight: 700, color: '#a78bfa' }}>
                     CDM: {data.context_snapshot.cdm_current_state}
                   </div>
                   {data.context_snapshot.cdm_entry_abruptness > 0.5 && (
-                    <div style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.18)', fontSize: '0.68rem', fontWeight: 700, color: '#dc2626' }}>
-                      Abrupt entry {Math.round(data.context_snapshot.cdm_entry_abruptness * 100)}%
+                    <div style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)', fontSize: '0.68rem', fontWeight: 700, color: '#f87171' }}>
+                      Abrupt {Math.round(data.context_snapshot.cdm_entry_abruptness * 100)}%
                     </div>
                   )}
                 </div>
@@ -382,19 +382,21 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
                 <span style={{ fontSize: '0.70rem', color: '#9ca3af' }}>most likely next emotion</span>
               </div>
 
-              {Object.entries(data.lstm_trajectory.predicted_next || {}).map(([emo, score]) => {
-                const rgb = EmotionPalette[emo.toLowerCase()] || '112,0,255';
+              {Object.entries(data.lstm_trajectory.predicted_next || {})
+                .sort((a, b) => b[1] - a[1]).slice(0, 5)
+                .map(([emo, score]) => {
+                const rgb = EmotionPalette[emo.toLowerCase()] || '139,92,246';
                 return (
                   <div key={emo} style={{ marginBottom: 7 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                      <span style={{ fontSize: '0.74rem', color: '#374151', textTransform: 'capitalize' }}>{emo}</span>
+                      <span style={{ fontSize: '0.74rem', color: '#9ca3b0', textTransform: 'capitalize', fontWeight: 500 }}>{emo}</span>
                       <span style={{ fontSize: '0.70rem', fontWeight: 700, color: `rgb(${rgb})` }}>{(score * 100).toFixed(0)}%</span>
                     </div>
-                    <div style={{ height: 5, borderRadius: 3, background: 'rgba(0,0,0,0.07)' }}>
+                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)' }}>
                       <div style={{
                         height: '100%', width: `${score * 100}%`,
-                        background: `linear-gradient(90deg, rgba(${rgb},0.8), rgba(${rgb},0.4))`,
-                        borderRadius: 3, transition: 'width 0.6s cubic-bezier(0.34,1.2,0.64,1)',
+                        background: `linear-gradient(90deg, rgba(${rgb},0.85), rgba(${rgb},0.38))`,
+                        borderRadius: 2, transition: 'width 0.6s cubic-bezier(0.34,1.2,0.64,1)',
                       }} />
                     </div>
                   </div>
@@ -441,9 +443,9 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
                 disabled={!selected || loading}
                 style={{
                   width: '100%', padding: '10px',
-                  background: selected ? 'linear-gradient(135deg,#0077ff,#7000ff)' : '#e5e7eb',
+                  background: selected ? 'linear-gradient(135deg,#3b82f6,#8b5cf6)' : 'rgba(255,255,255,0.06)',
                   border: 'none', borderRadius: 8,
-                  color: selected ? '#fff' : '#9ca3af',
+                  color: selected ? '#fff' : '#4b5563',
                   fontWeight: 700, fontSize: '0.84rem',
                   cursor: selected ? 'pointer' : 'default',
                   transition: 'background .2s',
@@ -461,6 +463,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent, dark = fa
 }
 
 const sectionTitle = {
-  fontSize: '0.60rem', fontWeight: 700, color: '#4b5563',
-  textTransform: 'uppercase', letterSpacing: '.10em', marginBottom: 10,
+  fontSize: '0.58rem', fontWeight: 700, color: '#374151',
+  textTransform: 'uppercase', letterSpacing: '.11em', marginBottom: 10,
 };
