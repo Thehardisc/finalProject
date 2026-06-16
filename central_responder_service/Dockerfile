@@ -19,4 +19,7 @@ COPY conversation_state_learner/ /app/conversation_state_learner/
 ENV PYTHONPATH=/app:/app/central_responder_service
 ENV PYTHONUNBUFFERED=1
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9090/metrics', timeout=5)" || exit 1
+
 CMD ["python", "central_responder_service/main.py"]
