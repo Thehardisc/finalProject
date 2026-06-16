@@ -365,15 +365,17 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'pri
   // Analyzing (no analysis yet, user's own msg, not regenerating)
   const isAnalyzing = !msg.analysis && msg.sender === 'user' && !isRegenerating;
 
-  const glowColor = domRgb || (isOwn ? '99,102,241' : '255,255,255');
+  const glowColor = domRgb || (isOwn ? '99,102,241' : '148,163,184');
   const bubbleBg  = isAnalyzing
-    ? 'rgba(99,102,241,0.08)'
+    ? 'rgba(99,102,241,0.07)'
     : isOwn
-      ? (hasAnalysis ? (bubbleGradient(emotionDict)?.replace('0.10','0.18') || 'rgba(99,102,241,0.18)') : 'rgba(99,102,241,0.14)')
-      : 'rgba(30,31,50,0.72)';
-  const borderClr = `rgba(${glowColor},${hovered && hasAnalysis ? '.45' : '.18'})`;
+      ? (hasAnalysis ? (bubbleGradient(emotionDict)?.replace(/0\.1[0-9]/g, '0.22') || 'rgba(99,102,241,0.22)') : 'rgba(99,102,241,0.16)')
+      : 'rgba(255,255,255,0.05)';
+  const borderClr = isOwn
+    ? `rgba(${glowColor},${hovered && hasAnalysis ? '.55' : '.30'})`
+    : `rgba(255,255,255,${hovered && hasAnalysis ? '.18' : '.07'})`;
   const glowShadow = hasAnalysis && domRgb
-    ? `0 0 ${hovered ? 18 : 8}px rgba(${domRgb},${hovered ? '.28' : '.12'})`
+    ? `0 0 ${hovered ? 22 : 10}px rgba(${domRgb},${hovered ? '.35' : '.15'})`
     : 'none';
 
   return (
@@ -397,7 +399,9 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'pri
         fontSize: '0.94rem', lineHeight: 1.5,
         color: '#e0e0e0',
         wordBreak: 'break-word',
-        boxShadow: `0 4px 20px rgba(0,0,0,0.35), ${glowShadow}`,
+        boxShadow: isOwn
+          ? `0 4px 24px rgba(0,0,0,0.40), ${glowShadow}`
+          : `0 2px 12px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04)`,
         backdropFilter: 'blur(16px) saturate(180%)',
         WebkitBackdropFilter: 'blur(16px) saturate(180%)',
         animation: 'igMsgIn .26s cubic-bezier(.34,1.2,.64,1) both',
@@ -645,15 +649,14 @@ export default function IGDashboard({
   socketRef,
   onDemoStart,
 }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem('il_theme') || 'prism');
-  const [dark, setDark]   = useState(() => localStorage.getItem('il_dark') !== 'false');
-  const [search, setSearch]                   = useState('');
+  const dark = true; // always dark
+  const theme = 'prism';
+  const [search, setSearch] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('il_theme', theme);
-    localStorage.setItem('il_dark', dark);
-    document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
-  }, [theme, dark]);
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.body.style.background = '#06060f';
+  }, []);
 
   const [showCompose, setShowCompose]         = useState(false);
   const [showGroupModal, setShowGroupModal]   = useState(false);
@@ -1067,17 +1070,6 @@ export default function IGDashboard({
               </div>
 
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                <div style={{ display: 'flex', background: dark ? 'rgba(255,255,255,0.05)' : '#f3f4f6', borderRadius: '20px', padding: '3px', gap: '3px', marginRight: '8px' }}>
-                  {Object.keys(THEMES).map(k => (
-                    <button key={`${k}|${k===theme}|${dark}`} onClick={() => setTheme(k)} style={{ background: theme === k ? (dark ? '#333' : '#fff') : 'none', color: theme === k ? (dark ? '#fff' : '#1c1c2e') : '#9ca3af', border: 'none', borderRadius: '16px', padding: '4px 10px', fontSize: '0.75rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', boxShadow: theme === k ? '0 2px 5px rgba(0,0,0,0.08)' : 'none' }}>
-                      {THEMES[k].label}
-                    </button>
-                  ))}
-                  <button onClick={() => setDark(!dark)} style={{ background: 'none', border: 'none', padding: '4px 6px', cursor: 'pointer', fontSize: '0.85rem' }}>
-                    {dark ? '🌙' : '☀️'}
-                  </button>
-                </div>
-
                 {isGroup && (
                   <button onClick={() => setMemberPanelOpen(p => !p)}
                     title="Manage members"
@@ -1292,12 +1284,13 @@ export default function IGDashboard({
         )}
       </div>
 
-      {/* ── Right Panel: Always-on Emotion Intelligence ───────────────── */}
-      {activeConversationId && (
+      {/* ── Right Panel: opens on Pipeline btn or message click ─────── */}
+      {activeConversationId && rightPanelOpen && (
         <div style={{
-          width: 310, borderLeft: '1px solid rgba(255,255,255,0.06)',
+          width: 320, borderLeft: '1px solid rgba(255,255,255,0.06)',
           display: 'flex', flexDirection: 'column',
-          background: '#080810', flexShrink: 0,
+          background: 'rgba(6,6,15,0.92)', backdropFilter: 'blur(20px)',
+          WebkitBackdropFilter: 'blur(20px)', flexShrink: 0,
         }}>
           {selectedMsg ? (
             <AnalysisDrawer
