@@ -20,6 +20,34 @@ const EMOTION_EMOJI = {
   realization:'💡', relief:'😮‍💨', remorse:'😔', approval:'👍',
 };
 
+// Emotion → ambient background color (RGB strings for rgba())
+const EMOTION_BG = {
+  joy:'251,191,36', happiness:'251,191,36', excitement:'249,115,22',
+  love:'244,114,182', caring:'20,184,166', gratitude:'52,211,153',
+  optimism:'250,204,21', relief:'52,211,153', admiration:'167,139,250',
+  amusement:'251,191,36', approval:'52,211,153', pride:'250,204,21',
+  realization:'56,189,248', curiosity:'56,189,248', surprise:'251,191,36',
+  neutral:'99,102,241', confusion:'167,139,250', desire:'244,114,182',
+  nervousness:'167,139,250', sadness:'99,102,241', grief:'79,70,229',
+  disappointment:'99,102,241', remorse:'99,102,241', embarrassment:'244,114,182',
+  fear:'139,92,246', anger:'239,68,68', annoyance:'249,115,22',
+  disgust:'134,239,172', disapproval:'249,115,22',
+};
+
+// De-escalation suggestions by emotion (shown when valence < -0.35)
+const SUGGESTIONS = {
+  anger:          ["I hear you — can we slow down?", "That wasn't my intention. I'm sorry.", "Let's take a breath."],
+  sadness:        ["I'm here with you.", "That sounds really hard.", "You're not alone in this."],
+  fear:           ["You're safe. Tell me more.", "Let's work through it together.", "I'm listening."],
+  grief:          ["I'm so sorry.", "Take all the time you need.", "I'm right here."],
+  annoyance:      ["Fair point — I'm listening.", "I'm sorry, let's try again.", "What's really bothering you?"],
+  disgust:        ["I understand your frustration.", "Let's find a better path.", "Your feelings are valid."],
+  disappointment: ["I'm sorry I let you down.", "What can I do differently?", "Tell me what you need."],
+  nervousness:    ["Take a breath — it's okay.", "What's on your mind?", "One step at a time."],
+  disapproval:    ["Tell me what's not working.", "I want to understand.", "Fair — let's talk it through."],
+  remorse:        ["Please don't be too hard on yourself.", "We all make mistakes.", "I'm here."],
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 const emotionRgb = (emo) => EmotionPalette[emo?.toLowerCase()] || EmotionPalette.neutral;
@@ -261,42 +289,60 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
 
 // ── ValenceSparkline ──────────────────────────────────────────────────────────
 
-function ValenceSparkline({ messages, dark }) {
+function ValenceSparkline({ messages }) {
   const vals = messages
     .filter(m => m.analysis?.data?.final_valence != null)
     .map(m => ({ v: m.analysis.data.final_valence, emo: m.analysis.data.final_dominant_emotion }))
     .slice(-14);
   if (vals.length < 2) return null;
 
-  const W = 110, H = 26;
-  const toY = v => H - ((v + 1) / 2) * H;
+  const W = 160, H = 30;
+  const toY = v => (H / 2) - (v * H * 0.44);
   const toX = i => (i / (vals.length - 1)) * W;
-  const pts = vals.map((p, i) => `${toX(i)},${toY(p.v)}`).join(' ');
   const last = vals[vals.length - 1].v;
   const prev = vals[vals.length - 2].v;
   const trend = last - prev;
-  const moodColor = last > 0.25 ? '#22c55e' : last < -0.25 ? '#ef4444' : '#9ca3af';
+  const moodColor = last > 0.25 ? '#34d399' : last < -0.25 ? '#f87171' : '#a5b4fc';
   const moodLabel = last > 0.25 ? 'Positive' : last < -0.25 ? 'Negative' : 'Neutral';
   const arrow = trend > 0.12 ? '↑' : trend < -0.12 ? '↓' : '→';
+  const uid = Math.random().toString(36).slice(2);
+
+  // Cubic bezier path
+  const pts = vals.map((p, i) => [toX(i), toY(p.v)]);
+  let pathD = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length; i++) {
+    const [px, py] = pts[i - 1];
+    const [cx2, cy2] = pts[i];
+    const cpx = (px + cx2) / 2;
+    pathD += ` C${cpx},${py} ${cpx},${cy2} ${cx2},${cy2}`;
+  }
+  const areaD = pathD + ` L${W},${H} L0,${H} Z`;
   const dom = vals[vals.length - 1].emo;
 
   return (
     <div style={{
-      padding: '5px 20px',
-      background: dark ? 'rgba(255,255,255,0.015)' : 'rgba(0,0,0,0.015)',
-      borderBottom: dark ? '1px solid rgba(255,255,255,0.06)' : '1px solid rgba(0,0,0,0.06)',
-      display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+      padding: '4px 20px',
+      background: 'rgba(255,255,255,0.018)',
+      borderBottom: '1px solid rgba(255,255,255,0.05)',
+      display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
     }}>
-      <span style={{ fontSize: '0.63rem', fontWeight: 700, color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.07em', flexShrink: 0 }}>Mood Arc</span>
+      <span style={{ fontSize: '0.60rem', fontWeight: 700, color: 'rgba(156,163,175,0.7)', textTransform: 'uppercase', letterSpacing: '.08em', flexShrink: 0 }}>Arc</span>
       <svg width={W} height={H} style={{ flexShrink: 0, overflow: 'visible' }}>
-        <line x1="0" y1={H / 2} x2={W} y2={H / 2} stroke={dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)'} strokeWidth="1" strokeDasharray="3 3" />
-        <polyline fill="none" stroke={moodColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" points={pts} />
-        <circle cx={toX(vals.length - 1)} cy={toY(last)} r="3.5" fill={moodColor} />
+        <defs>
+          <linearGradient id={`wg-${uid}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={moodColor} stopOpacity="0.22" />
+            <stop offset="100%" stopColor={moodColor} stopOpacity="0.0" />
+          </linearGradient>
+        </defs>
+        <line x1="0" y1={H / 2} x2={W} y2={H / 2} stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="4 4" />
+        <path d={areaD} fill={`url(#wg-${uid})`} />
+        <path d={pathD} fill="none" stroke={moodColor} strokeWidth="1.8" strokeLinecap="round" />
+        <circle cx={pts[pts.length-1][0]} cy={pts[pts.length-1][1]} r="3" fill={moodColor} />
       </svg>
       <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <span style={{ fontSize: '0.73rem', fontWeight: 700, color: moodColor }}>{moodLabel}</span>
-        <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>{arrow}</span>
-        {dom && <span style={{ fontSize: '0.75rem' }}>{EMOTION_EMOJI[dom.toLowerCase()] || ''}</span>}
+        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: moodColor }}>{moodLabel}</span>
+        <span style={{ fontSize: '0.75rem', color: 'rgba(156,163,175,0.7)' }}>{arrow}</span>
+        {dom && <span style={{ fontSize: '0.72rem' }}>{EMOTION_EMOJI[dom.toLowerCase()] || ''}</span>}
       </div>
     </div>
   );
@@ -316,10 +362,19 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'pri
   const domRgb       = dom ? emotionRgb(dom) : null;
   const sarcasmScore = msg.analysis?.data?.sarcasm_score ?? msg.analysis?.data?.llm_sarcasm_score ?? 0;
 
-  const ownBg    = hasAnalysis ? (bubbleGradient(emotionDict) || 'rgba(0,119,255,0.10)') : 'rgba(0,119,255,0.10)';
-  const borderClr = isOwn
-    ? (domRgb ? `rgba(${domRgb},.35)` : 'rgba(0,119,255,.25)')
-    : dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,.07)';
+  // Analyzing (no analysis yet, user's own msg, not regenerating)
+  const isAnalyzing = !msg.analysis && msg.sender === 'user' && !isRegenerating;
+
+  const glowColor = domRgb || (isOwn ? '99,102,241' : '255,255,255');
+  const bubbleBg  = isAnalyzing
+    ? 'rgba(99,102,241,0.08)'
+    : isOwn
+      ? (hasAnalysis ? (bubbleGradient(emotionDict)?.replace('0.10','0.18') || 'rgba(99,102,241,0.18)') : 'rgba(99,102,241,0.14)')
+      : 'rgba(30,31,50,0.72)';
+  const borderClr = `rgba(${glowColor},${hovered && hasAnalysis ? '.45' : '.18'})`;
+  const glowShadow = hasAnalysis && domRgb
+    ? `0 0 ${hovered ? 18 : 8}px rgba(${domRgb},${hovered ? '.28' : '.12'})`
+    : 'none';
 
   return (
     <div
@@ -334,64 +389,53 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'pri
         position: 'relative',
       }}
     >
-      <div className="glass-bubble" style={{
-        padding: '10px 14px',
+      <div style={{
+        padding: isAnalyzing ? '12px 16px' : '10px 14px',
         borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
-        background: dark 
-          ? (isOwn ? ownBg.replace('0.10', '0.18') : 'rgba(40,41,60,0.62)') 
-          : (isOwn ? ownBg : '#f0f0f0'),
-        border: `1.5px solid ${borderClr}`,
+        background: bubbleBg,
+        border: `1px solid ${borderClr}`,
         fontSize: '0.94rem', lineHeight: 1.5,
-        color: dark ? '#e0e0e0' : '#1c1c2e',
+        color: '#e0e0e0',
         wordBreak: 'break-word',
-        boxShadow: dark
-          ? `0 4px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255,255,255,0.05)`
-          : domRgb && isOwn
-            ? `0 2px 12px rgba(${domRgb},.14), inset 0 1px 0 rgba(255,255,255,.75)`
-            : isOwn
-              ? '0 2px 12px rgba(0,119,255,.09), inset 0 1px 0 rgba(255,255,255,.75)'
-              : '0 1px 3px rgba(0,0,0,.07)',
-        backdropFilter: 'blur(12px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(12px) saturate(180%)',
+        boxShadow: `0 4px 20px rgba(0,0,0,0.35), ${glowShadow}`,
+        backdropFilter: 'blur(16px) saturate(180%)',
+        WebkitBackdropFilter: 'blur(16px) saturate(180%)',
         animation: 'igMsgIn .26s cubic-bezier(.34,1.2,.64,1) both',
         position: 'relative', overflow: 'hidden',
-        outline: hovered && msg.analysis ? `2px solid rgba(${domRgb || '0,119,255'},.30)` : 'none',
-        outlineOffset: 1,
-        transition: 'outline-color .15s, background .3s, border .3s',
+        transition: 'border-color .3s, box-shadow .3s, background .4s',
+        minWidth: isAnalyzing ? 140 : 0,
       }}>
-        {isRegenerating ? (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#9ca3af', fontStyle: 'italic', fontSize: '0.87rem' }}>
-            <span className="regen-spinner" style={{
-              width: 12, height: 12, border: '2px solid rgba(0,0,0,.10)',
-              borderTopColor: '#6b7280', borderRadius: '50%',
-              display: 'inline-block', animation: 'regen-spin .7s linear infinite',
-            }} />
-            Re-analyzing…
-          </span>
-        ) : <SyntaxText text={msg.text} theme={theme} dark={dark} />}
+        {isAnalyzing ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            <div style={{ height: 11, borderRadius: 6, width: '85%', background: 'linear-gradient(90deg, rgba(99,102,241,.08) 25%, rgba(99,102,241,.22) 50%, rgba(99,102,241,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite' }} />
+            <div style={{ height: 11, borderRadius: 6, width: '60%', background: 'linear-gradient(90deg, rgba(99,102,241,.08) 25%, rgba(99,102,241,.22) 50%, rgba(99,102,241,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite .3s' }} />
+            <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'rgba(165,180,252,0.55)', fontStyle: 'italic' }}>Analyzing…</div>
+          </div>
+        ) : isRegenerating ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+            <div style={{ height: 11, borderRadius: 6, width: '70%', background: 'linear-gradient(90deg, rgba(99,102,241,.08) 25%, rgba(99,102,241,.22) 50%, rgba(99,102,241,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite' }} />
+            <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'rgba(165,180,252,0.55)', fontStyle: 'italic' }}>Re-analyzing…</div>
+          </div>
+        ) : (
+          <SyntaxText text={msg.text} theme={theme} dark={true} />
+        )}
       </div>
 
-      {hasAnalysis && dom && !isRegenerating && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 4, marginTop: 3,
-          justifyContent: isOwn ? 'flex-end' : 'flex-start',
-        }}>
-          <span style={{ fontSize: '0.78rem' }}>{EMOTION_EMOJI[dom.toLowerCase()] || '●'}</span>
-          <span style={{ fontSize: '0.67rem', fontWeight: 600, color: `rgb(${domRgb})`, textTransform: 'capitalize' }}>{dom}</span>
-          {sarcasmScore > 0.35 && (
-            <span style={{
-              fontSize: '0.62rem', fontWeight: 700,
-              background: 'rgba(245,158,11,0.12)', color: '#d97706',
-              border: '1px solid rgba(245,158,11,0.28)', borderRadius: 99,
-              padding: '1px 6px', marginLeft: 2,
-            }}>sarcasm {Math.round(sarcasmScore * 100)}%</span>
-          )}
+      {/* Sarcasm badge only — no emotion label/emoji */}
+      {sarcasmScore > 0.45 && hasAnalysis && !isRegenerating && (
+        <div style={{ marginTop: 3, justifyContent: isOwn ? 'flex-end' : 'flex-start', display: 'flex' }}>
+          <span style={{
+            fontSize: '0.62rem', fontWeight: 700,
+            background: 'rgba(245,158,11,0.10)', color: '#fbbf24',
+            border: '1px solid rgba(245,158,11,0.22)', borderRadius: 99,
+            padding: '1px 7px',
+          }}>sarcasm {Math.round(sarcasmScore * 100)}%</span>
         </div>
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
         {msg.analysis && hovered && (
-          <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
+          <div style={{ fontSize: '0.62rem', color: 'rgba(156,163,175,0.6)' }}>tap to inspect ↗</div>
         )}
         {isOwn && hovered && onDelete && (
           <button
@@ -523,6 +567,52 @@ function GroupModal({ globalUsers, currentUser, onConfirm, onClose, dark = false
   );
 }
 
+// ── SuggestedResponses ────────────────────────────────────────────────────────
+
+function SuggestedResponses({ dominant, onSelect }) {
+  const suggestions = SUGGESTIONS[dominant?.toLowerCase()] || [];
+  if (!suggestions.length) return null;
+  return (
+    <div style={{
+      padding: '8px 20px', display: 'flex', gap: 8, flexWrap: 'wrap',
+      animation: 'slideUp .25s cubic-bezier(.34,1.2,.64,1) both',
+    }}>
+      {suggestions.map((s, i) => (
+        <button key={i} onClick={() => onSelect(s)} style={{
+          background: 'rgba(99,102,241,0.10)', border: '1px solid rgba(99,102,241,0.22)',
+          borderRadius: 99, padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+          color: '#a5b4fc', cursor: 'pointer', transition: 'all .15s',
+          backdropFilter: 'blur(8px)',
+        }}
+          onMouseOver={e => { e.currentTarget.style.background = 'rgba(99,102,241,0.20)'; e.currentTarget.style.color = '#c7d2fe'; }}
+          onMouseOut={e => { e.currentTarget.style.background = 'rgba(99,102,241,0.10)'; e.currentTarget.style.color = '#a5b4fc'; }}
+        >{s}</button>
+      ))}
+    </div>
+  );
+}
+
+// ── CrisisAlert ───────────────────────────────────────────────────────────────
+
+function CrisisAlert({ onDismiss }) {
+  return (
+    <div style={{
+      margin: '8px 20px 0', borderRadius: 12,
+      background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+      padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10,
+      animation: 'slideDown .3s cubic-bezier(.34,1.2,.64,1) both',
+      boxShadow: '0 0 20px rgba(239,68,68,0.12)',
+      flexShrink: 0,
+    }}>
+      <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 8px rgba(239,68,68,.7)', flexShrink: 0, animation: 'pulseGlow 2s ease infinite' }} />
+      <span style={{ flex: 1, fontSize: '0.80rem', color: '#fca5a5', lineHeight: 1.4, fontWeight: 500 }}>
+        High emotional intensity detected — this conversation may need extra care.
+      </span>
+      <button onClick={onDismiss} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(252,165,165,0.55)', fontSize: '0.85rem', padding: '2px 4px', lineHeight: 1 }}>✕</button>
+    </div>
+  );
+}
+
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function IGDashboard({
@@ -572,6 +662,7 @@ export default function IGDashboard({
   const [selectedMsg, setSelectedMsg]         = useState(null);
   const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
   const [escalationDismissed, setEscalationDismissed] = useState(false);
+  const [crisisDismissed, setCrisisDismissed] = useState(false);
   const [memberPanelOpen, setMemberPanelOpen] = useState(false);
   const [memberError, setMemberError]         = useState('');
   const messagesContainerRef = useRef(null);
@@ -593,7 +684,9 @@ export default function IGDashboard({
     setMemberError('');
     setInsightsPanelOpen(false);
     setEscalationDismissed(false);
+    setCrisisDismissed(false);
   }, [activeConversationId]);
+
 
   // Conversation filtering — works for both direct (other_display_name) and group (name)
   const filteredConvs = conversations.filter(c => {
@@ -612,11 +705,36 @@ export default function IGDashboard({
   const dominant    = currentAnalysis?.data?.final_dominant_emotion;
   const dominantRgb = dominant ? emotionRgb(dominant) : null;
 
+  // Emotion-reactive body background — must be after `dominant` is declared
+  useEffect(() => {
+    if (!dominant) return;
+    const rgb = EMOTION_BG[dominant.toLowerCase()] || '99,102,241';
+    document.body.style.background = `radial-gradient(ellipse at 30% 20%, rgba(${rgb},0.18) 0%, transparent 60%), radial-gradient(ellipse at 75% 80%, rgba(${rgb},0.10) 0%, transparent 55%), #06060f`;
+    return () => { document.body.style.background = ''; };
+  }, [dominant]);
+
   // For groups: label + avatar use group name; for direct: use other_display_name
   const convLabel = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
   const activeLabel = activeConv ? convLabel(activeConv) : '';
 
   const rightPanelOpen = insightsPanelOpen || !!selectedMsg;
+
+  // Crisis: last message valence < -0.55 AND volatility > 0.70
+  const isCrisis = (() => {
+    const last = messages.filter(m => m.analysis?.data?.final_valence != null).slice(-1)[0];
+    if (!last) return false;
+    const v = last.analysis.data.final_valence;
+    const vol = last.analysis.data.context_snapshot?.volatility ?? 0;
+    return v < -0.55 && vol > 0.70;
+  })();
+
+  // Suggestions: show when last analyzed msg (other person's) has negative valence
+  const suggestionEmotion = (() => {
+    const lastOther = messages.filter(m => m.sender !== 'user' && m.analysis?.data?.final_valence != null).slice(-1)[0];
+    if (!lastOther) return null;
+    if (lastOther.analysis.data.final_valence >= -0.35) return null;
+    return lastOther.analysis.data.final_dominant_emotion;
+  })();
 
   const isEscalation = (() => {
     const analyzed = messages
@@ -655,7 +773,7 @@ export default function IGDashboard({
   return (
     <div style={{
       display: 'flex', height: '100vh',
-      background: dark ? 'var(--surface-base, #0b0d17)' : '#ffffff',
+      background: 'transparent',
       fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       position: 'relative',
     }}>
@@ -727,15 +845,15 @@ export default function IGDashboard({
       )}
 
       {/* ── Left Sidebar ──────────────────────────────────────────────── */}
-      <div style={{ width: 300, borderRight: dark ? '1px solid #1e2030' : '1px solid #e8e8f0', display: 'flex', flexDirection: 'column', background: dark ? '#0f0f1a' : '#f8f9fc', flexShrink: 0 }}>
+      <div style={{ width: 300, borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', background: 'rgba(6,6,15,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', flexShrink: 0 }}>
         {/* Header */}
         <div style={{ padding: '20px 20px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div
             style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', position: 'relative' }}
             onClick={() => setShowProfileMenu(p => !p)}
           >
-            <span style={{ fontWeight: 800, fontSize: '1.05rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{currentUser?.display_name}</span>
-            <svg width="14" height="14" fill="none" stroke={dark ? '#e0e0e0' : '#1c1c2e'} strokeWidth="2.5" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+            <span style={{ fontWeight: 800, fontSize: '1.05rem', color: '#e0e0e0' }}>{currentUser?.display_name}</span>
+            <svg width="14" height="14" fill="none" stroke="#e0e0e0" strokeWidth="2.5" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
 
             {showProfileMenu && (
               <div
@@ -802,17 +920,17 @@ export default function IGDashboard({
 
         {/* Search */}
         <div style={{ padding: '0 16px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: dark ? '#222230' : '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,255,255,0.06)', borderRadius: 12, padding: '10px 14px' }}>
             <svg width="15" height="15" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)}
-              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: dark ? '#e0e0e0' : '#1c1c2e', flex: 1 }}
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: '#e0e0e0', flex: 1 }}
             />
           </div>
         </div>
 
         {/* Section label + WS status */}
         <div style={{ padding: '0 20px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>Messages</span>
+          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#c0c0d0' }}>Messages</span>
           <span style={{ fontSize: '0.78rem', color: status === 'Live' ? '#22c55e' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: status === 'Live' ? '#22c55e' : '#d1d5db', display: 'inline-block', boxShadow: status === 'Live' ? '0 0 5px #22c55e' : 'none' }} />
             {status}
@@ -856,7 +974,7 @@ export default function IGDashboard({
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.93rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{label}</span>
+                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.93rem', color: '#e0e0e0' }}>{label}</span>
                       {conv.type === 'group' && (
                         <span style={{ fontSize: '0.65rem', background: dark ? 'rgba(0,119,255,0.15)' : '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6, letterSpacing: '.04em' }}>
                           GROUP · {conv.member_count || 0}
@@ -865,7 +983,7 @@ export default function IGDashboard({
                     </div>
                     <span style={{ fontSize: '0.72rem', color: '#9ca3af', flexShrink: 0 }}>{timeAgo(conv.last_message_time || conv.conversation_id)}</span>
                   </div>
-                  <div style={{ fontSize: '0.82rem', color: dark ? '#8b8fa3' : '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
+                  <div style={{ fontSize: '0.82rem', color: '#8b8fa3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
                     {typeof lastMsg === 'string' ? lastMsg : '…'}
                   </div>
                   {conv.dominant_emotion && (
@@ -880,7 +998,7 @@ export default function IGDashboard({
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '12px 16px', borderTop: dark ? '1px solid #2a2a35' : '1px solid #f0f0f0', display: 'flex', gap: 6 }}>
+        <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: 6 }}>
           <button onClick={() => setShowCompose(true)} style={{
             flex: 1, background: '#0077ff', color: '#fff', border: 'none',
             borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem',
@@ -894,18 +1012,18 @@ export default function IGDashboard({
             New Message
           </button>
           <button onClick={() => setShowGroupModal(true)}
-            style={{ background: dark ? '#222230' : '#f3f4f6', color: dark ? '#c0c0c0' : '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
+            style={{ background: 'rgba(255,255,255,0.06)', color: '#c0c0c0', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
             title="New Group Chat"
-            onMouseOver={e => e.currentTarget.style.background = dark ? '#2d2d3e' : '#e5e7eb'}
-            onMouseOut={e => e.currentTarget.style.background = dark ? '#222230' : '#f3f4f6'}
+            onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.10)'}
+            onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
           >
             👥
           </button>
           <button onClick={onGoToAnalytics}
-            style={{ background: dark ? '#222230' : '#f3f4f6', color: dark ? '#c0c0c0' : '#374151', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
+            style={{ background: 'rgba(255,255,255,0.06)', color: '#c0c0c0', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
             title="View Insights"
-            onMouseOver={e => e.currentTarget.style.background = dark ? '#2d2d3e' : '#e5e7eb'}
-            onMouseOut={e => e.currentTarget.style.background = dark ? '#222230' : '#f3f4f6'}
+            onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.10)'}
+            onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
           >
             ◎
           </button>
@@ -928,11 +1046,11 @@ export default function IGDashboard({
         ) : (
           <>
             {/* Chat header */}
-            <div style={{ padding: '12px 20px', borderBottom: dark ? '1px solid #1e2030' : '1px solid #e8e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: dark ? '#0a0a14' : '#ffffff', position: 'sticky', top: 0, zIndex: 10, backdropFilter: 'blur(12px)' }}>
+            <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(6,6,15,0.70)', position: 'sticky', top: 0, zIndex: 10, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <Avatar name={activeLabel} size={42} rgb={activeRgb} online={!isGroup && onlineUsers.has(activeConv?.other_user_id)} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: dark ? '#e0e0e0' : '#1c1c2e', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#e0e0e0', display: 'flex', alignItems: 'center', gap: 6 }}>
                     {activeLabel}
                     {isGroup && (
                       <span style={{ fontSize: '0.65rem', background: '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6 }}>
@@ -1062,17 +1180,17 @@ export default function IGDashboard({
               </div>
             )}
 
-            {/* Mood arc sparkline */}
-            <ValenceSparkline messages={messages} dark={dark} />
+            {/* Mood arc wave */}
+            <ValenceSparkline messages={messages} />
 
             {/* Messages */}
-            <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px', display: 'flex', flexDirection: 'column', gap: 4, background: dark ? '#0a0a14' : '#f8f9fc' }}>
+            <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px', display: 'flex', flexDirection: 'column', gap: 4, background: 'transparent' }}>
               {messages.length === 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 12, color: '#9ca3af' }}>
                   <Avatar name={activeLabel} size={72} rgb={activeRgb} />
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: dark ? '#e0e0e0' : '#1c1c2e', marginBottom: 4 }}>{activeLabel}</div>
-                    <div style={{ fontSize: '0.83rem', color: '#9ca3af' }}>Say hi and start the conversation ✌️</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#e0e0e0', marginBottom: 4 }}>{activeLabel}</div>
+                    <div style={{ fontSize: '0.83rem', color: '#9ca3af' }}>Say hi and start the conversation</div>
                   </div>
                 </div>
               )}
@@ -1128,45 +1246,39 @@ export default function IGDashboard({
               <div ref={messagesEndRef} />
             </div>
 
-            {/* ── Escalation strip — invisible until point of no return ── */}
-            {currentUser?.role === 'admin' && isEscalation && !escalationDismissed && (
-              <div style={{
-                padding: '8px 20px',
-                background: dark ? 'rgba(245,158,11,0.10)' : 'rgba(245,158,11,0.07)',
-                borderTop: '1px solid rgba(245,158,11,0.25)',
-                display: 'flex', alignItems: 'center', gap: 10,
-              }}>
-                <div style={{ width: 3, alignSelf: 'stretch', minHeight: 20, borderRadius: 2, background: 'rgba(245,158,11,0.65)', flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: '0.79rem', color: dark ? '#fbbf24' : '#92400e', lineHeight: 1.4 }}>
-                  Conversation intensity rising — consider pausing before responding.
-                </span>
-                <button
-                  onClick={() => setEscalationDismissed(true)}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.75rem', color: '#9ca3af', padding: '2px 6px', flexShrink: 0, lineHeight: 1 }}
-                >✕</button>
-              </div>
+            {/* Crisis alert */}
+            {isCrisis && !crisisDismissed && (
+              <CrisisAlert onDismiss={() => setCrisisDismissed(true)} />
+            )}
+
+            {/* Suggested responses (above input) */}
+            {suggestionEmotion && SUGGESTIONS[suggestionEmotion?.toLowerCase()] && (
+              <SuggestedResponses
+                dominant={suggestionEmotion}
+                onSelect={text => { setInputValue(text); inputRef.current?.focus(); }}
+              />
             )}
 
             {/* Input bar */}
-            <div style={{ padding: '12px 20px', borderTop: dark ? '1px solid #1e2030' : '1px solid #e8e8f0', background: dark ? '#0a0a14' : '#ffffff' }}>
+            <div style={{ padding: '8px 20px 12px', borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(6,6,15,0.70)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10,
-                border: `1.5px solid ${dominantRgb ? `rgba(${dominantRgb},.35)` : (dark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.14)')}`,
+                border: `1px solid ${dominantRgb ? `rgba(${dominantRgb},.30)` : 'rgba(255,255,255,.10)'}`,
                 borderRadius: 28, padding: '4px 6px 4px 16px',
                 transition: 'border-color .4s',
-                background: dominantRgb ? `rgba(${dominantRgb},${dark ? '.10' : '.04'})` : (dark ? 'rgba(255,255,255,0.04)' : 'transparent'),
+                background: dominantRgb ? `rgba(${dominantRgb},0.07)` : 'rgba(255,255,255,0.04)',
+                boxShadow: dominantRgb ? `0 0 20px rgba(${dominantRgb},0.08)` : 'none',
               }}>
-                <button style={{ background: 'none', border: 'none', fontSize: '1.3rem', cursor: 'pointer', lineHeight: 1, padding: 0, flexShrink: 0 }}>😊</button>
                 <textarea
                   ref={inputRef} rows={1}
                   placeholder="Message…"
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
-                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.95rem', color: dark ? '#e0e0e0' : '#1c1c2e', fontFamily: 'inherit', padding: '9px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.95rem', color: '#e0e0e0', fontFamily: 'inherit', padding: '9px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
                 />
                 {inputValue.trim() ? (
-                  <button onClick={onSend} style={{ background: 'none', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.9rem', color: '#0077ff', padding: '6px 10px', flexShrink: 0 }}>Send</button>
+                  <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', color: '#fff', padding: '8px 16px', borderRadius: 22, flexShrink: 0, boxShadow: '0 2px 12px rgba(99,102,241,0.35)', transition: 'opacity .15s' }}>Send</button>
                 ) : (
                   <button onClick={() => { setInputValue('❤️'); setTimeout(() => onSend(), 50); }}
                     style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.4rem', padding: '4px 6px', flexShrink: 0, transition: 'transform .15s' }}
