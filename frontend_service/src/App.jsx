@@ -58,6 +58,12 @@ function parseAnalysis(msg) {
 export default function App() {
   const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'live-analytics' | 'admin'
 
+  // Always-dark: set immediately at app root so login screen is dark too
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.body.style.background = '#06060f';
+  }, []);
+
   // ── Auth ────────────────────────────────────────────────────────────────
   const [currentUser, setCurrentUser]       = useState(null);
   const [sessionChecked, setSessionChecked] = useState(false);

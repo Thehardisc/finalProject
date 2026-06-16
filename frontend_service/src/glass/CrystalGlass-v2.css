@@ -7,24 +7,24 @@
 body {
   margin: 0;
   padding: 0;
-  background: #ffffff;
+  background: var(--bg-base, #06060f);
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #1c1c2e;
+  color: var(--text-primary, #ededf5);
   -webkit-font-smoothing: antialiased;
 }
 
 /* ── CSS Custom Properties v2 ────────────────────────────────────────────── */
 :root {
-  --canvas: #ffffff;
-  --glass-bg: rgba(255, 255, 255, 0.62);
-  --glass-bg-deep: rgba(255, 255, 255, 0.75);
-  --glass-border: rgba(255, 255, 255, 0.95);
-  --glass-glow: 0 0 24px rgba(255, 255, 255, 0.6);
-  --glass-blur: blur(40px) saturate(200%);
-  --glass-blur-strong: blur(48px) saturate(220%);
-  --glass-blur-emotion: blur(36px) saturate(240%);
-  --glass-shadow: 0 8px 40px rgba(0, 0, 0, 0.07), inset 0 1px 0 rgba(255, 255, 255, 1);
-  --bubble-rgb: 88, 86, 214;
+  --canvas: #03030a;
+  --glass-bg: rgba(255, 255, 255, 0.04);
+  --glass-bg-deep: rgba(255, 255, 255, 0.07);
+  --glass-border: rgba(255, 255, 255, 0.09);
+  --glass-glow: 0 0 24px rgba(0, 0, 0, 0.50);
+  --glass-blur: blur(24px) saturate(160%);
+  --glass-blur-strong: blur(32px) saturate(180%);
+  --glass-blur-emotion: blur(20px) saturate(200%);
+  --glass-shadow: 0 8px 40px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --bubble-rgb: 99, 102, 241;
   --spring: cubic-bezier(0.34, 1.2, 0.64, 1);
   --page-pad: 28px;
 }
@@ -171,14 +171,14 @@ body {
 }
 
 /* ── Scrollbars ──────────────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.07);
   border-radius: 99px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0,0,0,0.18);
+  background: rgba(255,255,255,0.14);
 }
 
 /* ── Page Shell v2 ───────────────────────────────────────────────────────── */
@@ -262,29 +262,24 @@ body {
 
 /* ── Conversation Card ───────────────────────────────────────────────────── */
 .conv-card {
-  background: rgba(255, 255, 255, 0.78);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 1px solid rgba(var(--card-rgb, 88, 86, 214), 0.20);
-  border-radius: 18px;
-  padding: 18px 20px;
+  background: rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 14px;
+  padding: 14px 16px;
   cursor: pointer;
-  transition: box-shadow 0.22s, transform 0.14s var(--spring), border-color 0.22s;
-  box-shadow:
-    0 4px 20px rgba(var(--card-rgb, 88, 86, 214), 0.09),
-    inset 0 1px 0 rgba(255, 255, 255, 1);
+  transition: box-shadow 0.22s, transform 0.14s var(--spring), border-color 0.22s, background 0.18s;
   animation: fadeUp 0.36s var(--spring) both;
 }
 .conv-card:hover {
-  transform: translateY(-2px);
-  box-shadow:
-    0 8px 32px rgba(var(--card-rgb, 88, 86, 214), 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 1);
-  border-color: rgba(var(--card-rgb, 88, 86, 214), 0.35);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.12);
+  transform: translateY(-1px);
 }
 .conv-card.active {
-  border-color: rgba(var(--card-rgb, 88, 86, 214), 0.5);
-  background: rgba(var(--card-rgb, 88, 86, 214), 0.08);
+  border-color: rgba(var(--bubble-rgb, 99,102,241), 0.35);
+  background: rgba(var(--bubble-rgb, 99,102,241), 0.08);
 }
 
 /* ── Analytics Layer Card ────────────────────────────────────────────────── */
