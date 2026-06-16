@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import axios from 'axios';
 import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
-import TelemetryPanel  from '../components/TelemetryPanel';
+import EmotionIntelligencePanel from '../components/EmotionIntelligencePanel';
 import AnalysisDrawer  from '../components/AnalysisDrawer';
 import DemoRunner      from '../components/DemoRunner';
 import AmbientOrb      from '../components/AmbientOrb';
@@ -665,7 +665,7 @@ export default function IGDashboard({
       )}
 
       {/* ── Left Sidebar ──────────────────────────────────────────────── */}
-      <div style={{ width: 360, borderRight: dark ? '1px solid #2a2a35' : '1px solid #efefef', display: 'flex', flexDirection: 'column', background: dark ? '#181824' : '#ffffff', flexShrink: 0 }}>
+      <div style={{ width: 300, borderRight: dark ? '1px solid #1e2030' : '1px solid #e8e8f0', display: 'flex', flexDirection: 'column', background: dark ? '#0f0f1a' : '#f8f9fc', flexShrink: 0 }}>
         {/* Header */}
         <div style={{ padding: '20px 20px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div
@@ -866,7 +866,7 @@ export default function IGDashboard({
         ) : (
           <>
             {/* Chat header */}
-            <div style={{ padding: '14px 20px', borderBottom: dark ? '1px solid #2a2a35' : '1px solid #efefef', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: dark ? '#12121c' : '#ffffff', position: 'sticky', top: 0, zIndex: 10 }}>
+            <div style={{ padding: '12px 20px', borderBottom: dark ? '1px solid #1e2030' : '1px solid #e8e8f0', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: dark ? '#0a0a14' : '#ffffff', position: 'sticky', top: 0, zIndex: 10, backdropFilter: 'blur(12px)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                 <Avatar name={activeLabel} size={42} rgb={activeRgb} online={!isGroup && onlineUsers.has(activeConv?.other_user_id)} />
                 <div>
@@ -1004,7 +1004,7 @@ export default function IGDashboard({
             <ValenceSparkline messages={messages} dark={dark} />
 
             {/* Messages */}
-            <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 40px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px', display: 'flex', flexDirection: 'column', gap: 4, background: dark ? '#0a0a14' : '#f8f9fc' }}>
               {messages.length === 0 && (
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 12, color: '#9ca3af' }}>
                   <Avatar name={activeLabel} size={72} rgb={activeRgb} />
@@ -1086,7 +1086,7 @@ export default function IGDashboard({
             )}
 
             {/* Input bar */}
-            <div style={{ padding: '12px 20px', borderTop: dark ? '1px solid #2a2a35' : '1px solid #efefef', background: dark ? '#12121c' : '#ffffff' }}>
+            <div style={{ padding: '12px 20px', borderTop: dark ? '1px solid #1e2030' : '1px solid #e8e8f0', background: dark ? '#0a0a14' : '#ffffff' }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 10,
                 border: `1.5px solid ${dominantRgb ? `rgba(${dominantRgb},.35)` : (dark ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.14)')}`,
@@ -1118,27 +1118,26 @@ export default function IGDashboard({
         )}
       </div>
 
-      {/* ── Right Panel: Telemetry / Analysis Drawer ──────────────────── */}
-      {rightPanelOpen && (
+      {/* ── Right Panel: Always-on Emotion Intelligence ───────────────── */}
+      {activeConversationId && (
         <div style={{
-          width: 280, borderLeft: dark ? '1px solid #2a2a35' : '1px solid #efefef',
+          width: 310, borderLeft: '1px solid rgba(255,255,255,0.06)',
           display: 'flex', flexDirection: 'column',
-          background: dark ? '#181824' : '#ffffff', flexShrink: 0,
-          animation: 'igModalIn .2s ease both',
+          background: '#080810', flexShrink: 0,
         }}>
           {selectedMsg ? (
             <AnalysisDrawer
               msg={selectedMsg}
               onClose={() => setSelectedMsg(null)}
               onFeedbackSent={() => {}}
-              dark={dark}
+              dark={true}
             />
           ) : (
-            <TelemetryPanel
-              processing={processing}
+            <EmotionIntelligencePanel
               lastAnalysis={currentAnalysis}
+              processing={processing}
               partialModels={partialModels}
-              dark={dark}
+              messages={messages}
             />
           )}
         </div>
