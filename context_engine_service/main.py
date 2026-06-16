@@ -299,12 +299,16 @@ class ContextEngineService:
             new_volatility   = float(self.decay_factor * prev_volatility + (1 - self.decay_factor) * current_variance)
             baseline_valence = float(np.mean(recent_valences)) if recent_valences else _valence
 
+            _USER_TTL = 86400  # 24-hour expiry on user working-memory keys
             async with self.redis.pipeline(transaction=True) as pipe2:
                 pipe2.hset(state_key, mapping={
                     "current_volatility": new_volatility,
                     "last_message_ts":    float(now),
                     "baseline_valence":   baseline_valence,
                 })
+                pipe2.expire(state_key,      _USER_TTL)
+                pipe2.expire(valence_key,    _USER_TTL)
+                pipe2.expire(linguistic_key, _USER_TTL)
                 await pipe2.execute()
             return new_volatility
         except Exception as e:

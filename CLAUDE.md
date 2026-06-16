@@ -93,7 +93,7 @@ Named index constants (`CTX_*`) must be used instead of hardcoded integers.
 
 ## Trajectory LSTM
 
-- **Input per step**: 67-dim tensor — GoEmotions(28) + BERT(7) + VADER(4) + EmojiNet(28)
+- **Input per step**: 79-dim tensor — GoEmotions(28) + BERT(7) + VADER(4) + EmojiNet(28) + context(12). Actual value read from `trajectory_config.json` (`input_dim=79`).
 - **Architecture**: `central_responder_service/trajectory/model.py:ConversationLSTM`
 - **Inference**: `central_responder_service/trajectory/inference.py` — reads `input_dim` from `trajectory_config.json`
 - **Model files**: `central_responder_service/models/trajectory_lstm.pt` + `trajectory_config.json`
@@ -202,7 +202,7 @@ docker compose ps
 ## Key Invariants & Gotchas
 
 - **Feature vector parity**: `meta_learner.py:build_feature_vector` and `trainer.py` must produce the same 107-dim vector. Mismatch → `X has N features but StandardScaler expecting M` error.
-- **Trajectory input**: always 67-dim (GoE+BERT+VADER+Emoji). Input dim is read from `trajectory_config.json` via `config.get("input_dim", 67)` — do NOT hardcode it.
+- **Trajectory input**: 79-dim (GoE+BERT+VADER+Emoji+context). Input dim is read from `trajectory_config.json` via `config.get("input_dim", 67)` — do NOT hardcode it. Current deployed model: `input_dim=79`.
 - **Dimension constants**: `shared/constants.py` is the single source of truth. Key values: `ML_DIM=39`, `CDM_CTX_DIM=40`, `PRIOR_DIM=28`, `CONTEXT_DIM=68`, `FEATURE_DIM=107`, `N_CDM_STATES=15`. Use `CTX_*` named index constants — never hardcode integers. `context_engine_service` uses `CDM_CTX_DIM`; `GatingEnsembleNet` uses `CONTEXT_DIM` (the full 68-dim block).
 - **Trajectory prior Redis key**: `trajectory:{conv_id}:prior` — 28-dim JSON list. Written by `trajectory/inference.py`, read by `aggregate_and_publish` in `central_responder/main.py`. Missing key → zeros (safe).
 - **CSS import**: `main.jsx` imports `index-v2.css`, not `index.css`. Edits to `index.css` have no effect on the running app.
