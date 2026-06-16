@@ -64,8 +64,9 @@ function buildDemoMessages(myName, otherName) {
         type: 'analysis',
         data: {
           id: 'demo-1', raw_text: "Sure, totally fine with that 🙄",
-          final_dominant_emotion: 'annoyance', final_valence: 0.42,
+          final_dominant_emotion: 'annoyance', final_valence: -0.42,
           meta_confidence: 0.81,
+          sarcasm_score: 0.91,
           bert_emotions: [
             { label: 'annoyance',   score: 0.48 },
             { label: 'disgust',     score: 0.22 },
@@ -74,9 +75,20 @@ function buildDemoMessages(myName, otherName) {
             { label: 'joy',         score: 0.05 },
           ],
           logic_map: { VADER: 0.12, BERT: 0.28, GoEmotions: 0.53, Context: 0.07 },
+          context_snapshot: {
+            cur_valence: -0.42, prev_emotion: 'neutral',
+            topic_resonance: 0.31, volatility: 0.72,
+            ce_available: true,
+            cdm_current_state: 'CONFLICT_RISE', cdm_entry_abruptness: 0.68, cdm_residency: 0.14,
+          },
+          lstm_trajectory: {
+            model_available: true,
+            top_predicted: 'disgust',
+            predicted_next: { disgust: 0.38, annoyance: 0.29, disapproval: 0.18, anger: 0.09, neutral: 0.06 },
+          },
           sender_id: 'demo-other',
         },
-        ai_insight: 'Sarcasm detected: positive lexical content paired with dismissive 🙄. Sarcasm score: 0.90.',
+        ai_insight: 'Sarcasm detected (91%): positive lexical surface masks negative intent. High volatility (72%). CDM state: CONFLICT_RISE.',
       },
     },
     {
@@ -88,6 +100,7 @@ function buildDemoMessages(myName, otherName) {
           id: 'demo-2', raw_text: "I'm genuinely loving this!! Everything is perfect 🔥",
           final_dominant_emotion: 'joy', final_valence: 0.94,
           meta_confidence: 0.93,
+          sarcasm_score: 0.04,
           bert_emotions: [
             { label: 'joy',        score: 0.62 },
             { label: 'excitement', score: 0.24 },
@@ -96,8 +109,20 @@ function buildDemoMessages(myName, otherName) {
             { label: 'neutral',    score: 0.02 },
           ],
           logic_map: { VADER: 0.38, BERT: 0.22, GoEmotions: 0.36, Context: 0.04 },
+          context_snapshot: {
+            cur_valence: 0.94, prev_emotion: 'annoyance',
+            topic_resonance: 0.65, volatility: 0.44,
+            ce_available: true,
+            cdm_current_state: 'POSITIVE_SURGE', cdm_entry_abruptness: 0.55, cdm_residency: 0.08,
+          },
+          lstm_trajectory: {
+            model_available: true,
+            top_predicted: 'excitement',
+            predicted_next: { excitement: 0.41, joy: 0.28, love: 0.15, admiration: 0.10, optimism: 0.06 },
+          },
           sender_id: 'demo-me',
         },
+        ai_insight: 'Genuine positive affect confirmed (sarcasm 4%). VADER compound 0.94. Trajectory predicts sustained excitement.',
       },
     },
     {
@@ -109,6 +134,7 @@ function buildDemoMessages(myName, otherName) {
           id: 'demo-3', raw_text: "Actually… I don't know anymore. This whole thing is overwhelming me.",
           final_dominant_emotion: 'sadness', final_valence: -0.68,
           meta_confidence: 0.79,
+          sarcasm_score: 0.06,
           bert_emotions: [
             { label: 'sadness',        score: 0.45 },
             { label: 'fear',           score: 0.22 },
@@ -118,9 +144,20 @@ function buildDemoMessages(myName, otherName) {
           ],
           logic_map: { VADER: 0.30, BERT: 0.32, GoEmotions: 0.28, Context: 0.10 },
           context_shift: { type: 'Context Shift', from: 'joy', to: 'sadness', significance: 'High' },
+          context_snapshot: {
+            cur_valence: -0.68, prev_emotion: 'joy',
+            topic_resonance: 0.22, volatility: 0.88,
+            ce_available: true,
+            cdm_current_state: 'EMOTIONAL_COLLAPSE', cdm_entry_abruptness: 0.91, cdm_residency: 0.05,
+          },
+          lstm_trajectory: {
+            model_available: true,
+            top_predicted: 'grief',
+            predicted_next: { grief: 0.33, sadness: 0.27, fear: 0.19, nervousness: 0.13, disappointment: 0.08 },
+          },
           sender_id: 'demo-me',
         },
-        ai_insight: 'Sharp valence cliff (Δ = −1.62 in 1 message). Velocity: FAST. Possible emotional withdrawal. Arc: DESCENDING.',
+        ai_insight: 'Sharp valence cliff (Δ = −1.62). Volatility 88%. CDM: EMOTIONAL_COLLAPSE — abrupt entry 91%. LSTM predicts grief without intervention.',
       },
     },
     {
@@ -132,6 +169,7 @@ function buildDemoMessages(myName, otherName) {
           id: 'demo-4', raw_text: "Hey, I hear you. I actually do care about how you're doing, despite everything.",
           final_dominant_emotion: 'caring', final_valence: 0.58,
           meta_confidence: 0.85,
+          sarcasm_score: 0.03,
           bert_emotions: [
             { label: 'caring',    score: 0.44 },
             { label: 'love',      score: 0.21 },
@@ -140,8 +178,20 @@ function buildDemoMessages(myName, otherName) {
             { label: 'relief',    score: 0.07 },
           ],
           logic_map: { VADER: 0.20, BERT: 0.35, GoEmotions: 0.35, Context: 0.10 },
+          context_snapshot: {
+            cur_valence: 0.58, prev_emotion: 'sadness',
+            topic_resonance: 0.54, volatility: 0.61,
+            ce_available: true,
+            cdm_current_state: 'EMPATHIC_REPAIR', cdm_entry_abruptness: 0.38, cdm_residency: 0.22,
+          },
+          lstm_trajectory: {
+            model_available: true,
+            top_predicted: 'relief',
+            predicted_next: { relief: 0.35, gratitude: 0.26, caring: 0.20, optimism: 0.12, joy: 0.07 },
+          },
           sender_id: 'demo-other',
         },
+        ai_insight: 'Empathic response detected. CDM state: EMPATHIC_REPAIR. Episodic memory matched similar past support pattern. Trajectory: relief → gratitude arc.',
       },
     },
     {
@@ -153,6 +203,7 @@ function buildDemoMessages(myName, otherName) {
           id: 'demo-5', raw_text: "Alright. Let's do this together. I think we can actually make it work.",
           final_dominant_emotion: 'optimism', final_valence: 0.72,
           meta_confidence: 0.87,
+          sarcasm_score: 0.05,
           bert_emotions: [
             { label: 'optimism',  score: 0.38 },
             { label: 'relief',    score: 0.28 },
@@ -161,9 +212,20 @@ function buildDemoMessages(myName, otherName) {
             { label: 'joy',       score: 0.06 },
           ],
           logic_map: { VADER: 0.25, BERT: 0.28, GoEmotions: 0.37, Context: 0.10 },
+          context_snapshot: {
+            cur_valence: 0.72, prev_emotion: 'caring',
+            topic_resonance: 0.71, volatility: 0.34,
+            ce_available: true,
+            cdm_current_state: 'RESOLUTION', cdm_entry_abruptness: 0.22, cdm_residency: 0.41,
+          },
+          lstm_trajectory: {
+            model_available: true,
+            top_predicted: 'joy',
+            predicted_next: { joy: 0.36, optimism: 0.28, excitement: 0.18, relief: 0.11, gratitude: 0.07 },
+          },
           sender_id: 'demo-me',
         },
-        ai_insight: 'Arc recovery: RAGS_TO_RICHES pattern. Valence slope: +2.1 over 3 messages. Trajectory: ASCENDING.',
+        ai_insight: 'Arc recovery: RAGS_TO_RICHES pattern. Valence +1.40 in 2 messages. CDM: RESOLUTION — stable, low volatility (34%). LSTM predicts joy next.',
       },
     },
   ];
