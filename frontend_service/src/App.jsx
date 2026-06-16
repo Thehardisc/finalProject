@@ -260,6 +260,11 @@ export default function App() {
               }
               return prev;
             });
+            setMessages(prev => prev.map(m =>
+              m.id === payload.message_id
+                ? { ...m, analysis: { ...m.analysis, ai_insight: payload.ai_insight } }
+                : m
+            ));
           } else if (payload.type === 'model_ready') {
             setPartialModels(prev => {
               const next = new Set(prev);
