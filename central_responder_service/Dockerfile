@@ -16,6 +16,9 @@ COPY central_responder_service/ /app/central_responder_service/
 # Copy LSTM training pipeline (used by trainer_service to retrain ConversationLSTM)
 COPY conversation_state_learner/ /app/conversation_state_learner/
 
+# VAD lexicon — trainer/data/db.py path-hacks to /app/goemotions_service/vad_lexicon.py
+COPY goemotions_service/vad_lexicon.py /app/goemotions_service/vad_lexicon.py
+
 ENV PYTHONPATH=/app:/app/central_responder_service
 ENV PYTHONUNBUFFERED=1
 

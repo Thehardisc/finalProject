@@ -39,7 +39,7 @@ echo "────────────────────────�
 echo ""
 
 # Feature-vector parity is the #1 invariant (CLAUDE.md): inference and trainer must
-# produce identical 107-dim vectors. Catch drift before spending minutes on a build.
+# produce identical 116-dim vectors. Catch drift before spending minutes on a build.
 echo "[Invariant] Checking feature-vector parity (inference vs trainer)..."
 if command -v python3 &> /dev/null && python3 -c "import pytest, numpy" &> /dev/null; then
     if python3 -m pytest central_responder_service/training/test_feature_parity.py -q &> /tmp/parity_check.log; then
