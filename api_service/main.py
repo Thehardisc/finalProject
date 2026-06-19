@@ -18,9 +18,13 @@ from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger, sanitize_email
 from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
 from shared.constants import EMOTION_LABELS
+
+_NON_EMOTION = frozenset({
+    'vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion',
+})
 from api_service.auth_utils import hash_password, verify_password, create_jwt, decode_jwt, get_current_user, require_admin, JWT_EXPIRY_HOURS
 from api_service.db.pool import init_pool as _init_pool, close_pool as _close_pool, get_pool
-from api_service.routes.conversations import router as conv_router, set_redis as _conv_set_redis
+from api_service.routes.conversations import router as conv_router, set_redis as _conv_set_redis, set_cache_invalidator as _conv_set_cache_invalidator
 from api_service.routes.messages import router as msg_router, set_redis as _msg_set_redis
 
 logger = get_logger("api_service")
@@ -236,6 +240,7 @@ async def _handle_conversation_update(message_id, data):
     dom_emo      = data.get("dominant_emotion", "Neutral")
     conv_state   = json.loads(data.get("conversation_state", "{}"))
     ems          = json.loads(data.get("emotions", "{}"))
+    vader_data   = json.loads(data.get("vader", "{}"))
     convo_id     = data.get("conversation_id")
 
     mlog = logger.bind(
@@ -251,11 +256,12 @@ async def _handle_conversation_update(message_id, data):
         )
         return
 
-    bert_list = [
+    emotion_list = [
         {"label": k, "score": float(v)}
         for k, v in ems.items()
-        if k not in ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion']
+        if k not in _NON_EMOTION and isinstance(v, (int, float))
     ]
+    emotion_list.sort(key=lambda x: x["score"], reverse=True)
 
     payload = {
         "type": "analysis",
@@ -264,15 +270,21 @@ async def _handle_conversation_update(message_id, data):
             "conversation_id":        convo_id,
             "raw_text":               raw_text,
             "final_dominant_emotion": dom_emo,
-            "final_valence":          float(ems.get("vader_compound", 0)),
-            "bert_emotions":          bert_list,
+            "final_valence":          float(vader_data.get("vader_compound", 0.0)),
+            "bert_emotions":          emotion_list,
+            "ekman_group":            pipeline_log.get("ekman_group"),
             "meta_confidence":        float(pipeline_log.get("meta_confidence", 0.0)),
             "context_shift":          json.loads(data.get("context_shift", "null")),
             "logic_map":              pipeline_log.get("logic_map", {}),
+            "gate_weights_alpha":     pipeline_log.get("gate_weights_alpha"),
             "sender_id":              data.get("user_id"),
             "context_snapshot":       pipeline_log.get("context_snapshot"),
             "lstm_trajectory":        pipeline_log.get("trajectory"),
             "sarcasm_score":          float(pipeline_log.get("sarcasm_score", 0)),
+            "inversion_applied":      bool(pipeline_log.get("inversion_applied", False)),
+            "vad":                    pipeline_log.get("vad", {}),
+            "dynamics":               pipeline_log.get("dynamics", {}),
+            "appraisal":              pipeline_log.get("appraisal") or {},
         },
         "vibe": {
             "valence":     conv_state.get("average_valence", 0),
@@ -480,6 +492,7 @@ async def startup_event():
     # Wire redis client into routers that need it
     _conv_set_redis(redis_client)
     _msg_set_redis(redis_client)
+    _conv_set_cache_invalidator(lambda conv_id: _participant_cache.pop(conv_id, None))
 
     asyncio.create_task(redis_listener())
 
@@ -813,20 +826,25 @@ async def admin_pipeline_detail(
             "goemotions": models.get("go_emotions", {}),
         },
         "decision": {
-            "aggregated":    pipeline_log.get("aggregated", {}),
-            "dominant":      pipeline_log.get("dominant_selected"),
-            "confidence":    pipeline_log.get("meta_confidence"),
-            "decision_mode": pipeline_log.get("decision_mode", "rule-based"),
+            "aggregated":            pipeline_log.get("aggregated", {}),
+            "dominant":              pipeline_log.get("dominant_selected"),
+            "confidence":            pipeline_log.get("meta_confidence"),
+            "decision_mode":         pipeline_log.get("decision_mode", "rule-based"),
             "logic_map":             pipeline_log.get("logic_map", {}),
             "ctx_correction_weight": pipeline_log.get("ctx_correction_weight", 0.0),
             "sarcasm_score":         pipeline_log.get("sarcasm_score", 0),
             "conflict":              pipeline_log.get("conflict"),
+            "gate_weights_alpha":    pipeline_log.get("gate_weights_alpha"),
+            "ekman_group":           pipeline_log.get("ekman_group"),
         },
         "context": {
             "reasoning":        reasoning,
             "raw_emotions":     emotions,
             "context_snapshot": pipeline_log.get("context_snapshot"),
             "lstm_trajectory":  pipeline_log.get("trajectory"),
+            "vad":              pipeline_log.get("vad", {}),
+            "dynamics":         pipeline_log.get("dynamics", {}),
+            "appraisal":        pipeline_log.get("appraisal", {}),
         },
         "ground_truth": d.get("ground_truth_emotion"),
         "is_verified":  d.get("is_verified", False),
@@ -836,7 +854,7 @@ async def admin_pipeline_detail(
 
 # ── Users / Presence ───────────────────────────────────────────────────────────
 
-@app.get("/users/online")
+@app.get("/users/online", dependencies=[Depends(get_current_user)])
 async def get_online_users():
     """Return user IDs that currently have an active WebSocket connection."""
     return {"online_user_ids": list(manager.active_connections.keys())}
@@ -944,7 +962,14 @@ async def get_calibration_analytics():
     for row in rows:
         actual    = row['ground_truth_emotion']
         ems       = json.loads(row['emotions_json'])
-        predicted = ems.get("dominant_emotion", "Neutral")
+        # emotions_json is a 28-class distribution dict — dominant is the argmax.
+        numeric   = {k: float(v) for k, v in ems.items() if isinstance(v, (int, float)) and k in EMOTION_LABELS}
+        if not numeric:
+            # No model output recorded (feedback-only row) — skip to avoid
+            # misattributing "neutral" as the predicted class.
+            total_verified -= 1
+            continue
+        predicted = max(numeric, key=numeric.get)
 
         if actual not in confusion:
             confusion[actual] = Counter()
@@ -970,6 +995,9 @@ async def get_calibration_analytics():
                 "f1":        round(f1, 4),
                 "samples":   actual_count,
             }
+
+    if total_verified == 0:
+        return {"status": "no_data", "message": "All verified rows are feedback-only. No model outputs to evaluate."}
 
     logger.log_stats("Model Calibration Report", {
         "Total Samples":    total_verified,
