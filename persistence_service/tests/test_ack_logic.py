@@ -1,12 +1,3 @@
-"""
-persistence_service ACK-logic tests — no DB or Redis required.
-
-Tests guard the B3 fix: a message that fails both DB persistence AND DLQ write
-must NOT be ACK'd (it stays in the PEL for xautoclaim retry).
-
-Run:
-    python -m pytest persistence_service/tests/test_ack_logic.py -v
-"""
 import asyncio
 import sys
 import os
@@ -19,16 +10,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 
-# ── minimal replica of the ACK logic from persistence_service/main.py ─────────
-# We test the logic directly without importing the whole service.
-
 async def _run_one_batch(process_fn, xadd_fn):
-    """
-    Simplified version of the inner batch loop in persistence_service/main.py.
-    process_fn: coroutine that either succeeds or raises
-    xadd_fn:    coroutine that writes to DLQ (may also raise)
-    Returns the list of (stream, msg_id) pairs that would be ACK'd.
-    """
     to_ack = []
     stream, message_id = "test_stream", "1-0"
     session = MagicMock()
@@ -55,13 +37,10 @@ async def _run_one_batch(process_fn, xadd_fn):
     return to_ack
 
 
-# ── tests ─────────────────────────────────────────────────────────────────────
-
 class TestPersistenceAckLogic:
 
     @pytest.mark.asyncio
     async def test_success_is_acked(self):
-        """Happy path: DB write succeeds → message ACK'd."""
         process = AsyncMock(return_value=None)
         xadd    = AsyncMock(return_value=None)
 
@@ -73,7 +52,6 @@ class TestPersistenceAckLogic:
 
     @pytest.mark.asyncio
     async def test_db_fail_dlq_success_is_acked(self):
-        """DB fails but DLQ write succeeds → message IS ACK'd (safely recorded in DLQ)."""
         process = AsyncMock(side_effect=Exception("DB error"))
         xadd    = AsyncMock(return_value=None)
 
@@ -84,8 +62,6 @@ class TestPersistenceAckLogic:
 
     @pytest.mark.asyncio
     async def test_db_fail_dlq_fail_not_acked(self):
-        """B3 regression: DB fails AND DLQ fails → message must NOT be ACK'd.
-        It must remain in the PEL for xautoclaim retry."""
         process = AsyncMock(side_effect=Exception("DB error"))
         xadd    = AsyncMock(side_effect=Exception("Redis unreachable"))
 
@@ -98,9 +74,6 @@ class TestPersistenceAckLogic:
 
     @pytest.mark.asyncio
     async def test_max_retries_always_acks(self):
-        """After MAX_DELIVERY_ATTEMPTS the message must be ACK'd even if DLQ fails.
-        Keeping it in PEL forever (infinite retry loop) is worse than losing it
-        after the documented maximum number of attempts."""
         MAX = 5
         process = AsyncMock(side_effect=Exception("permanent DB error"))
         dlq_fail = AsyncMock(side_effect=Exception("DLQ also down"))
@@ -143,8 +116,6 @@ class TestPersistenceAckLogic:
 
     @pytest.mark.asyncio
     async def test_multiple_messages_partial_failure(self):
-        """Mixed batch: some succeed, some fail both DB+DLQ.
-        Only the safe ones end up in to_ack."""
         results = []
         for i, (db_ok, dlq_ok) in enumerate([
             (True,  True),   # msg 0: success → ACK

@@ -6,12 +6,27 @@ import IGDashboard from './pages/IGDashboard';
 import AnalyticsPage from './pages/AnalyticsPage';
 import LiveAnalyticsDashboardPage from './pages/LiveAnalyticsDashboardPage';
 import AdminPipelinePage from './pages/AdminPipelinePage';
+import LandingPage from './pages/LandingPage';
 import './glass/CrystalGlass-v2.css';
 
 const API_BASE = import.meta.env.VITE_API_URL  || 'http://localhost:8001';
 const WS_BASE  = import.meta.env.VITE_WS_URL   || 'ws://localhost:8001';
 
 axios.defaults.withCredentials = true;
+
+// ── Covert Micro-Delay (friction) ─────────────────────────────────────────────
+const FRICTION_DELAY_MS = 280;
+const FRICTION_CDM_STATES = new Set(['TENSION', 'CONFLICT', 'ARGUMENT', 'FRUSTRATION']);
+
+function shouldApplyFriction(data) {
+  if (!data) return false;
+  const cdmState = data.context_snapshot?.cdm_current_state;
+  const sarcasm  = data.sarcasm_score  ?? 0;
+  const inertia  = data.dynamics?.inertia ?? 0;
+  const valence  = data.vad?.valence      ?? 0;
+  return (sarcasm > 0.75 && FRICTION_CDM_STATES.has(cdmState))
+      || (inertia > 0.80 && valence < -0.5);
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -35,17 +50,26 @@ function parseAnalysis(msg) {
         id:                     msg.id,
         raw_text:               msg.content || msg.text,
         final_dominant_emotion: ems.dominant_emotion || pl.dominant_selected || 'Neutral',
-        final_valence:          ems.vader_compound || 0,
+        final_valence:          pl.models?.vader?.vader_compound ?? pl.vad?.valence ?? 0,
         bert_emotions:          bert_list,
         llm_insights:           'Analysis loaded.',
-        llm_sarcasm_score:      pl.sarcasm_score || 0,
+        sarcasm_score:          pl.sarcasm_score || 0,
+        inversion_applied:      pl.inversion_applied || false,
         hierarchical_scores:    [],
         emojis_found:           [],
         slang_detected:         {},
         meta_confidence:        pl.meta_confidence ?? null,
         logic_map:              pl.logic_map || null,
+        gate_weights_alpha:     pl.gate_weights_alpha || null,
+        ekman_group:            pl.ekman_group || null,
         context_snapshot:       pl.context_snapshot || null,
+        context_shift:          msg.context_shift
+                                  ? (typeof msg.context_shift === 'string' ? JSON.parse(msg.context_shift) : msg.context_shift)
+                                  : null,
         lstm_trajectory:        pl.trajectory || null,
+        vad:                    pl.vad || {},
+        dynamics:               pl.dynamics || {},
+        appraisal:              pl.appraisal || {},
       },
     };
   } catch {
@@ -57,11 +81,11 @@ function parseAnalysis(msg) {
 
 export default function App() {
   const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'live-analytics' | 'admin'
+  const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // Always-dark: set immediately at app root so login screen is dark too
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', 'dark');
-    document.body.style.background = '#06060f';
+    document.body.style.background = '#05060F';
   }, []);
 
   // ── Auth ────────────────────────────────────────────────────────────────
@@ -93,6 +117,7 @@ export default function App() {
   const socketRef      = useRef(null);
   const activeConvRef  = useRef(activeConversationId); // tracks current conv without causing WS reconnect
   const retryCountRef  = useRef(0);
+  const isSendingRef   = useRef(false);
   const retryTimerRef  = useRef(null);
   const mountedRef     = useRef(true);
 
@@ -406,25 +431,38 @@ export default function App() {
     } catch {}
   };
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     if (!inputValue.trim() || !socketRef.current || !activeConversationId) return;
-    const optimistic = {
-      id:         Date.now(),
-      sender:     'user',
-      text:       inputValue,
-      senderName: currentUser.display_name,
-      analysis:   null,
-    };
-    setMessages(prev => [...prev, optimistic]);
-    setMlProcessing(true);
-    setPartialModels(new Set());
-    socketRef.current.send(JSON.stringify({
-      text:            inputValue,
-      recipient_id:    'system',
-      sender_id:       currentUser.user_id,
-      conversation_id: activeConversationId,
-    }));
-    setInputValue('');
+    if (isSendingRef.current) return;
+    isSendingRef.current = true;
+
+    const text = inputValue;
+
+    try {
+      if (shouldApplyFriction(currentAnalysis?.data)) {
+        await new Promise(r => setTimeout(r, FRICTION_DELAY_MS));
+      }
+
+      const optimistic = {
+        id:         Date.now(),
+        sender:     'user',
+        text,
+        senderName: currentUser.display_name,
+        analysis:   null,
+      };
+      setMessages(prev => [...prev, optimistic]);
+      setMlProcessing(true);
+      setPartialModels(new Set());
+      socketRef.current.send(JSON.stringify({
+        text,
+        recipient_id:    'system',
+        sender_id:       currentUser.user_id,
+        conversation_id: activeConversationId,
+      }));
+      setInputValue('');
+    } finally {
+      isSendingRef.current = false;
+    }
   };
 
   const handleRegenerateAnalysis = (msgId) => {
@@ -456,14 +494,20 @@ export default function App() {
     return (
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        height: '100vh', background: '#0b0d17',
+        height: '100vh', background: '#05060F',
         fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       }}>
         <div style={{
+          position: 'fixed', width: 700, height: 700, borderRadius: '50%',
+          left: -250, top: -250,
+          background: 'radial-gradient(circle, rgba(79,40,210,0.38) 0%, transparent 70%)',
+          filter: 'blur(100px)', pointerEvents: 'none',
+        }} />
+        <div style={{
           position: 'fixed', width: 600, height: 600, borderRadius: '50%',
-          right: -180, bottom: -180,
-          background: 'radial-gradient(circle, hsl(215 68% 58% / 0.12) 0%, transparent 68%)',
-          filter: 'blur(80px)', pointerEvents: 'none',
+          right: -200, bottom: -200,
+          background: 'radial-gradient(circle, rgba(46,16,130,0.48) 0%, transparent 70%)',
+          filter: 'blur(90px)', pointerEvents: 'none',
         }} />
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center',
@@ -471,18 +515,18 @@ export default function App() {
         }}>
           <div style={{
             width: 52, height: 52, borderRadius: 18, marginBottom: 28,
-            background: 'linear-gradient(135deg, #0077ff 0%, #7000ff 100%)',
-            boxShadow: '0 0 40px rgba(0,119,255,0.30), 0 8px 24px rgba(0,0,0,0.4)',
+            background: 'linear-gradient(135deg, #7c3aed 0%, #4338ca 100%)',
+            boxShadow: '0 4px 24px rgba(109,40,217,0.50)',
           }} />
-          <div style={{ fontSize: '1.15rem', fontWeight: 700, color: '#e8eaf2', letterSpacing: '-0.02em', marginBottom: 6 }}>
+          <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'rgba(255,255,255,0.88)', letterSpacing: '-0.02em', marginBottom: 6 }}>
             InnerLink
           </div>
-          <div style={{ fontSize: '0.82rem', color: '#555870', marginBottom: 40 }}>
+          <div style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.38)', marginBottom: 40 }}>
             Preparing your secure session
           </div>
           <div style={{ position: 'relative', width: 56, height: 56, marginBottom: 28 }}>
             <svg width="56" height="56" style={{ transform: 'rotate(-90deg)' }}>
-              <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+              <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3" />
               <circle
                 cx="28" cy="28" r="22" fill="none" stroke="url(#gate-grad)"
                 strokeWidth="3" strokeLinecap="round"
@@ -492,15 +536,15 @@ export default function App() {
               />
               <defs>
                 <linearGradient id="gate-grad" x1="0" y1="0" x2="1" y2="0">
-                  <stop offset="0%" stopColor="#0077ff" />
-                  <stop offset="100%" stopColor="#7000ff" />
+                  <stop offset="0%" stopColor="#6d28d9" />
+                  <stop offset="100%" stopColor="#4c1d95" />
                 </linearGradient>
               </defs>
             </svg>
             <div style={{
               position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
               justifyContent: 'center', fontSize: '0.72rem', fontWeight: 700,
-              color: ready === total ? '#22c55e' : '#0077ff',
+              color: 'rgba(167,139,250,0.88)',
             }}>
               {ready}/{total}
             </div>
@@ -509,8 +553,8 @@ export default function App() {
             {Object.entries(componentStatus).map(([key, done]) => (
               <div key={key} style={{
                 width: 8, height: 8, borderRadius: '50%',
-                background: done ? '#22c55e' : 'rgba(255,255,255,0.12)',
-                boxShadow: done ? '0 0 8px rgba(34,197,94,0.5)' : 'none',
+                background: done ? '#4ade80' : 'rgba(255,255,255,0.15)',
+                boxShadow: done ? '0 0 8px rgba(74,222,128,0.50)' : 'none',
                 transition: 'all 0.4s ease',
               }} />
             ))}
@@ -520,9 +564,16 @@ export default function App() {
     );
   }
 
-  // ── Render: login ─────────────────────────────────────────────────────────
+  // ── Render: login / landing ───────────────────────────────────────────────
   if (!sessionChecked) return null;
-  if (!currentUser) return <LoginModal onSuccess={handleAuthSuccess} />;
+  if (!currentUser) return (
+    <>
+      <LandingPage onSignIn={() => setShowLoginModal(true)} />
+      {showLoginModal && (
+        <LoginModal onSuccess={handleAuthSuccess} onClose={() => setShowLoginModal(false)} />
+      )}
+    </>
+  );
 
   // ── Render: main app ──────────────────────────────────────────────────────
   return (

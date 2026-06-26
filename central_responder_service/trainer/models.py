@@ -1,7 +1,3 @@
-"""
-trainer/models.py — PyTorch GatingEnsembleNet training loop.
-"""
-
 from contextlib import nullcontext
 
 import numpy as np
@@ -35,18 +31,6 @@ def train_gating_network(
     patience: int = 10,
     device: str = None,
 ) -> GatingNetworkWrapper:
-    """
-    Train GatingEnsembleNet and return a sklearn-compatible GatingNetworkWrapper.
-
-    Training strategy:
-      - StandardScaler fitted on X_tr only (no leakage into val/test)
-      - CrossEntropy with label_smoothing=0.10 + inverse-frequency class weights
-      - Load-balance regularizer: λ·‖ᾱ − 1/3‖² prevents expert collapse
-        (without it, GoEmotions tends to capture ~90% of gate weight)
-      - OneCycleLR: fast convergence on small datasets
-      - Early stopping on val macro-F1 (better metric than accuracy for 28 imbalanced classes)
-      - Gradient clipping at 1.0 for training stability
-    """
     if device is None:
         if torch.cuda.is_available():
             device = "cuda"
@@ -56,7 +40,6 @@ def train_gating_network(
             device = "cpu"
     logger.info(f"  [Trainer] Training on device={device}")
 
-    # ── CDM masking: zero out CDM block for samples without real context ──────
     CDM_SLICE = slice(ML_DIM, ML_DIM + CDM_CTX_DIM)
     if has_cdm is not None:
         no_cdm = ~has_cdm
@@ -71,26 +54,31 @@ def train_gating_network(
         X_v = X_v.copy()
         X_v[:, CDM_SLICE] = 0.0
 
-    # ── Scaling ──────────────────────────────────────────────────────────────
     scaler  = StandardScaler()
     X_tr_s  = scaler.fit_transform(X_tr)
     X_v_s   = scaler.transform(X_v)
 
-    # ── Label encoding ────────────────────────────────────────────────────────
+    # Re-zero CDM block after scaling — StandardScaler shifts zero entries to
+    # -mean/std, which breaks the ctx_available = (x_c.abs().sum() > 0.01) check
+    # in GatingEnsembleNet.forward(), causing non-CDM samples to appear as if
+    # they have context when they don't.
+    if has_cdm is not None:
+        if no_cdm.any():
+            X_tr_s[no_cdm, CDM_SLICE] = 0.0
+        X_v_s[:, CDM_SLICE] = 0.0
+
     class_to_idx = {c: i for i, c in enumerate(classes)}
     y_tr_idx = np.array([class_to_idx[y]          for y in y_tr])
     y_v_idx  = np.array([class_to_idx.get(y, 0)   for y in y_v])
 
-    # ── Class weights: inverse frequency, capped at [0.1, 10] ────────────────
     counts   = np.bincount(y_tr_idx, minlength=len(classes)).clip(1)
     weights  = (1.0 / counts)
     weights  = (weights / weights.mean()).clip(0.1, 10.0)
     cw_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
 
-    # ── DataLoader ────────────────────────────────────────────────────────────
     use_gpu   = device in ("cuda", "mps") or (isinstance(device, int) and device >= 0)
     pin_mem   = device == "cuda"          # pin_memory only helps CUDA, not MPS/CPU
-    n_workers = 2 if len(X_tr_s) > 5000 else 0  # parallel data loading for large datasets
+    n_workers = 2 if len(X_tr_s) > 5000 else 0
     ds     = TensorDataset(
         torch.tensor(X_tr_s, dtype=torch.float32),
         torch.tensor(y_tr_idx, dtype=torch.long),
@@ -99,13 +87,11 @@ def train_gating_network(
                         pin_memory=pin_mem, num_workers=n_workers,
                         persistent_workers=(n_workers > 0))
 
-    # ── Model + optimiser ─────────────────────────────────────────────────────
     model = GatingEnsembleNet(n_classes=len(classes), d=D_MODEL, dropout=DROPOUT).to(device)
 
-    # Pre-train context encoder — only on real-CDM samples when mask is available
     logger.info("  [CtxPretrain] Pre-training context encoder on context block...")
     model = pretrain_context_encoder(
-        model, X_tr, y_tr, classes,
+        model, X_tr_s, y_tr, classes,
         has_cdm=has_cdm, n_epochs=20, device=device,
     )
 
@@ -124,18 +110,17 @@ def train_gating_network(
     criterion = nn.CrossEntropyLoss(weight=cw_tensor, label_smoothing=label_smoothing)
     logger.info(f"  [Trainer] label_smoothing={label_smoothing} (n_train={n_train})")
 
-    # ── NLP anchor: GoEmotions index → class_to_idx mapping ─────────────────
     goe_to_class_idx = torch.tensor(
         [class_to_idx.get(lbl, -1) for lbl in EMOTION_LABELS],
         dtype=torch.long, device=device,
     )  # [28]  — -1 for labels absent from training classes
 
-    # Lower threshold on larger datasets — when GoE is 65%+ confident (vs 75%),
-    # the anchor provides stronger gradient signal across more samples.
-    nlp_anchor_coeff  = 0.30
-    nlp_anchor_thresh = 0.65 if n_train > 5000 else 0.75
+    # nlp_anchor removed — it biased the gate toward GoEmotions (>77%).
+    # The hard cap in GatingEnsembleNet.forward() now enforces GoE ≤ 50%.
+    nlp_anchor_coeff  = 0.0
+    nlp_anchor_thresh = 0.65
 
-    uniform_gate  = torch.ones(4, device=device) / 4.0
+    uniform_gate  = torch.ones(5, device=device) / 5.0
     X_v_t         = torch.tensor(X_v_s, dtype=torch.float32, device=device)
     best_f1       = -1.0
     best_state    = None
@@ -147,7 +132,6 @@ def train_gating_network(
     amp_ctx    = torch.cuda.amp.autocast if use_amp else nullcontext
     logger.info(f"  [Trainer] AMP (mixed precision): {'enabled' if use_amp else 'disabled'}")
 
-    # ── Training loop ─────────────────────────────────────────────────────────
     import time as _time
     train_start = _time.time()
     n_train_samples = len(y_tr_idx)
@@ -167,12 +151,12 @@ def train_gating_network(
                 ce_loss    = criterion(logits, yb)
 
                 # Load-balance: penalise deviation of mean gate weights from uniform.
-                alpha_mean   = alpha.mean(dim=0)                         # [4]
+                alpha_mean   = alpha.mean(dim=0)                         # [5]
                 balance_loss = ((alpha_mean - uniform_gate) ** 2).sum()
 
                 # NLP anchor: when GoEmotions is highly confident, steer logits toward
                 # its top prediction.
-                goe_raw            = xb[:, 11:ML_DIM]                            # [B, 28]
+                goe_raw            = xb[:, 11:39]                                # [B, 28] — fixed slice
                 goe_conf, goe_ridx = goe_raw.max(dim=1)                          # [B]
                 goe_cidx           = goe_to_class_idx[goe_ridx]                  # [B] class indices
                 anchor_mask        = (goe_conf > nlp_anchor_thresh) & (goe_cidx >= 0)
@@ -199,53 +183,49 @@ def train_gating_network(
         epoch_elapsed = _time.time() - epoch_start
         epoch_times.append(epoch_elapsed)
 
-        # ── Validation every epoch ───────────────────────────────────────────
-        if True:
-            model.eval()
-            with torch.no_grad():
-                logits_v, alpha_v = model(X_v_t)
-                preds_v = logits_v.argmax(dim=-1).cpu().numpy()
+        model.eval()
+        with torch.no_grad():
+            logits_v, alpha_v = model(X_v_t)
+            preds_v = logits_v.argmax(dim=-1).cpu().numpy()
 
-            val_f1      = f1_score(y_v_idx, preds_v, average='macro', zero_division=0)
-            alpha_mean_ = alpha_v.mean(dim=0).cpu().numpy()
-            avg_loss    = epoch_loss / len(loader)
-            ctx_str = f" ctx:{alpha_mean_[3]:.3f}]" if len(alpha_mean_) > 3 else "]"
+        val_f1      = f1_score(y_v_idx, preds_v, average='macro', zero_division=0)
+        alpha_mean_ = alpha_v.mean(dim=0).cpu().numpy()
+        avg_loss    = epoch_loss / len(loader)
+        vad_str = f" vad:{alpha_mean_[3]:.3f}" if len(alpha_mean_) > 4 else ""
+        ctx_str = f"{vad_str} ctx:{alpha_mean_[-1]:.3f}]" if len(alpha_mean_) > 3 else "]"
 
-            # Speed & ETA calculation
-            samples_per_sec = n_train_samples / epoch_elapsed if epoch_elapsed > 0 else 0
-            avg_epoch_time  = sum(epoch_times) / len(epoch_times)
-            remaining       = n_epochs - (epoch + 1)
-            eta_sec         = avg_epoch_time * remaining
-            # Format ETA as human-readable
-            if eta_sec >= 60:
-                eta_str = f"{int(eta_sec // 60)}m {int(eta_sec % 60)}s"
-            else:
-                eta_str = f"{eta_sec:.1f}s"
-            total_elapsed = _time.time() - train_start
-            if total_elapsed >= 60:
-                elapsed_str = f"{int(total_elapsed // 60)}m {int(total_elapsed % 60)}s"
-            else:
-                elapsed_str = f"{total_elapsed:.1f}s"
+        samples_per_sec = n_train_samples / epoch_elapsed if epoch_elapsed > 0 else 0
+        avg_epoch_time  = sum(epoch_times) / len(epoch_times)
+        remaining       = n_epochs - (epoch + 1)
+        eta_sec         = avg_epoch_time * remaining
+        if eta_sec >= 60:
+            eta_str = f"{int(eta_sec // 60)}m {int(eta_sec % 60)}s"
+        else:
+            eta_str = f"{eta_sec:.1f}s"
+        total_elapsed = _time.time() - train_start
+        if total_elapsed >= 60:
+            elapsed_str = f"{int(total_elapsed // 60)}m {int(total_elapsed % 60)}s"
+        else:
+            elapsed_str = f"{total_elapsed:.1f}s"
 
-            logger.info(
-                f"  [Epoch {epoch+1:3d}/{n_epochs}]  "
-                f"loss={avg_loss:.4f}  val_F1={val_f1:.4f}  "
-                f"α=[vader:{alpha_mean_[0]:.3f} bert:{alpha_mean_[1]:.3f} goe:{alpha_mean_[2]:.3f}{ctx_str}  "
-                f"⏱ {epoch_elapsed:.2f}s ({samples_per_sec:.0f} samples/s)  "
-                f"elapsed={elapsed_str}  ETA={eta_str}"
-            )
+        logger.info(
+            f"  [Epoch {epoch+1:3d}/{n_epochs}]  "
+            f"loss={avg_loss:.4f}  val_F1={val_f1:.4f}  "
+            f"α=[vader:{alpha_mean_[0]:.3f} bert:{alpha_mean_[1]:.3f} goe:{alpha_mean_[2]:.3f}{ctx_str}  "
+            f"⏱ {epoch_elapsed:.2f}s ({samples_per_sec:.0f} samples/s)  "
+            f"elapsed={elapsed_str}  ETA={eta_str}"
+        )
 
-            if val_f1 > best_f1:
-                best_f1    = val_f1
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                no_improve = 0
-            else:
-                no_improve += 1
-                if no_improve >= patience:
-                    logger.info(f"  [EarlyStopping] No improvement for {patience} checks.")
-                    break
+        if val_f1 > best_f1:
+            best_f1    = val_f1
+            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            no_improve = 0
+        else:
+            no_improve += 1
+            if no_improve >= patience:
+                logger.info(f"  [EarlyStopping] No improvement for {patience} checks.")
+                break
 
-    # ── Training summary ─────────────────────────────────────────────────────
     total_train_time = _time.time() - train_start
     completed_epochs = len(epoch_times)
     avg_epoch_sec    = sum(epoch_times) / completed_epochs if completed_epochs else 0

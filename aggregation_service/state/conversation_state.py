@@ -1,15 +1,3 @@
-"""
-aggregation_service/state/conversation_state.py — Conversation state aggregation logic.
-
-Maintains per-conversation mood, valence, and dominant emotion in Redis.
-Applies dynamic rule overrides and logs mood transitions.
-
-Redis keys written per conversation:
-  conversation:{id}          — existing state hash (valence, mood, counts)
-  conversation:{id}:emotional_state — bot-readable summary (mood, trajectory, arc)
-  conv:{id}:valence_hist     — existing sliding valence window (last 3)
-  conv:{id}:mood_arc         — sliding mood window (last 5) — NEW
-"""
 import json
 import os
 import time
@@ -23,7 +11,6 @@ logger = get_logger("aggregation_service")
 IDLE_TIMEOUT_SECONDS = int(os.environ.get("CONVERSATION_IDLE_MINUTES", "30")) * 60
 IDLE_STREAM = "conversation_idle_stream"
 
-# Dominant emotion → 8-class narrative mood
 _EMOTION_TO_MOOD: dict = {
     'admiration': 'warm',      'amusement':      'joyful',
     'approval':   'warm',      'caring':         'warm',
@@ -54,7 +41,6 @@ def _emotion_to_mood(dominant_emotion: str, valence: float) -> str:
 
 
 def _compute_trajectory(valence_history: list[float]) -> str:
-    """Newest value first. Returns escalating / de-escalating / stable."""
     if len(valence_history) < 2:
         return 'stable'
     delta = valence_history[0] - valence_history[-1]
@@ -77,17 +63,9 @@ async def update_conversation_state(
     conversation_id: str, new_emotions: dict, r,
     original_text: str = "", user_id: str = ""
 ) -> dict:
-    """
-    Update the Redis conversation state hash for a conversation.
-    Returns the new state dict.
-    """
     state_key     = f"conversation:{conversation_id}"
     current_state = await r.hgetall(state_key)
 
-    # ── Idle detection ────────────────────────────────────────────────────────
-    # If the gap since the last message exceeds IDLE_TIMEOUT, the previous
-    # session is considered complete. Publish to conversation_idle_stream so
-    # api_service can run post-conversation analysis asynchronously.
     msg_count = int(current_state.get("message_count", 0))
     if msg_count > 0:
         last_activity = float(current_state.get("last_activity", 0.0))
@@ -114,7 +92,6 @@ async def update_conversation_state(
     ema_valence = float(current_state.get("ema_valence", 0.0))  # replaces accumulated_valence
     prev_mood   = current_state.get("overall_mood", "Neutral")
 
-    # Dynamic rule check
     override_trigger, override_meaning = await handle_dynamic_rules(
         conversation_id, original_text, r
     )
@@ -134,7 +111,6 @@ async def update_conversation_state(
                 dominant_score   = score
                 dominant_emotion = emo
 
-    # Apply override
     if override_meaning:
         logger.info(f"Applying override logic for meaning: {override_meaning}")
         m = override_meaning.lower()
@@ -163,7 +139,7 @@ async def update_conversation_state(
     now = time.time()
     new_state = {
         "message_count":          msg_count,
-        "ema_valence":            avg_valence,   # EMA — used as next message's context
+        "ema_valence":            avg_valence,
         "average_valence":        avg_valence,   # kept for API compatibility
         "overall_mood":           overall_mood,
         "dominant_emotion":       dominant_emotion,
@@ -177,7 +153,6 @@ async def update_conversation_state(
     # prev_valence lets context_engine compute velocity without a separate query
     new_state["prev_valence"] = str(ema_valence)   # valence BEFORE this update
 
-    # Per-speaker valence for speaker-asymmetry feature
     if user_id:
         new_state[f"spk:{user_id}"] = str(new_valence)
 
@@ -190,8 +165,6 @@ async def update_conversation_state(
     await r.ltrim(hist_key, 0, 2)
     await r.expire(hist_key, 86400 * 7)
 
-    # ── Emotional state for bot consumption ──────────────────────────────────
-    # mood_arc: sliding window of last 5 narrative moods (newest first)
     arc_key      = f"conv:{conversation_id}:mood_arc"
     current_mood = _emotion_to_mood(dominant_emotion, new_valence)
     await r.lpush(arc_key, current_mood)
@@ -199,7 +172,6 @@ async def update_conversation_state(
     await r.expire(arc_key, 86400 * 7)
     mood_arc = await r.lrange(arc_key, 0, -1)  # newest first
 
-    # trajectory from valence history (read back what we just stored)
     raw_hist = await r.lrange(hist_key, 0, -1)
     valence_history = [float(v) for v in raw_hist]
     trajectory = _compute_trajectory(valence_history)

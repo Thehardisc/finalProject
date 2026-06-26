@@ -1,2 +1,2 @@
 redis
-# Add any future LLM client libraries here (e.g. openai, anthropic)
+anthropic>=0.28.0

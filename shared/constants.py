@@ -1,6 +1,3 @@
-# shared/constants.py
-
-# Complete list of 28 GoEmotions labels (including Neutral)
 EMOTION_LABELS = [
     'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
     'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval',
@@ -9,11 +6,9 @@ EMOTION_LABELS = [
     'relief', 'remorse', 'sadness', 'surprise', 'neutral'
 ]
 
-# Fixed ordering for the Meta-Learner feature vector
 VADER_KEYS  = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
 BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
 
-# ── CDM v4.0 — 15 intent-based conversational states ─────────────────────────
 # Index order MUST match cdm.py state constants and CDMStateGraph.jsx.
 CDM_STATES = [
     "NEUTRAL",         # 0  — no clear intent
@@ -34,13 +29,15 @@ CDM_STATES = [
 ]
 N_CDM_STATES = len(CDM_STATES)  # 15
 
-# ── Feature vector layout ─────────────────────────────────────────────────────
 #
-#   ML_DIM         [0:39]    = VADER(4) + BERT(7) + GoEmotions(28)
-#   CDM_CTX_DIM    [39:79]   = CDM one-hot(15) + 16 scalars + 7 HMM-derived
-#   PRIOR_DIM      [79:107]  = trajectory LSTM predicted_next (28 GoEmotions labels)
+#   ML_DIM         [0:42]     = VADER(4) + BERT(7) + GoEmotions(28) + VAD(3)
+#   CDM_CTX_DIM    [42:82]    = CDM one-hot(15) + 18 scalars + 7 HMM-derived
+#   PRIOR_DIM      [82:110]   = trajectory LSTM predicted_next (28 GoEmotions labels)
+#   SARCASM_DIM    [110]      = sarcasm/passive-aggression score
+#   DYNAMICS_DIM   [111:113]  = emotional inertia + contagion
+#   APPRAISAL_DIM  [113:116]  = novelty + goal_congruence + coping
 #
-# Context vector internal layout (38 dims):
+# Context vector internal layout (40 dims):
 #   [0:15]   CDM intent one-hot (15 states — exactly one 1.0)
 #   [15]     state_residency         (how long in current state, 0-1)
 #   [16:19]  transition_path         (last 3 state indices / N_CDM_STATES)
@@ -64,12 +61,15 @@ N_CDM_STATES = len(CDM_STATES)  # 15
 #   [36:39]  hmm_top3_next_probs      (top-3 P(s_{t+1}|s_t) from learned transmat)
 #   [39]     intent_stability         (consecutive messages in same intent / 10)
 
-ML_DIM      = 39    # VADER(4) + BERT(7) + GoE(28)
-CDM_CTX_DIM = 40    # context_engine_service output: CDM one-hot(15) + 18 scalars + 7 HMM
-PRIOR_DIM   = 28    # trajectory LSTM predicted_next distribution (one per GoEmotions label)
-SARCASM_DIM = 1     # learned sarcasm/passive-aggression score from sarcasm_classifier.py
-CONTEXT_DIM = CDM_CTX_DIM + PRIOR_DIM + SARCASM_DIM  # = 69
-FEATURE_DIM = ML_DIM + CONTEXT_DIM                   # = 108
+ML_DIM        = 42    # VADER(4) + BERT(7) + GoE(28) + VAD(3)
+CDM_CTX_DIM   = 40    # context_engine_service output: CDM one-hot(15) + 18 scalars + 7 HMM
+PRIOR_DIM     = 28    # trajectory LSTM predicted_next distribution (one per GoEmotions label)
+SARCASM_DIM   = 1     # learned sarcasm/passive-aggression score from sarcasm_classifier.py
+VAD_DIM       = 3     # Valence-Arousal-Dominance (Warriner 2013) — appended to ML block
+DYNAMICS_DIM  = 2     # emotional contagion + inertia (Kramer 2014, Kuppens 2010)
+APPRAISAL_DIM = 3     # appraisal theory signals: novelty, goal_congruence, coping (Scherer 2001)
+CONTEXT_DIM   = CDM_CTX_DIM + PRIOR_DIM + SARCASM_DIM + DYNAMICS_DIM + APPRAISAL_DIM  # = 74
+FEATURE_DIM   = ML_DIM + CONTEXT_DIM                                                   # = 116
 
 # Named index map — import these instead of hardcoding integers.
 # Any layout change must update both these constants AND context_engine_service/main.py.

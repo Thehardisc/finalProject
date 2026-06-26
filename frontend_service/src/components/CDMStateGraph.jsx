@@ -77,7 +77,11 @@ const MAX_R = 20;
 
 export default function CDMStateGraph({ snapshot }) {
   const probs     = snapshot?.cdm_state_probs;
-  const current   = snapshot?.cdm_current_state;
+  const rawCurrent = snapshot?.cdm_current_state;
+  // Accept either a numeric index or a string state name
+  const current   = typeof rawCurrent === 'number'
+    ? rawCurrent
+    : CDM_STATES.findIndex(s => s.short === rawCurrent || s.label.replace('\n',' ') === rawCurrent || s.label === rawCurrent);
   const residency = snapshot?.cdm_residency ?? 0;
   const available = snapshot?.cdm_available ?? false;
 
@@ -132,7 +136,7 @@ export default function CDMStateGraph({ snapshot }) {
             <line
               key={i}
               x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
-              stroke={active ? `rgba(${CDM_STATES[a].color},.40)` : 'rgba(0,0,0,.06)'}
+              stroke={active ? `rgba(${CDM_STATES[a]?.color ?? '107,114,128'},.40)` : 'rgba(0,0,0,.06)'}
               strokeWidth={active ? 1.5 : 0.8}
             />
           );
@@ -192,9 +196,9 @@ export default function CDMStateGraph({ snapshot }) {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
             <span style={{
               fontSize: '0.68rem', fontWeight: 700,
-              color: `rgb(${CDM_STATES[current].color})`,
+              color: `rgb(${CDM_STATES[current]?.color ?? '107,114,128'})`,
             }}>
-              {CDM_STATES[current].label.replace('\n', ' ')}
+              {CDM_STATES[current]?.label.replace('\n', ' ') ?? '—'}
             </span>
             <span style={{ fontSize: '0.60rem', color: '#9ca3af' }}>
               residency {(residency * 100).toFixed(0)}%
@@ -204,7 +208,7 @@ export default function CDMStateGraph({ snapshot }) {
             <div style={{
               height: '100%',
               width: `${Math.min(residency * 100, 100)}%`,
-              background: `rgb(${CDM_STATES[current].color})`,
+              background: `rgb(${CDM_STATES[current]?.color ?? '107,114,128'})`,
               borderRadius: 2,
               transition: 'width .4s ease',
             }} />

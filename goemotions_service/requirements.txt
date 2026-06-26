@@ -2,3 +2,4 @@ redis
 transformers
 torch
 emoji
+sentence-transformers

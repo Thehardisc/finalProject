@@ -1,14 +1,28 @@
-import React, { useState, useRef, useEffect } from 'react';
-import axios from 'axios';
-import { EmotionPalette, blendEmotions } from '../components/EmotionPalette';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { EmotionPalette } from '../components/EmotionPalette';
+import { getEmotionCSSVars } from '../utils/emotionColorUtils';
+import { EMOTION_COLOR_CONFIG as CFG } from '../utils/emotionColorConfig';
+import AnalysisDrawer        from '../components/AnalysisDrawer';
+import DemoRunner            from '../components/DemoRunner';
+import PixelFace, { toEkman } from '../components/PixelFace';
+import EmotionArcChart       from '../components/EmotionArcChart';
+import CDMStateGraph         from '../components/CDMStateGraph';
+import AmbientOrb            from '../components/AmbientOrb';
+import TelemetryPanel        from '../components/TelemetryPanel';
+import PlutchikWheel         from '../visualizations/PlutchikWheel';
 import EmotionIntelligencePanel from '../components/EmotionIntelligencePanel';
-import AnalysisDrawer  from '../components/AnalysisDrawer';
-import DemoRunner      from '../components/DemoRunner';
-import AmbientOrb      from '../components/AmbientOrb';
-import SyntaxText from '../syntax/SyntaxText';
-import { THEMES } from '../syntax/highlighter';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
+
+const CDM_STATE_LABELS = [
+  'Neutral','Warmth','Praise','Help Request','Humor','Tension',
+  'Conflict','Argument','Withdrawal','Reconciliation','Curiosity',
+  'Assertiveness','Empathy','Frustration','Agreement',
+];
+const cdmLabel = (v) =>
+  typeof v === 'number' ? (CDM_STATE_LABELS[v] ?? `State ${v}`) :
+  typeof v === 'string' ? v.replace(/_/g, ' ') : '';
 
 const EMOTION_EMOJI = {
   joy:'😄', happiness:'😊', sadness:'😢', anger:'😠', fear:'😨',
@@ -20,21 +34,6 @@ const EMOTION_EMOJI = {
   realization:'💡', relief:'😮‍💨', remorse:'😔', approval:'👍',
 };
 
-// Emotion → ambient background color (RGB strings for rgba())
-const EMOTION_BG = {
-  joy:'251,191,36', happiness:'251,191,36', excitement:'249,115,22',
-  love:'244,114,182', caring:'20,184,166', gratitude:'52,211,153',
-  optimism:'250,204,21', relief:'52,211,153', admiration:'167,139,250',
-  amusement:'251,191,36', approval:'52,211,153', pride:'250,204,21',
-  realization:'56,189,248', curiosity:'56,189,248', surprise:'251,191,36',
-  neutral:'99,102,241', confusion:'167,139,250', desire:'244,114,182',
-  nervousness:'167,139,250', sadness:'99,102,241', grief:'79,70,229',
-  disappointment:'99,102,241', remorse:'99,102,241', embarrassment:'244,114,182',
-  fear:'139,92,246', anger:'239,68,68', annoyance:'249,115,22',
-  disgust:'134,239,172', disapproval:'249,115,22',
-};
-
-// De-escalation suggestions by emotion (shown when valence < -0.35)
 const SUGGESTIONS = {
   anger:          ["I hear you — can we slow down?", "That wasn't my intention. I'm sorry.", "Let's take a breath."],
   sadness:        ["I'm here with you.", "That sounds really hard.", "You're not alone in this."],
@@ -47,8 +46,6 @@ const SUGGESTIONS = {
   disapproval:    ["Tell me what's not working.", "I want to understand.", "Fair — let's talk it through."],
   remorse:        ["Please don't be too hard on yourself.", "We all make mistakes.", "I'm here."],
 };
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const emotionRgb = (emo) => EmotionPalette[emo?.toLowerCase()] || EmotionPalette.neutral;
 
@@ -63,26 +60,6 @@ function timeAgo(id) {
   return `${Math.floor(diff / 86400000)}d`;
 }
 
-function bubbleGradient(emotionDict) {
-  const entries = Object.entries(emotionDict)
-    .filter(([, v]) => v > 0.03)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
-  if (!entries.length) return null;
-  if (entries.length === 1) {
-    const rgb = EmotionPalette[entries[0][0]] || EmotionPalette.default;
-    return `rgba(${rgb}, 0.14)`;
-  }
-  const stops = entries.map(([emo], i) => {
-    const rgb = EmotionPalette[emo] || EmotionPalette.default;
-    const pct = Math.round((i / (entries.length - 1)) * 100);
-    return `rgba(${rgb}, 0.15) ${pct}%`;
-  });
-  return `linear-gradient(135deg, ${stops.join(', ')})`;
-}
-
-// ── Demo messages ─────────────────────────────────────────────────────────────
-
 function buildDemoMessages(myName, otherName) {
   return [
     {
@@ -93,8 +70,7 @@ function buildDemoMessages(myName, otherName) {
         data: {
           id: 'demo-1', raw_text: "Sure, totally fine with that 🙄",
           final_dominant_emotion: 'annoyance', final_valence: -0.42,
-          meta_confidence: 0.81,
-          sarcasm_score: 0.91,
+          meta_confidence: 0.81, sarcasm_score: 0.91,
           bert_emotions: [
             { label: 'annoyance',   score: 0.48 },
             { label: 'disgust',     score: 0.22 },
@@ -102,136 +78,131 @@ function buildDemoMessages(myName, otherName) {
             { label: 'neutral',     score: 0.10 },
             { label: 'joy',         score: 0.05 },
           ],
-          logic_map: { VADER: 0.12, BERT: 0.28, GoEmotions: 0.53, Context: 0.07 },
+          logic_map: { VADER: 0.17, BERT: 0.33, GoEmotions: 0.43, Context: 0.07 },
+          gate_weights_alpha: [0.19, 0.34, 0.47],
+          ekman_group: 'disgust',
           context_snapshot: {
             cur_valence: -0.42, prev_emotion: 'neutral',
-            topic_resonance: 0.31, volatility: 0.72,
-            ce_available: true,
+            topic_resonance: 0.31, volatility: 0.72, ce_available: true,
             cdm_current_state: 'CONFLICT_RISE', cdm_entry_abruptness: 0.68, cdm_residency: 0.14,
           },
           lstm_trajectory: {
-            model_available: true,
-            top_predicted: 'disgust',
+            model_available: true, top_predicted: 'disgust',
             predicted_next: { disgust: 0.38, annoyance: 0.29, disapproval: 0.18, anger: 0.09, neutral: 0.06 },
           },
-          sender_id: 'demo-other',
+          dynamics:  { inertia: 0.62,  contagion: -0.35 },
+          appraisal: { novelty: 0.72, goal_congruence: -0.58, coping: 0.28 },
         },
-        ai_insight: 'Sarcasm detected (91%): positive lexical surface masks negative intent. High volatility (72%). CDM state: CONFLICT_RISE.',
       },
     },
     {
       id: 'demo-2', sender: 'user', senderName: myName,
-      text: "I'm genuinely loving this!! Everything is perfect 🔥",
+      text: "Wait, are you being sarcastic right now?",
       analysis: {
         type: 'analysis',
         data: {
-          id: 'demo-2', raw_text: "I'm genuinely loving this!! Everything is perfect 🔥",
-          final_dominant_emotion: 'joy', final_valence: 0.94,
-          meta_confidence: 0.93,
-          sarcasm_score: 0.04,
+          id: 'demo-2', raw_text: "Wait, are you being sarcastic right now?",
+          final_dominant_emotion: 'confusion', final_valence: -0.18,
+          meta_confidence: 0.74, sarcasm_score: 0.12,
           bert_emotions: [
-            { label: 'joy',        score: 0.62 },
-            { label: 'excitement', score: 0.24 },
-            { label: 'love',       score: 0.08 },
-            { label: 'admiration', score: 0.04 },
-            { label: 'neutral',    score: 0.02 },
+            { label: 'confusion',   score: 0.44 },
+            { label: 'nervousness', score: 0.26 },
+            { label: 'surprise',    score: 0.18 },
+            { label: 'neutral',     score: 0.08 },
+            { label: 'anger',       score: 0.04 },
           ],
-          logic_map: { VADER: 0.38, BERT: 0.22, GoEmotions: 0.36, Context: 0.04 },
+          logic_map: { VADER: 0.18, BERT: 0.32, GoEmotions: 0.42, Context: 0.08 },
+          gate_weights_alpha: [0.21, 0.37, 0.42],
+          ekman_group: 'surprise',
           context_snapshot: {
-            cur_valence: 0.94, prev_emotion: 'annoyance',
-            topic_resonance: 0.65, volatility: 0.44,
-            ce_available: true,
-            cdm_current_state: 'POSITIVE_SURGE', cdm_entry_abruptness: 0.55, cdm_residency: 0.08,
+            cur_valence: -0.30, prev_emotion: 'annoyance',
+            topic_resonance: 0.28, volatility: 0.65, ce_available: true,
+            cdm_current_state: 'TENSION', cdm_entry_abruptness: 0.55, cdm_residency: 0.20,
           },
           lstm_trajectory: {
-            model_available: true,
-            top_predicted: 'excitement',
-            predicted_next: { excitement: 0.41, joy: 0.28, love: 0.15, admiration: 0.10, optimism: 0.06 },
+            model_available: true, top_predicted: 'anger',
+            predicted_next: { anger: 0.31, annoyance: 0.27, disgust: 0.22, fear: 0.12, neutral: 0.08 },
           },
-          sender_id: 'demo-me',
+          dynamics:  { inertia: 0.45,  contagion: 0.58 },
+          appraisal: { novelty: 0.65, goal_congruence: -0.30, coping: 0.42 },
         },
-        ai_insight: 'Genuine positive affect confirmed (sarcasm 4%). VADER compound 0.94. Trajectory predicts sustained excitement.',
       },
     },
     {
-      id: 'demo-3', sender: 'user', senderName: myName,
-      text: "Actually… I don't know anymore. This whole thing is overwhelming me.",
+      id: 'demo-3', sender: 'ai', senderName: otherName,
+      text: "Yes I was. I'm sorry — I've been stressed and that wasn't fair to you.",
       analysis: {
         type: 'analysis',
         data: {
-          id: 'demo-3', raw_text: "Actually… I don't know anymore. This whole thing is overwhelming me.",
-          final_dominant_emotion: 'sadness', final_valence: -0.68,
-          meta_confidence: 0.79,
-          sarcasm_score: 0.06,
+          id: 'demo-3', raw_text: "Yes I was. I'm sorry — I've been stressed and that wasn't fair to you.",
+          final_dominant_emotion: 'remorse', final_valence: -0.28,
+          meta_confidence: 0.88, sarcasm_score: 0.04,
           bert_emotions: [
-            { label: 'sadness',        score: 0.45 },
-            { label: 'fear',           score: 0.22 },
-            { label: 'disappointment', score: 0.18 },
-            { label: 'nervousness',    score: 0.10 },
-            { label: 'confusion',      score: 0.05 },
+            { label: 'remorse',      score: 0.52 },
+            { label: 'sadness',      score: 0.24 },
+            { label: 'caring',       score: 0.12 },
+            { label: 'neutral',      score: 0.07 },
+            { label: 'nervousness',  score: 0.05 },
           ],
-          logic_map: { VADER: 0.30, BERT: 0.32, GoEmotions: 0.28, Context: 0.10 },
-          context_shift: { type: 'Context Shift', from: 'joy', to: 'sadness', significance: 'High' },
+          logic_map: { VADER: 0.22, BERT: 0.35, GoEmotions: 0.38, Context: 0.05 },
+          gate_weights_alpha: [0.25, 0.39, 0.36],
+          ekman_group: 'sadness',
           context_snapshot: {
-            cur_valence: -0.68, prev_emotion: 'joy',
-            topic_resonance: 0.22, volatility: 0.88,
-            ce_available: true,
-            cdm_current_state: 'EMOTIONAL_COLLAPSE', cdm_entry_abruptness: 0.91, cdm_residency: 0.05,
+            cur_valence: -0.20, prev_emotion: 'confusion',
+            topic_resonance: 0.44, volatility: 0.58, ce_available: true,
+            cdm_current_state: 'REPAIR', cdm_entry_abruptness: 0.40, cdm_residency: 0.25,
           },
           lstm_trajectory: {
-            model_available: true,
-            top_predicted: 'grief',
-            predicted_next: { grief: 0.33, sadness: 0.27, fear: 0.19, nervousness: 0.13, disappointment: 0.08 },
+            model_available: true, top_predicted: 'caring',
+            predicted_next: { caring: 0.35, relief: 0.25, gratitude: 0.20, joy: 0.12, neutral: 0.08 },
           },
-          sender_id: 'demo-me',
+          dynamics:  { inertia: -0.28, contagion: -0.18 },
+          appraisal: { novelty: 0.55, goal_congruence: 0.42, coping: 0.61 },
         },
-        ai_insight: 'Sharp valence cliff (Δ = −1.62). Volatility 88%. CDM: EMOTIONAL_COLLAPSE — abrupt entry 91%. LSTM predicts grief without intervention.',
       },
     },
     {
-      id: 'demo-4', sender: 'ai', senderName: otherName,
-      text: "Hey, I hear you. I actually do care about how you're doing, despite everything.",
+      id: 'demo-4', sender: 'user', senderName: myName,
+      text: "Thank you for saying that. I appreciate your honesty.",
       analysis: {
         type: 'analysis',
         data: {
-          id: 'demo-4', raw_text: "Hey, I hear you. I actually do care about how you're doing, despite everything.",
-          final_dominant_emotion: 'caring', final_valence: 0.58,
-          meta_confidence: 0.85,
-          sarcasm_score: 0.03,
+          id: 'demo-4', raw_text: "Thank you for saying that. I appreciate your honesty.",
+          final_dominant_emotion: 'gratitude', final_valence: 0.61,
+          meta_confidence: 0.91, sarcasm_score: 0.03,
           bert_emotions: [
-            { label: 'caring',    score: 0.44 },
-            { label: 'love',      score: 0.21 },
-            { label: 'gratitude', score: 0.16 },
-            { label: 'remorse',   score: 0.12 },
-            { label: 'relief',    score: 0.07 },
+            { label: 'gratitude',   score: 0.56 },
+            { label: 'relief',      score: 0.22 },
+            { label: 'caring',      score: 0.12 },
+            { label: 'joy',         score: 0.07 },
+            { label: 'approval',    score: 0.03 },
           ],
-          logic_map: { VADER: 0.20, BERT: 0.35, GoEmotions: 0.35, Context: 0.10 },
+          logic_map: { VADER: 0.30, BERT: 0.25, GoEmotions: 0.38, Context: 0.07 },
+          gate_weights_alpha: [0.31, 0.30, 0.39],
+          ekman_group: 'joy',
           context_snapshot: {
-            cur_valence: 0.58, prev_emotion: 'sadness',
-            topic_resonance: 0.54, volatility: 0.61,
-            ce_available: true,
-            cdm_current_state: 'EMPATHIC_REPAIR', cdm_entry_abruptness: 0.38, cdm_residency: 0.22,
+            cur_valence: 0.20, prev_emotion: 'remorse',
+            topic_resonance: 0.60, volatility: 0.42, ce_available: true,
+            cdm_current_state: 'RECOVERY', cdm_entry_abruptness: 0.30, cdm_residency: 0.30,
           },
           lstm_trajectory: {
-            model_available: true,
-            top_predicted: 'relief',
-            predicted_next: { relief: 0.35, gratitude: 0.26, caring: 0.20, optimism: 0.12, joy: 0.07 },
+            model_available: true, top_predicted: 'joy',
+            predicted_next: { joy: 0.38, optimism: 0.28, relief: 0.18, caring: 0.10, gratitude: 0.06 },
           },
-          sender_id: 'demo-other',
+          dynamics:  { inertia: 0.22,  contagion: 0.71 },
+          appraisal: { novelty: 0.32, goal_congruence: 0.78, coping: 0.82 },
         },
-        ai_insight: 'Empathic response detected. CDM state: EMPATHIC_REPAIR. Episodic memory matched similar past support pattern. Trajectory: relief → gratitude arc.',
       },
     },
     {
-      id: 'demo-5', sender: 'user', senderName: myName,
-      text: "Alright. Let's do this together. I think we can actually make it work.",
+      id: 'demo-5', sender: 'ai', senderName: otherName,
+      text: "Me too. Let's start fresh — want to grab coffee tomorrow? ☕",
       analysis: {
         type: 'analysis',
         data: {
-          id: 'demo-5', raw_text: "Alright. Let's do this together. I think we can actually make it work.",
+          id: 'demo-5', raw_text: "Me too. Let's start fresh — want to grab coffee tomorrow? ☕",
           final_dominant_emotion: 'optimism', final_valence: 0.72,
-          meta_confidence: 0.87,
-          sarcasm_score: 0.05,
+          meta_confidence: 0.87, sarcasm_score: 0.02,
           bert_emotions: [
             { label: 'optimism',  score: 0.38 },
             { label: 'relief',    score: 0.28 },
@@ -240,26 +211,26 @@ function buildDemoMessages(myName, otherName) {
             { label: 'joy',       score: 0.06 },
           ],
           logic_map: { VADER: 0.25, BERT: 0.28, GoEmotions: 0.37, Context: 0.10 },
+          gate_weights_alpha: [0.27, 0.32, 0.41],
+          ekman_group: 'joy',
           context_snapshot: {
             cur_valence: 0.72, prev_emotion: 'caring',
-            topic_resonance: 0.71, volatility: 0.34,
-            ce_available: true,
+            topic_resonance: 0.71, volatility: 0.34, ce_available: true,
             cdm_current_state: 'RESOLUTION', cdm_entry_abruptness: 0.22, cdm_residency: 0.41,
           },
           lstm_trajectory: {
-            model_available: true,
-            top_predicted: 'joy',
+            model_available: true, top_predicted: 'joy',
             predicted_next: { joy: 0.36, optimism: 0.28, excitement: 0.18, relief: 0.11, gratitude: 0.07 },
           },
-          sender_id: 'demo-me',
+          dynamics:  { inertia: 0.48,  contagion: 0.84 },
+          appraisal: { novelty: 0.28, goal_congruence: 0.86, coping: 0.91 },
         },
-        ai_insight: 'Arc recovery: RAGS_TO_RICHES pattern. Valence +1.40 in 2 messages. CDM: RESOLUTION — stable, low volatility (34%). LSTM predicts joy next.',
       },
     },
   ];
 }
 
-// ── Avatar ────────────────────────────────────────────────────────────────────
+// ── Avatar ─────────────────────────────────────────────────────────────────────
 
 function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
   const letter = name?.[0]?.toUpperCase() || '?';
@@ -279,345 +250,653 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
         <div style={{
           position: 'absolute', bottom: 1, right: 1,
           width: size * 0.28, height: size * 0.28, borderRadius: '50%',
-          background: '#22c55e', border: '2px solid #ffffff',
-          boxShadow: '0 0 5px rgba(34,197,94,.6)',
+          background: '#22c55e', border: '2px solid #05060F',
         }} />
       )}
     </div>
   );
 }
 
-// ── ValenceSparkline ──────────────────────────────────────────────────────────
+// ── MsgBubble ──────────────────────────────────────────────────────────────────
 
-function ValenceSparkline({ messages }) {
-  const vals = messages
-    .filter(m => m.analysis?.data?.final_valence != null)
-    .map(m => ({ v: m.analysis.data.final_valence, emo: m.analysis.data.final_dominant_emotion }))
-    .slice(-14);
-  if (vals.length < 2) return null;
-
-  const W = 160, H = 30;
-  const toY = v => (H / 2) - (v * H * 0.44);
-  const toX = i => (i / (vals.length - 1)) * W;
-  const last = vals[vals.length - 1].v;
-  const prev = vals[vals.length - 2].v;
-  const trend = last - prev;
-  const moodColor = last > 0.25 ? '#34d399' : last < -0.25 ? '#f87171' : '#a5b4fc';
-  const moodLabel = last > 0.25 ? 'Positive' : last < -0.25 ? 'Negative' : 'Neutral';
-  const arrow = trend > 0.12 ? '↑' : trend < -0.12 ? '↓' : '→';
-  const uid = Math.random().toString(36).slice(2);
-
-  // Cubic bezier path
-  const pts = vals.map((p, i) => [toX(i), toY(p.v)]);
-  let pathD = `M${pts[0][0]},${pts[0][1]}`;
-  for (let i = 1; i < pts.length; i++) {
-    const [px, py] = pts[i - 1];
-    const [cx2, cy2] = pts[i];
-    const cpx = (px + cx2) / 2;
-    pathD += ` C${cpx},${py} ${cpx},${cy2} ${cx2},${cy2}`;
-  }
-  const areaD = pathD + ` L${W},${H} L0,${H} Z`;
-  const dom = vals[vals.length - 1].emo;
-
-  return (
-    <div style={{
-      padding: '4px 20px',
-      background: 'rgba(255,255,255,0.018)',
-      borderBottom: '1px solid rgba(255,255,255,0.05)',
-      display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
-    }}>
-      <span style={{ fontSize: '0.60rem', fontWeight: 700, color: 'rgba(156,163,175,0.7)', textTransform: 'uppercase', letterSpacing: '.08em', flexShrink: 0 }}>Arc</span>
-      <svg width={W} height={H} style={{ flexShrink: 0, overflow: 'visible' }}>
-        <defs>
-          <linearGradient id={`wg-${uid}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={moodColor} stopOpacity="0.22" />
-            <stop offset="100%" stopColor={moodColor} stopOpacity="0.0" />
-          </linearGradient>
-        </defs>
-        <line x1="0" y1={H / 2} x2={W} y2={H / 2} stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="4 4" />
-        <path d={areaD} fill={`url(#wg-${uid})`} />
-        <path d={pathD} fill="none" stroke={moodColor} strokeWidth="1.8" strokeLinecap="round" />
-        <circle cx={pts[pts.length-1][0]} cy={pts[pts.length-1][1]} r="3" fill={moodColor} />
-      </svg>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: moodColor }}>{moodLabel}</span>
-        <span style={{ fontSize: '0.75rem', color: 'rgba(156,163,175,0.7)' }}>{arrow}</span>
-        {dom && <span style={{ fontSize: '0.72rem' }}>{EMOTION_EMOJI[dom.toLowerCase()] || ''}</span>}
-      </div>
-    </div>
-  );
-}
-
-// ── MsgBubble ─────────────────────────────────────────────────────────────────
-
-function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, theme = 'prism', dark = false }) {
+function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
   const [hovered, setHovered] = useState(false);
-
   const bert = msg.analysis?.data?.bert_emotions;
   let emotionDict = {};
   if (bert?.length) bert.forEach(({ label, score }) => { emotionDict[label] = score; });
-  const hasAnalysis = Object.keys(emotionDict).length > 0;
-
+  const hasAnalysis  = Object.keys(emotionDict).length > 0;
   const dom          = msg.analysis?.data?.final_dominant_emotion;
   const domRgb       = dom ? emotionRgb(dom) : null;
-  const sarcasmScore = msg.analysis?.data?.sarcasm_score ?? msg.analysis?.data?.llm_sarcasm_score ?? 0;
+  const sarcasmScore = msg.analysis?.data?.sarcasm_score ?? 0;
+  const isAnalyzing  = !msg.analysis && msg.sender === 'user' && !isRegenerating;
 
-  // Analyzing (no analysis yet, user's own msg, not regenerating)
-  const isAnalyzing = !msg.analysis && msg.sender === 'user' && !isRegenerating;
-
-  const glowColor = domRgb || (isOwn ? '99,102,241' : '148,163,184');
-  const bubbleBg  = isAnalyzing
-    ? 'rgba(99,102,241,0.07)'
-    : isOwn
-      ? (hasAnalysis ? (bubbleGradient(emotionDict)?.replace(/0\.1[0-9]/g, '0.22') || 'rgba(99,102,241,0.22)') : 'rgba(99,102,241,0.16)')
-      : 'rgba(255,255,255,0.05)';
+  const ownBg    = hasAnalysis ? (bubbleGradient(emotionDict) || 'rgba(0,119,255,0.10)') : 'rgba(0,119,255,0.10)';
   const borderClr = isOwn
-    ? `rgba(${glowColor},${hovered && hasAnalysis ? '.55' : '.30'})`
-    : `rgba(255,255,255,${hovered && hasAnalysis ? '.18' : '.07'})`;
-  const glowShadow = hasAnalysis && domRgb
-    ? `0 0 ${hovered ? 22 : 10}px rgba(${domRgb},${hovered ? '.35' : '.15'})`
-    : 'none';
+    ? (domRgb ? `rgba(${domRgb},.35)` : 'rgba(0,119,255,.25)')
+    : 'rgba(0,0,0,.07)';
 
   return (
-    <div
+    <motion.div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       onClick={() => msg.analysis && onClick?.(msg)}
+      initial={{ opacity: 0, y: 10, scale: 0.97 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 400, damping: 30 }}
       style={{
         display: 'flex', flexDirection: 'column',
         alignItems: isOwn ? 'flex-end' : 'flex-start',
-        marginBottom: 3,
-        cursor: msg.analysis ? 'pointer' : 'default',
-        position: 'relative',
+        marginBottom: 3, cursor: msg.analysis ? 'pointer' : 'default',
       }}
     >
-      <div style={{
-        padding: isAnalyzing ? '12px 16px' : '10px 14px',
-        borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
-        background: bubbleBg,
-        border: `1px solid ${borderClr}`,
-        fontSize: '0.94rem', lineHeight: 1.5,
-        color: '#e0e0e0',
-        wordBreak: 'break-word',
-        boxShadow: isOwn
-          ? `0 4px 24px rgba(0,0,0,0.40), ${glowShadow}`
-          : `0 2px 12px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.04)`,
-        backdropFilter: 'blur(16px) saturate(180%)',
-        WebkitBackdropFilter: 'blur(16px) saturate(180%)',
-        animation: 'igMsgIn .26s cubic-bezier(.34,1.2,.64,1) both',
-        position: 'relative', overflow: 'hidden',
-        transition: 'border-color .3s, box-shadow .3s, background .4s',
-        minWidth: isAnalyzing ? 140 : 0,
-      }}>
+      <motion.div
+        whileTap={{ scale: 0.97 }}
+        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+        style={{
+          maxWidth: '70%',
+          padding: '10px 14px',
+          borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
+          background: isAnalyzing ? 'rgba(0,119,255,0.06)' : isOwn ? ownBg : '#f0f0f0',
+          border: `1.5px solid ${isAnalyzing ? 'rgba(0,119,255,.18)' : borderClr}`,
+          fontSize: '0.94rem', lineHeight: 1.5,
+          color: '#1c1c2e', wordBreak: 'break-word',
+          boxShadow: domRgb && isOwn
+            ? `0 2px 12px rgba(${domRgb},.14), inset 0 1px 0 rgba(255,255,255,.75)`
+            : isOwn
+              ? '0 2px 12px rgba(0,119,255,.09), inset 0 1px 0 rgba(255,255,255,.75)'
+              : '0 1px 3px rgba(0,0,0,.07)',
+          backdropFilter: isOwn ? 'blur(20px) saturate(180%)' : 'none',
+          WebkitBackdropFilter: isOwn ? 'blur(20px) saturate(180%)' : 'none',
+          position: 'relative', overflow: 'hidden',
+          outline: hovered && msg.analysis ? `2px solid rgba(${domRgb || '0,119,255'},.28)` : 'none',
+          outlineOffset: 1, transition: 'outline-color .15s',
+          minWidth: isAnalyzing ? 120 : 0,
+        }}
+      >
+        {isOwn && !isAnalyzing && (
+          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '38%', background: 'linear-gradient(180deg,rgba(255,255,255,.50) 0%,transparent 100%)', pointerEvents: 'none' }} />
+        )}
         {isAnalyzing ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            <div style={{ height: 11, borderRadius: 6, width: '85%', background: 'linear-gradient(90deg, rgba(99,102,241,.08) 25%, rgba(99,102,241,.22) 50%, rgba(99,102,241,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite' }} />
-            <div style={{ height: 11, borderRadius: 6, width: '60%', background: 'linear-gradient(90deg, rgba(99,102,241,.08) 25%, rgba(99,102,241,.22) 50%, rgba(99,102,241,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite .3s' }} />
-            <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'rgba(165,180,252,0.55)', fontStyle: 'italic' }}>Analyzing…</div>
+            <div style={{ height: 11, borderRadius: 6, width: '85%', background: 'linear-gradient(90deg,rgba(0,119,255,.08) 25%,rgba(0,119,255,.18) 50%,rgba(0,119,255,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite' }} />
+            <div style={{ height: 11, borderRadius: 6, width: '60%', background: 'linear-gradient(90deg,rgba(0,119,255,.08) 25%,rgba(0,119,255,.18) 50%,rgba(0,119,255,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite .3s' }} />
+            <div style={{ marginTop: 2, fontSize: '0.72rem', color: '#9ca3af', fontStyle: 'italic' }}>Analyzing…</div>
           </div>
         ) : isRegenerating ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-            <div style={{ height: 11, borderRadius: 6, width: '70%', background: 'linear-gradient(90deg, rgba(99,102,241,.08) 25%, rgba(99,102,241,.22) 50%, rgba(99,102,241,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite' }} />
-            <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'rgba(165,180,252,0.55)', fontStyle: 'italic' }}>Re-analyzing…</div>
-          </div>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#9ca3af', fontStyle: 'italic', fontSize: '0.87rem' }}>
+            <span style={{ width: 12, height: 12, border: '2px solid rgba(0,0,0,.10)', borderTopColor: '#6b7280', borderRadius: '50%', display: 'inline-block', animation: 'regen-spin .7s linear infinite' }} />
+            Re-analyzing…
+          </span>
         ) : (
-          <SyntaxText text={msg.text} theme={theme} dark={true} />
+          <>
+            {msg.text}
+            {sarcasmScore > 0.75 && <span className="bubble__sarcasm-icon" title={`Sarcasm ${Math.round(sarcasmScore * 100)}%`}>⟳</span>}
+          </>
         )}
-      </div>
-
-      {/* Sarcasm badge only — no emotion label/emoji */}
-      {sarcasmScore > 0.45 && hasAnalysis && !isRegenerating && (
-        <div style={{ marginTop: 3, justifyContent: isOwn ? 'flex-end' : 'flex-start', display: 'flex' }}>
-          <span style={{
-            fontSize: '0.62rem', fontWeight: 700,
-            background: 'rgba(245,158,11,0.10)', color: '#fbbf24',
-            border: '1px solid rgba(245,158,11,0.22)', borderRadius: 99,
-            padding: '1px 7px',
-          }}>sarcasm {Math.round(sarcasmScore * 100)}%</span>
-        </div>
-      )}
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 1 }}>
+      </motion.div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+        {dom && dom.toLowerCase() !== 'neutral' && !isAnalyzing && (
+          <div style={{ fontSize: '0.66rem', color: domRgb ? `rgb(${domRgb})` : '#9ca3af', fontWeight: 600, letterSpacing: '.04em', opacity: .75, textTransform: 'capitalize' }}>
+            {dom}
+          </div>
+        )}
         {msg.analysis && hovered && (
-          <div style={{ fontSize: '0.62rem', color: 'rgba(156,163,175,0.6)' }}>tap to inspect ↗</div>
+          <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
         )}
         {isOwn && hovered && onDelete && (
-          <button
-            onClick={e => { e.stopPropagation(); onDelete(msg.id); }}
-            style={{
-              background: 'none', border: 'none', cursor: 'pointer',
-              fontSize: '0.65rem', color: '#ef4444', padding: '0 2px',
-              lineHeight: 1, opacity: 0.7,
-            }}
-            title="Delete message"
+          <button onClick={e => { e.stopPropagation(); onDelete(msg.id); }}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.65rem', color: '#ef4444', padding: '0 2px', lineHeight: 1, opacity: 0.7 }}
+            title="Delete"
           >✕</button>
         )}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
-// ── Group Modal ───────────────────────────────────────────────────────────────
-
-function GroupModal({ globalUsers, currentUser, onConfirm, onClose, dark = false }) {
-  const [groupName, setGroupName]     = useState('');
-  const [selected, setSelected]       = useState([]);
-  const [search, setSearch]           = useState('');
-  const [error, setError]             = useState('');
-  const [submitting, setSubmitting]   = useState(false);
-
-  const eligible = globalUsers.filter(u =>
-    u.user_id !== currentUser?.user_id &&
-    u.display_name?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  const toggle = (uid) =>
-    setSelected(prev => prev.includes(uid) ? prev.filter(x => x !== uid) : [...prev, uid]);
-
-  const handleSubmit = async () => {
-    if (!groupName.trim()) { setError('Group name is required.'); return; }
-    if (selected.length === 0) { setError('Add at least one member.'); return; }
-    setSubmitting(true);
-    try {
-      await onConfirm(groupName.trim(), selected);
-      onClose();
-    } catch (e) {
-      setError(e?.response?.data?.detail || e.message || 'Failed to create group.');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const modalBg    = dark ? '#1a1a2c' : '#fff';
-  const textClr    = dark ? '#e0e0e0' : '#1c1c2e';
-  const inputBg    = dark ? 'rgba(255,255,255,0.06)' : '#f3f4f6';
-  const divider    = dark ? '1px solid rgba(255,255,255,0.08)' : '1px solid #f0f0f0';
-  const hoverBg    = dark ? 'rgba(255,255,255,0.05)' : '#f8f9fa';
-  const selBg      = dark ? 'rgba(0,119,255,0.15)' : '#f0f6ff';
-  const cancelBg   = dark ? 'rgba(255,255,255,0.07)' : '#f3f4f6';
-  const cancelClr  = dark ? '#c0c0c0' : '#374151';
-  const checkBdr   = dark ? 'rgba(255,255,255,0.22)' : '#d1d5db';
-  const modalBdr   = dark ? '1px solid rgba(255,255,255,0.08)' : 'none';
-
-  return (
-    <div
-      style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
-      onClick={onClose}
-    >
-      <div
-        onClick={e => e.stopPropagation()}
-        style={{ background: modalBg, border: modalBdr, borderRadius: 20, width: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,.35)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
-      >
-        <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: textClr, lineHeight: 1 }}>✕</button>
-          <span style={{ fontWeight: 700, fontSize: '1rem', color: textClr }}>New Group</span>
-          <div style={{ width: 24 }} />
-        </div>
-
-        <div style={{ padding: '14px 20px 0' }}>
-          <input
-            autoFocus
-            placeholder="Group name…"
-            value={groupName}
-            onChange={e => setGroupName(e.target.value)}
-            style={{ width: '100%', boxSizing: 'border-box', background: inputBg, border: 'none', borderRadius: 12, padding: '10px 14px', fontSize: '0.93rem', color: textClr, outline: 'none' }}
-          />
-        </div>
-
-        <div style={{ padding: '10px 20px 4px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: inputBg, borderRadius: 12, padding: '10px 14px' }}>
-            <svg width="15" height="15" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-            <input
-              placeholder="Search people…"
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: textClr, flex: 1 }}
-            />
-          </div>
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 8px' }}>
-          {eligible.map(u => (
-            <button key={u.user_id} onClick={() => toggle(u.user_id)}
-              style={{ width: '100%', background: selected.includes(u.user_id) ? selBg : 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left', transition: 'background .12s' }}
-              onMouseOver={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = hoverBg; }}
-              onMouseOut={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = 'none'; }}
-            >
-              <Avatar name={u.display_name} size={36} rgb="0,119,255" />
-              <span style={{ flex: 1, fontWeight: 500, fontSize: '0.93rem', color: textClr }}>{u.display_name}</span>
-              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${selected.includes(u.user_id) ? '#0077ff' : checkBdr}`, background: selected.includes(u.user_id) ? '#0077ff' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: '#fff', transition: 'all .15s' }}>
-                {selected.includes(u.user_id) ? '✓' : ''}
-              </div>
-            </button>
-          ))}
-          {eligible.length === 0 && (
-            <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.88rem' }}>No users found.</div>
-          )}
-        </div>
-
-        {error && <div style={{ padding: '0 20px 8px', fontSize: '0.82rem', color: '#ef4444' }}>{error}</div>}
-
-        <div style={{ padding: '12px 20px 20px', borderTop: divider, display: 'flex', gap: 10 }}>
-          <button onClick={onClose} style={{ flex: 1, background: cancelBg, color: cancelClr, border: 'none', borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>
-            Cancel
-          </button>
-          <button onClick={handleSubmit} disabled={submitting}
-            style={{ flex: 1, background: '#0077ff', color: '#fff', border: 'none', borderRadius: 12, padding: '11px', cursor: submitting ? 'wait' : 'pointer', fontWeight: 700, fontSize: '0.88rem', opacity: submitting ? 0.7 : 1 }}>
-            {submitting ? 'Creating…' : `Create (${selected.length} members)`}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── SuggestedResponses ────────────────────────────────────────────────────────
+// ── SuggestedResponses ─────────────────────────────────────────────────────────
 
 function SuggestedResponses({ dominant, onSelect }) {
   const suggestions = SUGGESTIONS[dominant?.toLowerCase()] || [];
   if (!suggestions.length) return null;
   return (
-    <div style={{
-      padding: '8px 20px', display: 'flex', gap: 8, flexWrap: 'wrap',
-      animation: 'slideUp .25s cubic-bezier(.34,1.2,.64,1) both',
-    }}>
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+      style={{ padding: '8px 20px', display: 'flex', gap: 8, flexWrap: 'wrap', flexShrink: 0 }}
+    >
       {suggestions.map((s, i) => (
-        <button key={i} onClick={() => onSelect(s)} style={{
-          background: 'rgba(99,102,241,0.10)', border: '1px solid rgba(99,102,241,0.22)',
-          borderRadius: 99, padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
-          color: '#a5b4fc', cursor: 'pointer', transition: 'all .15s',
-          backdropFilter: 'blur(8px)',
-        }}
-          onMouseOver={e => { e.currentTarget.style.background = 'rgba(99,102,241,0.20)'; e.currentTarget.style.color = '#c7d2fe'; }}
-          onMouseOut={e => { e.currentTarget.style.background = 'rgba(99,102,241,0.10)'; e.currentTarget.style.color = '#a5b4fc'; }}
-        >{s}</button>
+        <motion.button
+          key={i}
+          initial={{ opacity: 0, scale: 0.86 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ type: 'spring', stiffness: 400, damping: 28, delay: i * 0.07 }}
+          whileTap={{ scale: 0.92 }}
+          onClick={() => onSelect(s)}
+          style={{
+            background: 'rgba(109,40,217,0.12)', border: '1px solid rgba(109,40,217,0.30)',
+            borderRadius: 99, padding: '6px 14px', fontSize: '0.78rem', fontWeight: 500,
+            color: 'rgba(167,139,250,0.88)', cursor: 'pointer',
+          }}
+        >{s}</motion.button>
       ))}
+    </motion.div>
+  );
+}
+
+// ── GroupModal ─────────────────────────────────────────────────────────────────
+
+function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
+  const [groupName,  setGroupName]  = useState('');
+  const [selected,   setSelected]   = useState([]);
+  const [search,     setSearch]     = useState('');
+  const [error,      setError]      = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const eligible = globalUsers.filter(u =>
+    u.user_id !== currentUser?.user_id &&
+    u.display_name?.toLowerCase().includes(search.toLowerCase())
+  );
+  const toggle = (uid) => setSelected(prev => prev.includes(uid) ? prev.filter(x => x !== uid) : [...prev, uid]);
+
+  const handleSubmit = async () => {
+    if (!groupName.trim()) { setError('Group name is required.'); return; }
+    if (selected.length === 0) { setError('Add at least one member.'); return; }
+    setSubmitting(true);
+    try { await onConfirm(groupName.trim(), selected); onClose(); }
+    catch (e) { setError(e?.response?.data?.detail || e.message || 'Failed.'); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.20)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid #efefef', borderRadius: 20, width: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}>
+        <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#9ca3af' }}>✕</button>
+          <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>New Group</span>
+          <div style={{ width: 24 }} />
+        </div>
+        <div style={{ padding: '14px 20px 0' }}>
+          <input autoFocus placeholder="Group name…" value={groupName} onChange={e => setGroupName(e.target.value)}
+            style={{ width: '100%', boxSizing: 'border-box', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 12, padding: '10px 14px', fontSize: '0.93rem', color: '#1c1c2e', outline: 'none' }} />
+        </div>
+        <div style={{ padding: '10px 20px 4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+            <svg width="14" height="14" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input placeholder="Search people…" value={search} onChange={e => setSearch(e.target.value)}
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.90rem', color: '#1c1c2e', flex: 1 }} />
+          </div>
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 8px' }}>
+          {eligible.map(u => (
+            <button key={u.user_id} onClick={() => toggle(u.user_id)}
+              style={{ width: '100%', background: selected.includes(u.user_id) ? 'rgba(109,40,217,0.07)' : 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left' }}
+              onMouseOver={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = '#f9fafb'; }}
+              onMouseOut={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = 'none'; }}
+            >
+              <Avatar name={u.display_name} size={36} rgb="91,138,106" />
+              <span style={{ flex: 1, fontWeight: 500, fontSize: '0.90rem', color: '#1c1c2e' }}>{u.display_name}</span>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${selected.includes(u.user_id) ? '#7c3aed' : '#d1d5db'}`, background: selected.includes(u.user_id) ? '#7c3aed' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: '#fff' }}>
+                {selected.includes(u.user_id) ? '✓' : ''}
+              </div>
+            </button>
+          ))}
+          {eligible.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.85rem' }}>No users found.</div>}
+        </div>
+        {error && <div style={{ padding: '0 20px 8px', fontSize: '0.80rem', color: '#dc2626' }}>{error}</div>}
+        <div style={{ padding: '12px 20px 20px', borderTop: '1px solid #efefef', display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, background: '#f3f4f6', color: '#6b7280', border: 'none', borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>Cancel</button>
+          <button onClick={handleSubmit} disabled={submitting}
+            style={{ flex: 1, background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 12, padding: '11px', cursor: submitting ? 'wait' : 'pointer', fontWeight: 700, fontSize: '0.88rem', opacity: submitting ? 0.7 : 1 }}>
+            {submitting ? 'Creating…' : `Create (${selected.length})`}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
 
-// ── CrisisAlert ───────────────────────────────────────────────────────────────
+// ── CrisisAlert ────────────────────────────────────────────────────────────────
 
 function CrisisAlert({ onDismiss }) {
   return (
     <div style={{
       margin: '8px 20px 0', borderRadius: 12,
-      background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.25)',
+      background: 'rgba(192,57,43,0.07)', border: '1px solid rgba(192,57,43,0.20)',
       padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 10,
-      animation: 'slideDown .3s cubic-bezier(.34,1.2,.64,1) both',
-      boxShadow: '0 0 20px rgba(239,68,68,0.12)',
       flexShrink: 0,
     }}>
-      <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#ef4444', boxShadow: '0 0 8px rgba(239,68,68,.7)', flexShrink: 0, animation: 'pulseGlow 2s ease infinite' }} />
-      <span style={{ flex: 1, fontSize: '0.80rem', color: '#fca5a5', lineHeight: 1.4, fontWeight: 500 }}>
+      <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#C0392B', flexShrink: 0, animation: 'pulseGlow 2s ease infinite' }} />
+      <span style={{ flex: 1, fontSize: '0.80rem', color: 'rgba(252,165,165,0.90)', lineHeight: 1.4, fontWeight: 500 }}>
         High emotional intensity detected — this conversation may need extra care.
       </span>
-      <button onClick={onDismiss} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(252,165,165,0.55)', fontSize: '0.85rem', padding: '2px 4px', lineHeight: 1 }}>✕</button>
+      <button onClick={onDismiss} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(139,34,32,0.50)', fontSize: '0.85rem' }}>✕</button>
     </div>
   );
 }
 
-// ── Main Component ─────────────────────────────────────────────────────────────
+// ── EmotionalArcStrip ──────────────────────────────────────────────────────────
+
+function EmotionalArcStrip({ messages, onSelectMsg }) {
+  const stripRef = useRef(null);
+
+  const analyzed = useMemo(() =>
+    messages.filter(m => m.analysis?.data?.final_valence != null),
+    [messages]
+  );
+
+  useEffect(() => {
+    if (stripRef.current) stripRef.current.scrollLeft = stripRef.current.scrollWidth;
+  }, [analyzed.length]);
+
+  if (analyzed.length < 2) return null;
+
+  const DOT_SPACING = 18;
+  const H = 36;
+  const W = Math.max(analyzed.length * DOT_SPACING + 20, 200);
+  const toX = i => 10 + i * DOT_SPACING;
+  const toY = v => H / 2 - v * (H / 2 - 5);
+
+  const pts = analyzed.map((m, i) => [toX(i), toY(m.analysis.data.final_valence)]);
+
+  let pathD = `M${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length; i++) {
+    const cpx = (pts[i - 1][0] + pts[i][0]) / 2;
+    pathD += ` C${cpx},${pts[i - 1][1]} ${cpx},${pts[i][1]} ${pts[i][0]},${pts[i][1]}`;
+  }
+
+  return (
+    <div
+      ref={stripRef}
+      style={{
+        height: 52, flexShrink: 0,
+        overflowX: 'auto', overflowY: 'hidden',
+        borderTop: '1px solid rgba(255,255,255,0.08)',
+        background: 'rgba(255,255,255,0.06)',
+        display: 'flex', alignItems: 'center',
+        padding: '0 8px',
+        scrollbarWidth: 'none',
+      }}
+    >
+      <svg width={W} height={H} style={{ minWidth: W, overflow: 'visible' }}>
+        <line x1={0} y1={H / 2} x2={W} y2={H / 2}
+          stroke="rgba(255,255,255,0.10)" strokeWidth="1" strokeDasharray="3 4" />
+        <path d={pathD} fill="none" stroke="rgba(109,40,217,0.40)" strokeWidth="1.5" strokeLinecap="round" />
+        {analyzed.map((m, i) => {
+          const rgb = EmotionPalette[m.analysis.data.final_dominant_emotion?.toLowerCase()] ?? EmotionPalette.neutral;
+          const [cx, cy] = pts[i];
+          const isLast = i === analyzed.length - 1;
+          return (
+            <circle
+              key={m.id ?? i}
+              cx={cx} cy={cy}
+              r={isLast ? 4.5 : 3}
+              fill={`rgb(${rgb})`}
+              opacity={isLast ? 1 : 0.65}
+              style={{ cursor: 'pointer', transition: 'r .15s' }}
+              onClick={() => onSelectMsg?.(m)}
+            >
+              <title>{m.analysis.data.final_dominant_emotion} · {m.text?.slice(0, 40)}</title>
+            </circle>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ── LiveAnalysisPanel ──────────────────────────────────────────────────────────
+
+const SECT = {
+  fontSize: '0.58rem', fontWeight: 700, color: 'rgba(255,255,255,0.38)',
+  textTransform: 'uppercase', letterSpacing: '.10em',
+  marginBottom: 8,
+};
+
+function Bar({ value, max = 1, color = '99,102,241', label, right }) {
+  const pct = Math.min(1, Math.max(0, value / max)) * 100;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+      {label && <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.30)', width: 68, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>}
+      <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.09)', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${pct}%`, background: `rgba(${color},0.80)`, borderRadius: 3, transition: 'width .4s ease' }} />
+      </div>
+      {right && <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.38)', width: 30, textAlign: 'right', flexShrink: 0 }}>{right}</span>}
+    </div>
+  );
+}
+
+function BipolarBar({ value, label }) {
+  const clamped = Math.max(-1, Math.min(1, value));
+  const pct = ((clamped + 1) / 2) * 100;
+  const color = clamped >= 0 ? '52,211,153' : '239,68,68';
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+      <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.30)', width: 68, flexShrink: 0 }}>{label}</span>
+      <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.09)', position: 'relative' }}>
+        <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(255,255,255,0.18)' }} />
+        <div style={{
+          position: 'absolute',
+          left: clamped >= 0 ? '50%' : `${pct}%`,
+          top: 0, height: '100%',
+          width: `${Math.abs(clamped) * 50}%`,
+          background: `rgba(${color},0.75)`,
+          borderRadius: 3,
+          transition: 'left .4s ease, width .4s ease',
+        }} />
+      </div>
+      <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.38)', width: 36, textAlign: 'right', flexShrink: 0 }}>
+        {clamped >= 0 ? '+' : ''}{clamped.toFixed(2)}
+      </span>
+    </div>
+  );
+}
+
+// Waiting state — PlutchikWheel + component list (no emoji icons)
+function AnalysisWaiting() {
+  const PREVIEW = [
+    { dot: '167,139,250', label: 'Dominant Emotion',  sub: '28-class GoEmotions + 7 Ekman' },
+    { dot: '96,165,250',  label: 'Trajectory LSTM',   sub: '12-message emotional lookahead' },
+    { dot: '74,222,128',  label: 'CDM · 15 States',   sub: 'Conversation Dynamics Machine'  },
+    { dot: '251,191,36',  label: 'VAD + Appraisal',   sub: 'valence · arousal · dominance'  },
+  ];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px 14px', boxSizing: 'border-box' }}>
+      {/* PlutchikWheel instead of emoji orb */}
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 18 }}>
+        <div style={{ width: 88, height: 88, opacity: 0.40, '--accent-primary': 'rgba(139,92,246,0.75)', '--glass-border': 'rgba(255,255,255,0.14)' }}>
+          <PlutchikWheel dominantEmotion="neutral" />
+        </div>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'rgba(255,255,255,0.70)', marginBottom: 3 }}>Waiting for signal</div>
+          <div style={{ fontSize: '0.66rem', color: 'rgba(255,255,255,0.28)', lineHeight: 1.5 }}>Send a message to activate<br />the emotion pipeline</div>
+        </div>
+      </div>
+      <div style={{ fontSize: '0.55rem', fontWeight: 700, color: 'rgba(255,255,255,0.22)', letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 8 }}>What you'll see</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {PREVIEW.map((p, i) => (
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: '8px 11px' }}>
+            <div style={{ width: 7, height: 7, borderRadius: '50%', background: `rgba(${p.dot},0.70)`, flexShrink: 0 }} />
+            <div>
+              <div style={{ fontSize: '0.71rem', fontWeight: 700, color: `rgba(${p.dot},0.78)` }}>{p.label}</div>
+              <div style={{ fontSize: '0.61rem', color: 'rgba(255,255,255,0.26)', marginTop: 1 }}>{p.sub}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Processing state — TelemetryPanel from git (dark mode)
+function AnalysisProcessing({ partialModels = new Set(), lastAnalysis }) {
+  return (
+    <div style={{ padding: '12px 10px' }}>
+      <TelemetryPanel processing={true} lastAnalysis={lastAnalysis} partialModels={partialModels} dark={true} />
+    </div>
+  );
+}
+
+function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Set(), messages = [] }) {
+  const data      = currentAnalysis?.data;
+  const dom       = data?.final_dominant_emotion?.toLowerCase() || 'neutral';
+  const rgb       = EmotionPalette[dom] || EmotionPalette.neutral;
+  const confidence = data?.meta_confidence ?? 0;
+  const valenceHistory = useMemo(() =>
+    messages.filter(m => m.analysis?.data?.final_valence != null)
+      .map(m => m.analysis.data.final_valence).slice(-24),
+    [messages]
+  );
+
+  const topBert = useMemo(() =>
+    [...(data?.bert_emotions || [])].sort((a, b) => b.score - a.score).slice(0, 5),
+    [data?.bert_emotions]
+  );
+
+  const traj  = data?.lstm_trajectory;
+  const snap  = data?.context_snapshot;
+  const vad   = data?.vad || {};
+  const dyn   = data?.dynamics || {};
+  const appr  = data?.appraisal || {};
+
+  const valence    = vad.valence   ?? data?.final_valence ?? 0;
+  const arousal    = vad.arousal   ?? snap?.volatility ?? 0;
+  const dominance  = vad.dominance ?? 0;
+  const inertia    = dyn.inertia   ?? 0;
+  const contagion  = dyn.contagion ?? 0;
+
+  const cdmState     = snap?.cdm_current_state;
+  const cdmResidency = snap?.cdm_residency;
+  const cdmEntropy   = snap?.emotion_entropy;
+  const cdmVelocity  = snap?.velocity;
+
+  const topPredicted  = traj?.top_predicted;
+  const predictedNext = traj?.predicted_next || {};
+  const topTrajConf   = topPredicted ? (predictedNext[topPredicted] ?? 0) : 0;
+  const trajPhase     = traj?.phase;
+
+  const gateWeights   = data?.gate_weights_alpha;
+  const sarcasmScore  = data?.sarcasm_score ?? 0;
+  const GATE_LABELS   = ['VADER', 'BERT', 'GoE', 'VAD', 'Ctx'];
+  const GATE_COLORS   = ['250,204,21', '96,165,250', '167,139,250', '74,222,128', '251,113,133'];
+
+  const DIVIDER = { borderTop: '1px solid rgba(255,255,255,0.07)', margin: '12px 0' };
+
+  if (!data && !processing) return <AnalysisWaiting />;
+  if (processing && !data)  return <AnalysisProcessing partialModels={partialModels} lastAnalysis={currentAnalysis} />;
+
+  const confPct = Math.round(confidence * 100);
+
+  return (
+    <div style={{ padding: '14px 14px 20px', overflowY: 'auto', flex: 1, minHeight: 0, boxSizing: 'border-box' }}>
+
+      {/* ── Emotion Card ─────────────────────────────────────────────────── */}
+      <div style={{
+        background: `rgba(${rgb},0.08)`,
+        border: `1px solid rgba(${rgb},0.22)`,
+        borderRadius: 16, padding: '14px 14px 12px',
+        marginBottom: 12, position: 'relative', overflow: 'hidden',
+      }}>
+        {/* Ambient glow blob */}
+        <div style={{ position: 'absolute', right: -20, top: -20, width: 80, height: 80, borderRadius: '50%', background: `radial-gradient(circle, rgba(${rgb},0.25) 0%, transparent 70%)`, filter: 'blur(20px)', pointerEvents: 'none' }} />
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          {/* PixelFace — pixel-art face expressing the detected Ekman emotion */}
+          <div style={{ flexShrink: 0, lineHeight: 0 }}>
+            <PixelFace emotion={dom} scale={4} showLabel={false} />
+          </div>
+          <div>
+            <div style={{ fontSize: '1.0rem', fontWeight: 800, color: `rgb(${rgb})`, textTransform: 'capitalize', letterSpacing: '.01em' }}>{dom}</div>
+            <div style={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.35)', marginTop: 1 }}>dominant emotion</div>
+          </div>
+          <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
+            <div style={{ fontSize: '1.1rem', fontWeight: 800, color: `rgba(${rgb},0.90)` }}>{confPct}%</div>
+            <div style={{ fontSize: '0.58rem', color: 'rgba(255,255,255,0.28)' }}>confidence</div>
+          </div>
+        </div>
+
+        {/* Confidence bar */}
+        <div style={{ height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${confPct}%`, background: `rgba(${rgb},0.75)`, borderRadius: 3, transition: 'width .5s ease', boxShadow: `0 0 8px rgba(${rgb},0.40)` }} />
+        </div>
+
+        {/* Badges row */}
+        <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
+          {data?.ekman_group && (
+            <span style={{ fontSize: '0.60rem', fontWeight: 600, background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.50)', borderRadius: 5, padding: '2px 7px' }}>
+              {data.ekman_group}
+            </span>
+          )}
+          {sarcasmScore > 0.25 && (
+            <span style={{ fontSize: '0.60rem', fontWeight: 700, background: 'rgba(251,191,36,0.12)', color: 'rgba(251,191,36,0.88)', border: '1px solid rgba(251,191,36,0.22)', borderRadius: 5, padding: '2px 7px' }}>
+              ⚡ sarcasm {Math.round(sarcasmScore * 100)}%
+            </span>
+          )}
+          {data?.inversion_applied && (
+            <span style={{ fontSize: '0.60rem', fontWeight: 700, background: 'rgba(248,113,113,0.10)', color: 'rgba(248,113,113,0.80)', border: '1px solid rgba(248,113,113,0.20)', borderRadius: 5, padding: '2px 7px' }}>
+              ↕ inverted
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* ── Sentiment Breakdown ───────────────────────────────────────────── */}
+      {topBert.length > 0 && (
+        <>
+          <div style={SECT}>Emotion breakdown</div>
+          <div style={{ marginBottom: 10 }}>
+            {topBert.map(({ label, score }) => {
+              const eRgb = EmotionPalette[label?.toLowerCase()] ?? EmotionPalette.neutral;
+              return <Bar key={label} value={score} max={1} color={eRgb} label={label} right={score.toFixed(2)} />;
+            })}
+          </div>
+          {/* EmotionArcChart — valence trajectory across conversation */}
+          {valenceHistory.length >= 2 && (
+            <div style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: '0.55rem', fontWeight: 700, color: 'rgba(255,255,255,0.28)', letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 5 }}>
+                Valence arc · {valenceHistory.length} msgs
+              </div>
+              <EmotionArcChart values={valenceHistory} color={rgb} height={54} />
+            </div>
+          )}
+          <div style={DIVIDER} />
+        </>
+      )}
+
+      {/* ── Trajectory ───────────────────────────────────────────────────── */}
+      {traj?.model_available && topPredicted && (
+        <>
+          <div style={SECT}>Trajectory prediction</div>
+          <div style={{
+            background: 'rgba(109,40,217,0.08)',
+            border: '1px solid rgba(139,92,246,0.20)',
+            borderRadius: 12, padding: '10px 12px', marginBottom: 10,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ fontSize: '0.88rem', color: 'rgba(167,139,250,0.55)' }}>→</span>
+              <span style={{ fontSize: '0.90rem', fontWeight: 700, color: 'rgba(255,255,255,0.88)', textTransform: 'capitalize' }}>{topPredicted}</span>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: 5, alignItems: 'center' }}>
+                {trajPhase && (
+                  <span style={{ fontSize: '0.58rem', fontWeight: 600, background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.40)', borderRadius: 5, padding: '2px 6px', textTransform: 'capitalize' }}>{trajPhase.replace(/_/g,' ')}</span>
+                )}
+                <span style={{ fontSize: '0.68rem', fontWeight: 700, background: 'rgba(109,40,217,0.20)', color: 'rgba(167,139,250,0.88)', borderRadius: 6, padding: '2px 8px' }}>
+                  {Math.round(topTrajConf * 100)}%
+                </span>
+              </div>
+            </div>
+            {Object.entries(predictedNext).sort((a,b) => b[1]-a[1]).slice(0, 3).map(([label, score]) => {
+              const eRgb = EmotionPalette[label?.toLowerCase()] ?? EmotionPalette.neutral;
+              return <Bar key={label} value={score} max={1} color={eRgb} label={label} right={score.toFixed(2)} />;
+            })}
+          </div>
+          <div style={DIVIDER} />
+        </>
+      )}
+
+      {/* ── CDM State — CDMStateGraph from git ───────────────────────────── */}
+      {snap && (
+        <>
+          {/* Override light-theme text colors for dark context */}
+          <style>{`.cdm-dark span[style*="374151"]{color:rgba(255,255,255,.55)!important}.cdm-dark div[style*="rgba(0,0,0,.07)"]{background:rgba(255,255,255,.08)!important}`}</style>
+          <div className="cdm-dark" style={{ marginBottom: 10 }}>
+            <CDMStateGraph snapshot={snap} />
+          </div>
+          <div style={DIVIDER} />
+        </>
+      )}
+
+      {/* ── VAD + Dynamics ───────────────────────────────────────────────── */}
+      <div style={SECT}>Affective dimensions</div>
+      <div style={{ marginBottom: 12 }}>
+        <BipolarBar value={valence}   label="Valence" />
+        <Bar value={Math.max(0, Math.min(1, arousal))} max={1} color="249,115,22" label="Arousal" right={arousal.toFixed(2)} />
+        <BipolarBar value={dominance} label="Dominance" />
+        {(inertia !== 0 || contagion !== 0) && (
+          <>
+            <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '7px 0' }} />
+            <BipolarBar value={inertia}   label="Inertia" />
+            <BipolarBar value={contagion} label="Contagion" />
+          </>
+        )}
+      </div>
+
+      {/* ── Appraisal ────────────────────────────────────────────────────── */}
+      {(appr.novelty != null || appr.goal_congruence != null || appr.coping != null) && (
+        <>
+          <div style={DIVIDER} />
+          <div style={SECT}>Appraisal (Scherer)</div>
+          <div style={{ marginBottom: 12 }}>
+            {appr.novelty       != null && <Bar value={appr.novelty}        max={1} color="192,132,252" label="Novelty"    right={appr.novelty.toFixed(2)} />}
+            {appr.goal_congruence != null && <Bar value={appr.goal_congruence} max={1} color="52,211,153"  label="Goal Cong." right={appr.goal_congruence.toFixed(2)} />}
+            {appr.coping        != null && <Bar value={appr.coping}         max={1} color="96,165,250"  label="Coping"     right={appr.coping.toFixed(2)} />}
+          </div>
+        </>
+      )}
+
+      {/* ── Gate weights ─────────────────────────────────────────────────── */}
+      {gateWeights && gateWeights.length >= 3 && (
+        <>
+          <div style={DIVIDER} />
+          <div style={SECT}>Model gate weights</div>
+          <div style={{ display: 'flex', gap: 3, marginBottom: 6, height: 28, borderRadius: 8, overflow: 'hidden' }}>
+            {gateWeights.slice(0, 5).map((w, i) => {
+              const total = gateWeights.slice(0, 5).reduce((s, v) => s + (v || 0), 0) || 1;
+              const pct   = ((w || 0) / total) * 100;
+              return (
+                <div key={i} title={`${GATE_LABELS[i]}: ${(w * 100).toFixed(0)}%`}
+                  style={{ flex: pct, background: `rgba(${GATE_COLORS[i]},0.35)`, borderRadius: 0, transition: 'flex .5s ease', minWidth: pct > 2 ? 0 : 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {pct > 12 && <span style={{ fontSize: '0.55rem', fontWeight: 700, color: `rgb(${GATE_COLORS[i]})` }}>{GATE_LABELS[i]}</span>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {gateWeights.slice(0, 5).map((w, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+                <div style={{ width: 6, height: 6, borderRadius: 2, background: `rgba(${GATE_COLORS[i]},0.70)` }} />
+                <span style={{ fontSize: '0.58rem', color: 'rgba(255,255,255,0.35)' }}>{GATE_LABELS[i]} {((w || 0) * 100).toFixed(0)}%</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* ── Logic map fallback ───────────────────────────────────────────── */}
+      {!gateWeights && data?.logic_map && Object.keys(data.logic_map).length > 0 && (
+        <>
+          <div style={DIVIDER} />
+          <div style={SECT}>Pipeline weights</div>
+          {Object.entries(data.logic_map).map(([k, v]) => (
+            <Bar key={k} value={v} max={1} color="99,102,241" label={k} right={(v * 100).toFixed(0) + '%'} />
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── Living Aura ────────────────────────────────────────────────────────────────
+
+function bubbleGradient(emotionDict) {
+  const entries = Object.entries(emotionDict)
+    .filter(([, v]) => v > 0.03)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+  if (!entries.length) return null;
+  if (entries.length === 1) {
+    const rgb = EmotionPalette[entries[0][0]] || EmotionPalette.neutral;
+    return `rgba(${rgb}, 0.14)`;
+  }
+  const stops = entries.map(([emo], i) => {
+    const rgb = EmotionPalette[emo] || EmotionPalette.neutral;
+    const pct = Math.round((i / (entries.length - 1)) * 100);
+    return `rgba(${rgb}, 0.15) ${pct}%`;
+  });
+  return `linear-gradient(135deg, ${stops.join(', ')})`;
+}
+
+// ── Main Dashboard ─────────────────────────────────────────────────────────────
 
 export default function IGDashboard({
   currentUser,
@@ -649,28 +928,46 @@ export default function IGDashboard({
   socketRef,
   onDemoStart,
 }) {
-  const dark = true; // always dark
   const theme = 'prism';
-  const [search, setSearch] = useState('');
+  const [search,          setSearch]          = useState('');
+  const [showCompose,     setShowCompose]      = useState(false);
+  const [showGroupModal,  setShowGroupModal]   = useState(false);
+  const [composeSearch,   setComposeSearch]    = useState('');
+  const [showProfileMenu, setShowProfileMenu]  = useState(false);
+  const [selectedMsg,     setSelectedMsg]      = useState(null);
+  const [crisisDismissed, setCrisisDismissed]  = useState(false);
+  const [memberPanelOpen, setMemberPanelOpen]  = useState(false);
+  const [memberError,     setMemberError]      = useState('');
+  const [showSettings,    setShowSettings]     = useState(false);
+  const [settings, setSettings] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('ig_settings') || '{}'); } catch { return {}; }
+  });
+  const updateSetting = (key, val) => setSettings(prev => {
+    const next = { ...prev, [key]: val };
+    localStorage.setItem('ig_settings', JSON.stringify(next));
+    return next;
+  });
+
+  const messagesContainerRef = useRef(null);
+  const inputRef             = useRef(null);
+  const profileMenuRef       = useRef(null);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', 'dark');
-    document.body.style.background = '#06060f';
+    document.documentElement.removeAttribute('data-theme');
+    document.body.style.background = '#ffffff';
+    document.documentElement.style.background = '#ffffff';
   }, []);
 
-  const [showCompose, setShowCompose]         = useState(false);
-  const [showGroupModal, setShowGroupModal]   = useState(false);
-  const [composeSearch, setComposeSearch]     = useState('');
-  const [showProfileMenu, setShowProfileMenu] = useState(false);
-  const [selectedMsg, setSelectedMsg]         = useState(null);
-  const [insightsPanelOpen, setInsightsPanelOpen] = useState(false);
-  const [escalationDismissed, setEscalationDismissed] = useState(false);
-  const [crisisDismissed, setCrisisDismissed] = useState(false);
-  const [memberPanelOpen, setMemberPanelOpen] = useState(false);
-  const [memberError, setMemberError]         = useState('');
-  const messagesContainerRef = useRef(null);
-  const messagesEndRef       = useRef(null);
-  const inputRef             = useRef(null);
+  useEffect(() => {
+    if (!showProfileMenu) return;
+    const handler = (e) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target)) {
+        setShowProfileMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showProfileMenu]);
 
   useEffect(() => {
     const el = messagesContainerRef.current;
@@ -685,13 +982,9 @@ export default function IGDashboard({
     setSelectedMsg(null);
     setMemberPanelOpen(false);
     setMemberError('');
-    setInsightsPanelOpen(false);
-    setEscalationDismissed(false);
     setCrisisDismissed(false);
   }, [activeConversationId]);
 
-
-  // Conversation filtering — works for both direct (other_display_name) and group (name)
   const filteredConvs = conversations.filter(c => {
     const label = c.type === 'group' ? c.name : c.other_display_name;
     return label?.toLowerCase().includes(search.toLowerCase());
@@ -707,235 +1000,281 @@ export default function IGDashboard({
   const activeRgb   = emotionRgb(activeConv?.dominant_emotion);
   const dominant    = currentAnalysis?.data?.final_dominant_emotion;
   const dominantRgb = dominant ? emotionRgb(dominant) : null;
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
 
-  // Emotion-reactive body background — must be after `dominant` is declared
-  useEffect(() => {
-    if (!dominant) return;
-    const rgb = EMOTION_BG[dominant.toLowerCase()] || '99,102,241';
-    document.body.style.background = `radial-gradient(ellipse at 30% 20%, rgba(${rgb},0.18) 0%, transparent 60%), radial-gradient(ellipse at 75% 80%, rgba(${rgb},0.10) 0%, transparent 55%), #06060f`;
-    return () => { document.body.style.background = ''; };
-  }, [dominant]);
-
-  // For groups: label + avatar use group name; for direct: use other_display_name
-  const convLabel = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
+  const convLabel  = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
   const activeLabel = activeConv ? convLabel(activeConv) : '';
 
-  const rightPanelOpen = insightsPanelOpen || !!selectedMsg;
-
-  // Crisis: last message valence < -0.55 AND volatility > 0.70
   const isCrisis = (() => {
     const last = messages.filter(m => m.analysis?.data?.final_valence != null).slice(-1)[0];
     if (!last) return false;
-    const v = last.analysis.data.final_valence;
-    const vol = last.analysis.data.context_snapshot?.volatility ?? 0;
-    return v < -0.55 && vol > 0.70;
+    return last.analysis.data.final_valence < -0.55 &&
+           (last.analysis.data.context_snapshot?.volatility ?? 0) > 0.70;
   })();
 
-  // Suggestions: show when last analyzed msg (other person's) has negative valence
   const suggestionEmotion = (() => {
     const lastOther = messages.filter(m => m.sender !== 'user' && m.analysis?.data?.final_valence != null).slice(-1)[0];
-    if (!lastOther) return null;
-    if (lastOther.analysis.data.final_valence >= -0.35) return null;
+    if (!lastOther || lastOther.analysis.data.final_valence >= -0.35) return null;
     return lastOther.analysis.data.final_dominant_emotion;
-  })();
-
-  const isEscalation = (() => {
-    const analyzed = messages
-      .filter(m => m.analysis?.data?.final_valence != null)
-      .slice(-4);
-    if (analyzed.length < 2) return false;
-    const last2 = analyzed.slice(-2);
-    const negCount = last2.filter(m => m.analysis.data.final_valence < -0.25).length;
-    const hasHighShift = analyzed.slice(-1).some(
-      m => m.analysis?.data?.context_shift?.significance === 'High'
-    );
-    return negCount >= 2 || (negCount >= 1 && hasHighShift);
   })();
 
   const handleAddMember = async (userId) => {
     setMemberError('');
-    try {
-      await onAddMember(activeConversationId, userId);
-    } catch (e) {
-      setMemberError(e?.response?.data?.detail || e.message || 'Failed to add member.');
-    }
+    try { await onAddMember(activeConversationId, userId); }
+    catch (e) { setMemberError(e?.response?.data?.detail || e.message || 'Failed.'); }
   };
 
   const handleRemoveMember = async (userId) => {
     setMemberError('');
-    try {
-      await onRemoveMember(activeConversationId, userId);
-    } catch (e) {
-      setMemberError(e?.response?.data?.detail || e.message || 'Failed to remove member.');
-    }
+    try { await onRemoveMember(activeConversationId, userId); }
+    catch (e) { setMemberError(e?.response?.data?.detail || e.message || 'Failed.'); }
   };
-
-  const orbValence   = currentAnalysis?.data?.final_valence ?? 0;
-  const orbVolatility = currentAnalysis?.data?.context_snapshot?.volatility ?? 0;
 
   return (
     <div style={{
-      display: 'flex', height: '100vh',
-      background: 'transparent',
-      fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-      position: 'relative',
+      display: 'flex', height: '100vh', overflow: 'hidden',
+      background: '#ffffff',
+      fontFamily: '-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif',
     }}>
-      <AmbientOrb valence={orbValence} volatility={orbVolatility} />
 
-      {/* ── Compose Modal ─────────────────────────────────────────────── */}
+      {/* ── Compose Modal ──────────────────────────────────────────────── */}
+      <AnimatePresence>
       {showCompose && (
-        <div
-          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(8px)' }}
+        <motion.div
+          key="compose-backdrop"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.20)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={() => { setShowCompose(false); setComposeSearch(''); }}
         >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{ background: dark ? '#1a1a2c' : '#fff', border: dark ? '1px solid rgba(255,255,255,0.08)' : 'none', borderRadius: 20, width: 400, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 64px rgba(0,0,0,.35)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}
-          >
+          <motion.div
+            key="compose-card"
+            initial={{ opacity: 0, scale: 0.92, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 6 }}
+            transition={{ type: 'spring', stiffness: 340, damping: 26 }}
+            onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid #efefef', borderRadius: 20, width: 400, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden' }}>
             <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <button onClick={() => { setShowCompose(false); setComposeSearch(''); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: dark ? '#e0e0e0' : '#1c1c2e', lineHeight: 1 }}>✕</button>
-              <span style={{ fontWeight: 700, fontSize: '1rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>New Message</span>
+              <button onClick={() => { setShowCompose(false); setComposeSearch(''); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#9ca3af' }}>✕</button>
+              <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>New Message</span>
               <div style={{ width: 24 }} />
             </div>
-
             <div style={{ padding: '14px 20px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: dark ? 'rgba(255,255,255,0.06)' : '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
                 <svg width="16" height="16" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input
-                  autoFocus placeholder="Search people…"
-                  value={composeSearch} onChange={e => setComposeSearch(e.target.value)}
-                  style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.93rem', color: dark ? '#e0e0e0' : '#1c1c2e', flex: 1 }}
-                />
+                <input autoFocus placeholder="Search people…" value={composeSearch} onChange={e => setComposeSearch(e.target.value)} style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.93rem', color: '#1c1c2e', flex: 1 }} />
               </div>
             </div>
-
             <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0 8px' }}>
-              {filteredUsers.length === 0 && (
-                <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.88rem' }}>No users found.</div>
-              )}
-              {filteredUsers.map(u => {
-                const isOnline = onlineUsers.has(u.user_id);
-                return (
-                  <button key={u.user_id} onClick={() => { onCreateChat(u.user_id); setShowCompose(false); setComposeSearch(''); }}
-                    style={{ width: '100%', background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', transition: 'background .12s', textAlign: 'left' }}
-                    onMouseOver={e => e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.05)' : '#f8f9fa'}
-                    onMouseOut={e => e.currentTarget.style.background = 'none'}
-                  >
-                    <Avatar name={u.display_name} size={44} rgb="0,119,255" online={isOnline} />
-                    <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.93rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{u.display_name}</div>
-                      <div style={{ fontSize: '0.78rem', color: isOnline ? '#22c55e' : '#9ca3af' }}>
-                        {isOnline ? 'Active now' : 'Offline'}
-                      </div>
+              {filteredUsers.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.88rem' }}>No users found.</div>}
+              {filteredUsers.map(u => (
+                <button key={u.user_id} onClick={() => { onCreateChat(u.user_id); setShowCompose(false); setComposeSearch(''); }}
+                  style={{ width: '100%', background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left' }}
+                  onMouseOver={e => e.currentTarget.style.background = '#f3f4f6'}
+                  onMouseOut={e => e.currentTarget.style.background = 'none'}
+                >
+                  <Avatar name={u.display_name} size={44} rgb="91,138,106" online={onlineUsers.has(u.user_id)} />
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: '0.93rem', color: '#1c1c2e' }}>{u.display_name}</div>
+                    <div style={{ fontSize: '0.78rem', color: onlineUsers.has(u.user_id) ? '#16a34a' : '#9ca3af' }}>
+                      {onlineUsers.has(u.user_id) ? 'Active now' : 'Offline'}
                     </div>
-                  </button>
-                );
-              })}
+                  </div>
+                </button>
+              ))}
             </div>
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
-      {/* ── Group Creation Modal ───────────────────────────────────────── */}
+      {/* ── Group Modal ─────────────────────────────────────────────────── */}
       {showGroupModal && (
         <GroupModal
           globalUsers={globalUsers}
           currentUser={currentUser}
           onConfirm={onCreateGroup}
           onClose={() => setShowGroupModal(false)}
-          dark={dark}
+          dark={false}
         />
       )}
 
-      {/* ── Left Sidebar ──────────────────────────────────────────────── */}
-      <div style={{ width: 300, borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', background: 'rgba(6,6,15,0.88)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', flexShrink: 0 }}>
+      {/* ── Settings Modal ───────────────────────────────────────────────── */}
+      <AnimatePresence>
+      {showSettings && (
+        <motion.div
+          key="settings-backdrop"
+          initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
+          onClick={() => setShowSettings(false)} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,0.60)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <motion.div
+            key="settings-card"
+            initial={{ opacity: 0, scale: 0.92, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.94, y: 6 }}
+            transition={{ type: 'spring', stiffness: 340, damping: 26 }}
+            onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid #efefef', borderRadius: 20, width: 420, maxWidth: '90vw', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden' }}>
+            {/* Header */}
+            <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #efefef', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: 9, background: 'rgba(109,40,217,0.08)', border: '1px solid rgba(109,40,217,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7c3aed' }}>
+                  <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                </div>
+                <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>Settings</span>
+              </div>
+              <button onClick={() => setShowSettings(false)} style={{ background: '#f3f4f6', border: '1px solid #efefef', borderRadius: '50%', width: 30, height: 30, color: '#6b7280', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+            </div>
+
+            {/* Settings rows */}
+            <div style={{ padding: '8px 0 16px' }}>
+              {[
+                { key: 'showAnalysisPanel', label: 'Analysis panel', sub: 'Show emotion signal rail when a conversation is open', default: true },
+                { key: 'showTimestamps',    label: 'Message timestamps', sub: 'Display send time below each message', default: false },
+                { key: 'compactMessages',   label: 'Compact messages', sub: 'Reduce vertical spacing between messages', default: false },
+                { key: 'showConfidence',    label: 'Confidence scores', sub: 'Show meta-learner confidence % on each message', default: true },
+                { key: 'ambientOrb',        label: 'Ambient orb', sub: 'Emotion-reactive background color in the analysis panel', default: true },
+              ].map(row => {
+                const val = settings[row.key] ?? row.default;
+                return (
+                  <div key={row.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px', cursor: 'pointer' }}
+                    onClick={() => updateSetting(row.key, !val)}
+                    onMouseOver={e => e.currentTarget.style.background = '#f9fafb'}
+                    onMouseOut={e => e.currentTarget.style.background = 'none'}
+                  >
+                    <div>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1c1c2e' }}>{row.label}</div>
+                      <div style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: 2 }}>{row.sub}</div>
+                    </div>
+                    {/* Toggle pill */}
+                    <div style={{ width: 40, height: 22, borderRadius: 11, background: val ? '#6d28d9' : '#e5e7eb', border: `1px solid ${val ? 'rgba(109,40,217,0.60)' : '#d1d5db'}`, position: 'relative', flexShrink: 0, transition: 'all .18s', marginLeft: 16 }}>
+                      <div style={{ position: 'absolute', top: 2, left: val ? 20 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .18s', boxShadow: '0 1px 4px rgba(0,0,0,.20)' }} />
+                    </div>
+                  </div>
+                );
+              })}
+
+              <div style={{ margin: '8px 24px 0', padding: '12px 0 0', borderTop: '1px solid #efefef' }}>
+                <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#9ca3af', letterSpacing: '.08em', marginBottom: 8 }}>PIPELINE</div>
+                {[
+                  { key: 'pipelineVerbose', label: 'Verbose model labels', sub: 'Show VADER / BERT / GoE labels in the analysis panel', default: false },
+                  { key: 'showTrajectory',  label: 'Trajectory prediction', sub: 'Display LSTM next-emotion forecast in the analysis panel', default: true },
+                ].map(row => {
+                  const val = settings[row.key] ?? row.default;
+                  return (
+                    <div key={row.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', cursor: 'pointer' }}
+                      onClick={() => updateSetting(row.key, !val)}
+                      onMouseOver={e => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseOut={e => e.currentTarget.style.background = 'none'}
+                    >
+                      <div>
+                        <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1c1c2e' }}>{row.label}</div>
+                        <div style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: 2 }}>{row.sub}</div>
+                      </div>
+                      <div style={{ width: 40, height: 22, borderRadius: 11, background: val ? '#6d28d9' : '#e5e7eb', border: `1px solid ${val ? 'rgba(109,40,217,0.60)' : '#d1d5db'}`, position: 'relative', flexShrink: 0, transition: 'all .18s', marginLeft: 16 }}>
+                        <div style={{ position: 'absolute', top: 2, left: val ? 20 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .18s', boxShadow: '0 1px 4px rgba(0,0,0,.20)' }} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+      </AnimatePresence>
+
+      {/* ── Left Sidebar ─────────────────────────────────────────────────── */}
+      <div style={{ width: 320, borderRight: '1px solid #efefef', display: 'flex', flexDirection: 'column', background: '#ffffff', flexShrink: 0 }}>
+
         {/* Header */}
-        <div style={{ padding: '20px 20px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div
-            style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', position: 'relative' }}
+        <div style={{ padding: '18px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div ref={profileMenuRef} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', position: 'relative' }}
             onClick={() => setShowProfileMenu(p => !p)}
           >
-            <span style={{ fontWeight: 800, fontSize: '1.05rem', color: '#e0e0e0' }}>{currentUser?.display_name}</span>
-            <svg width="14" height="14" fill="none" stroke="#e0e0e0" strokeWidth="2.5" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
+            <Avatar name={currentUser?.display_name} size={32} rgb="91,138,106" />
+            <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#1c1c2e' }}>{currentUser?.display_name}</span>
+            <svg width="12" height="12" fill="none" stroke="#6b7280" strokeWidth="2.5" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
 
+            <AnimatePresence>
             {showProfileMenu && (
-              <div
-                style={{ position: 'absolute', top: '100%', left: 0, zIndex: 100, background: dark ? '#1e1e2d' : '#fff', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.14)', border: dark ? '1px solid #333' : '1px solid rgba(0,0,0,.07)', overflow: 'hidden', marginTop: 8, animation: 'igModalIn .18s ease both' }}
+              <motion.div
+                key="profile-menu"
+                initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -4, scale: 0.97 }}
+                transition={{ type: 'spring', stiffness: 420, damping: 28 }}
                 onClick={e => e.stopPropagation()}
+                style={{ position: 'absolute', top: '110%', left: 0, zIndex: 100, background: '#fff', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.14)', border: '1px solid rgba(0,0,0,.07)', overflow: 'hidden' }}
               >
-                <div style={{ padding: '14px 18px', borderBottom: dark ? '1px solid #333' : '1px solid #f0f0f0' }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.9rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{currentUser?.display_name}</div>
-                  <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginTop: 2 }}>{currentUser?.email}</div>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.07)' }}>
+                  <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#1c1c2e' }}>{currentUser?.display_name}</div>
+                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{currentUser?.email}</div>
                   {currentUser?.role === 'admin' && (
-                    <span style={{ display: 'inline-block', marginTop: 4, background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#fff', fontSize: '0.65rem', fontWeight: 700, padding: '2px 8px', borderRadius: 6, letterSpacing: '.06em' }}>ADMIN</span>
+                    <span style={{ display: 'inline-block', marginTop: 4, background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#fff', fontSize: '0.60rem', fontWeight: 700, padding: '2px 7px', borderRadius: 5, letterSpacing: '.06em' }}>ADMIN</span>
                   )}
                 </div>
-                <button onClick={() => { setShowProfileMenu(false); onGoToAnalytics(); }}
-                  style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
-                  onMouseOver={e => e.currentTarget.style.background = '#f8f9fa'}
-                  onMouseOut={e => e.currentTarget.style.background = 'none'}
-                >
-                  <span>✨</span> Analytics
-                </button>
-                {onGoToLiveAnalytics && (
-                  <button onClick={() => { setShowProfileMenu(false); onGoToLiveAnalytics(); }}
-                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
-                    onMouseOver={e => e.currentTarget.style.background = '#f8f9fa'}
+                {[
+                  { label: 'Analytics',       icon: '✨', action: () => { setShowProfileMenu(false); onGoToAnalytics(); } },
+                  onGoToLiveAnalytics && { label: 'Live Analytics', icon: '📊', action: () => { setShowProfileMenu(false); onGoToLiveAnalytics(); } },
+                  currentUser?.role === 'admin' && { label: 'Pipeline Inspector', icon: '🔬', action: () => { setShowProfileMenu(false); onGoToAdmin(); }, color: '#7c3aed' },
+                ].filter(Boolean).map(item => (
+                  <button key={item.label} onClick={item.action}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', textAlign: 'left', fontSize: '0.88rem', color: item.color || '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
+                    onMouseOver={e => e.currentTarget.style.background = '#f3f4f6'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
-                  >
-                    <span>📊</span> Live Analytics
-                  </button>
-                )}
-                {currentUser?.role === 'admin' && (
-                  <button onClick={() => { setShowProfileMenu(false); onGoToAdmin(); }}
-                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 10 }}
-                    onMouseOver={e => e.currentTarget.style.background = '#f5f3ff'}
-                    onMouseOut={e => e.currentTarget.style.background = 'none'}
-                  >
-                    <span>🔬</span> Pipeline Inspector
-                  </button>
-                )}
-                <div style={{ borderTop: '1px solid #f0f0f0' }}>
+                  >{item.icon} {item.label}</button>
+                ))}
+                <div style={{ borderTop: '1px solid rgba(0,0,0,0.07)' }}>
                   <button onClick={onLogout}
-                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '11px 18px', textAlign: 'left', fontSize: '0.9rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: 10 }}
-                    onMouseOver={e => e.currentTarget.style.background = '#fff5f5'}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', textAlign: 'left', fontSize: '0.88rem', color: '#dc2626', display: 'flex', alignItems: 'center', gap: 10 }}
+                    onMouseOver={e => e.currentTarget.style.background = '#fef2f2'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
-                  >
-                    <span>→</span> Log out
-                  </button>
+                  >→ Log out</button>
                 </div>
-              </div>
+              </motion.div>
             )}
+            </AnimatePresence>
           </div>
 
-          <button onClick={() => { setShowCompose(true); setShowProfileMenu(false); }}
-            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 8, borderRadius: 10, transition: 'background .12s', display: 'flex', alignItems: 'center' }}
-            title="New Message"
-            onMouseOver={e => e.currentTarget.style.background = '#f3f4f6'}
-            onMouseOut={e => e.currentTarget.style.background = 'none'}
-          >
-            <svg width="22" height="22" fill="none" stroke="#1c1c2e" strokeWidth="2" viewBox="0 0 24 24">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-            </svg>
-          </button>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <button onClick={() => setShowCompose(true)} title="New Message"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: '#6b7280', transition: 'all .12s' }}
+              onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+            >
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <button onClick={() => setShowGroupModal(true)} title="New Group"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: '#6b7280', transition: 'all .12s' }}
+              onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+            >
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </button>
+            <button onClick={() => setShowSettings(true)} title="Settings"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: '#6b7280', transition: 'all .12s' }}
+              onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+            >
+              <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+          </div>
         </div>
 
         {/* Search */}
-        <div style={{ padding: '0 16px 12px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,255,255,0.06)', borderRadius: 12, padding: '10px 14px' }}>
-            <svg width="15" height="15" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <div style={{ padding: '0 12px 10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f3f4f6', borderRadius: 10, padding: '8px 12px' }}>
+            <svg width="14" height="14" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)}
-              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.92rem', color: '#e0e0e0', flex: 1 }}
-            />
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.88rem', color: '#1c1c2e', flex: 1 }} />
           </div>
         </div>
 
-        {/* Section label + WS status */}
-        <div style={{ padding: '0 20px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#c0c0d0' }}>Messages</span>
-          <span style={{ fontSize: '0.78rem', color: status === 'Live' ? '#22c55e' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 500 }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: status === 'Live' ? '#22c55e' : '#d1d5db', display: 'inline-block', boxShadow: status === 'Live' ? '0 0 5px #22c55e' : 'none' }} />
+        {/* Status */}
+        <div style={{ padding: '0 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <span style={{ fontWeight: 700, fontSize: '0.75rem', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.08em' }}>Conversations</span>
+          <span style={{ fontSize: '0.72rem', color: status === 'Live' ? '#16a34a' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: status === 'Live' ? '#16a34a' : '#9ca3af', display: 'inline-block' }} />
             {status}
           </span>
         </div>
@@ -943,307 +1282,300 @@ export default function IGDashboard({
         {/* Conversation list */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {filteredConvs.length === 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', gap: 12, color: '#9ca3af' }}>
-              <div style={{ width: 56, height: 56, borderRadius: '50%', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.5rem' }}>💬</div>
-              <p style={{ margin: 0, fontSize: '0.9rem', textAlign: 'center' }}>No conversations yet.</p>
-              <button onClick={() => setShowCompose(true)} style={{ background: '#0077ff', color: '#fff', border: 'none', borderRadius: 10, padding: '10px 20px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>
-                Send a message
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', gap: 10, color: '#9ca3af' }}>
+              <div style={{ fontSize: '1.8rem', opacity: 0.4 }}>💬</div>
+              <p style={{ margin: 0, fontSize: '0.85rem', textAlign: 'center' }}>No conversations yet.</p>
+              <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 18px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
+                Start chatting
               </button>
             </div>
           )}
-
           {filteredConvs.map(conv => {
             const rgb      = emotionRgb(conv.dominant_emotion);
             const isActive = conv.conversation_id === activeConversationId;
             const label    = convLabel(conv);
-            const lastMsg  = messages.length > 0 && isActive
-              ? messages[messages.length - 1]?.text
-              : conv.dominant_emotion || 'Start chatting';
-
+            const lastMsg  = messages.length > 0 && isActive ? messages[messages.length - 1]?.text : (conv.dominant_emotion || 'Start chatting');
+            const traj     = conv.trajectory_direction;
             return (
-              <button key={conv.conversation_id}
+              <motion.button key={conv.conversation_id}
+                layout
                 onClick={() => { onSelectConversation(conv.conversation_id); setShowProfileMenu(false); }}
+                whileTap={{ scale: 0.98 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 35, layout: { duration: 0.2 } }}
                 style={{
-                  width: '100%', background: isActive ? (dark ? 'rgba(0,119,255,0.12)' : '#f0f6ff') : 'none',
+                  width: '100%', background: isActive ? 'rgba(109,40,217,0.07)' : 'none',
                   border: 'none', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', gap: 12,
-                  padding: '10px 16px', transition: 'background .12s', textAlign: 'left',
-                  borderLeft: isActive ? '3px solid #0077ff' : '3px solid transparent',
+                  display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '9px 12px', textAlign: 'left',
+                  borderLeft: `3px solid ${isActive ? '#7c3aed' : 'transparent'}`,
                 }}
-                onMouseOver={e => { if (!isActive) e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.05)' : '#f8f9fa'; }}
+                onMouseOver={e => { if (!isActive) e.currentTarget.style.background = '#f9fafb'; }}
                 onMouseOut={e => { if (!isActive) e.currentTarget.style.background = 'none'; }}
               >
-                <Avatar name={label} size={52} rgb={rgb} online={conv.type !== 'group' && onlineUsers.has(conv.other_user_id)} />
+                <Avatar name={label} size={44} rgb={rgb} online={conv.type !== 'group' && onlineUsers.has(conv.other_user_id)} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.93rem', color: '#e0e0e0' }}>{label}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.90rem', color: '#1c1c2e' }}>{label}</span>
                       {conv.type === 'group' && (
-                        <span style={{ fontSize: '0.65rem', background: dark ? 'rgba(0,119,255,0.15)' : '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6, letterSpacing: '.04em' }}>
-                          GROUP · {conv.member_count || 0}
+                        <span style={{ fontSize: '0.60rem', background: 'rgba(109,40,217,0.08)', color: '#7c3aed', fontWeight: 700, padding: '1px 5px', borderRadius: 5 }}>
+                          {conv.member_count || 0}
                         </span>
                       )}
                     </div>
-                    <span style={{ fontSize: '0.72rem', color: '#9ca3af', flexShrink: 0 }}>{timeAgo(conv.last_message_time || conv.conversation_id)}</span>
+                    <span style={{ fontSize: '0.68rem', color: '#9ca3af', flexShrink: 0 }}>{timeAgo(conv.last_message_time || conv.conversation_id)}</span>
                   </div>
-                  <div style={{ fontSize: '0.82rem', color: '#8b8fa3', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>
-                    {typeof lastMsg === 'string' ? lastMsg : '…'}
-                  </div>
-                  {conv.dominant_emotion && (
-                    <div style={{ display: 'inline-flex', alignItems: 'center', marginTop: 3 }}>
-                      <div style={{ width: 6, height: 6, borderRadius: '50%', background: `rgb(${rgb})`, boxShadow: `0 0 4px rgba(${rgb},.5)` }} />
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
+                    {conv.dominant_emotion && (
+                      <span style={{ width: 5, height: 5, borderRadius: '50%', background: `rgb(${rgb})`, flexShrink: 0, display: 'inline-block' }} />
+                    )}
+                    <div style={{ fontSize: '0.78rem', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                      {typeof lastMsg === 'string' ? lastMsg : '…'}
                     </div>
-                  )}
+                  </div>
                 </div>
-              </button>
+              </motion.button>
             );
           })}
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: 6 }}>
+        <div style={{ padding: '10px 12px', borderTop: '1px solid #efefef' }}>
           <button onClick={() => setShowCompose(true)} style={{
-            flex: 1, background: '#0077ff', color: '#fff', border: 'none',
-            borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 700, fontSize: '0.88rem',
+            width: '100%', background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none',
+            borderRadius: 10, padding: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            boxShadow: '0 4px 16px rgba(0,119,255,.25)', transition: 'opacity .15s, transform .12s',
-          }}
-            onMouseOver={e => { e.currentTarget.style.opacity = '.9'; e.currentTarget.style.transform = 'scale(1.01)'; }}
-            onMouseOut={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = 'scale(1)'; }}
-          >
-            <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            boxShadow: '0 3px 12px rgba(109,40,217,.45)',
+          }}>
+            <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
             New Message
-          </button>
-          <button onClick={() => setShowGroupModal(true)}
-            style={{ background: 'rgba(255,255,255,0.06)', color: '#c0c0c0', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
-            title="New Group Chat"
-            onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.10)'}
-            onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
-          >
-            👥
-          </button>
-          <button onClick={onGoToAnalytics}
-            style={{ background: 'rgba(255,255,255,0.06)', color: '#c0c0c0', border: 'none', borderRadius: 12, padding: '11px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', transition: 'background .12s' }}
-            title="View Insights"
-            onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.10)'}
-            onMouseOut={e => e.currentTarget.style.background = 'rgba(255,255,255,0.06)'}
-          >
-            ◎
           </button>
         </div>
       </div>
 
-      {/* ── Chat Area ─────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+      {/* ── Center: Chat ──────────────────────────────────────────────────── */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative' }}>
+
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
         {!activeConversationId ? (
-          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
-            <div style={{ width: 96, height: 96, borderRadius: '50%', border: dark ? '3px solid #555' : '3px solid #1c1c2e', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.6rem' }}>💬</div>
-            <div style={{ textAlign: 'center' }}>
-              <h2 style={{ margin: '0 0 6px', fontWeight: 700, fontSize: '1.2rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>Your Messages</h2>
-              <p style={{ margin: 0, color: dark ? '#8b8fa3' : '#6b7280', fontSize: '0.9rem' }}>Emotion-aware private messaging — select a conversation to begin.</p>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflowY: 'auto', padding: '32px 24px' }}>
+            {/* Hero */}
+            <div style={{ textAlign: 'center', marginBottom: 36 }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(109,40,217,0.06)', border: '1px solid rgba(109,40,217,0.15)', borderRadius: 99, padding: '4px 14px', marginBottom: 18 }}>
+                <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16a34a', animation: 'pulse 2s ease infinite' }} />
+                <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#7c3aed', letterSpacing: '.08em', textTransform: 'uppercase' }}>Pipeline Active</span>
+              </div>
+              <h2 style={{ margin: '0 0 10px', fontSize: '1.6rem', fontWeight: 800, color: '#1c1c2e', letterSpacing: '-0.02em' }}>Emotion intelligence, live.</h2>
+              <p style={{ margin: '0 0 24px', fontSize: '0.90rem', color: '#6b7280', maxWidth: 400, lineHeight: 1.6 }}>
+                Select a conversation or start a new one. Every message flows through 4 parallel ML models in under a second.
+              </p>
+              <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 12, padding: '12px 32px', cursor: 'pointer', fontWeight: 700, fontSize: '0.92rem', boxShadow: '0 4px 20px rgba(109,40,217,0.30)', transition: 'all .2s', fontFamily: 'inherit' }}>
+                New Conversation →
+              </button>
             </div>
-            <button onClick={() => setShowCompose(true)} style={{ background: '#0077ff', color: '#fff', border: 'none', borderRadius: 12, padding: '11px 28px', cursor: 'pointer', fontWeight: 700, fontSize: '0.93rem', boxShadow: '0 4px 16px rgba(0,119,255,.25)' }}>
-              Send message
-            </button>
+            {/* Feature cards */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, maxWidth: 580, width: '100%' }}>
+              {[
+                { svg: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>, label: 'Emotion Detection', desc: '28 GoEmotions classes + 7 Ekman categories fused by a trained meta-learner', color: '124,58,237' },
+                { svg: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>, label: 'Trajectory LSTM', desc: 'Predicts where your conversation is headed emotionally — 12-message lookahead', color: '37,99,235' },
+                { svg: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/></svg>, label: 'CDM · 15 States', desc: 'Tension, Empathy, Conflict, Humor — Hidden Markov Machine tracks it all', color: '22,163,74' },
+                { svg: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" viewBox="0 0 24 24"><rect x="2" y="7" width="6" height="10" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/><rect x="16" y="5" width="6" height="14" rx="1"/></svg>, label: 'VAD + Sarcasm', desc: 'Valence/Arousal/Dominance + real-time sarcasm classifier per message', color: '217,119,6' },
+              ].map((f, i) => (
+                <div key={i} style={{ background: '#f9fafb', border: '1px solid #efefef', borderRadius: 16, padding: '18px 16px', transition: 'all .25s', cursor: 'default' }}>
+                  <div style={{ width: 34, height: 34, borderRadius: 10, background: `rgba(${f.color},0.08)`, border: `1px solid rgba(${f.color},0.14)`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10, color: `rgb(${f.color})` }}>{f.svg}</div>
+                  <div style={{ fontSize: '0.78rem', fontWeight: 700, color: `rgb(${f.color})`, marginBottom: 4 }}>{f.label}</div>
+                  <div style={{ fontSize: '0.72rem', color: '#6b7280', lineHeight: 1.55 }}>{f.desc}</div>
+                </div>
+              ))}
+            </div>
+            {/* Pipeline strip */}
+            <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 0, flexWrap: 'wrap', justifyContent: 'center' }}>
+              {['VADER', '→', 'BERT', '→', 'GoE', '→', 'Context', '→', 'Meta'].map((n, i) => (
+                <span key={i} style={{ fontSize: '0.65rem', fontWeight: n === '→' ? 400 : 700, color: n === '→' ? '#d1d5db' : '#6b7280', padding: n === '→' ? '0 4px' : '3px 8px', background: n === '→' ? 'none' : '#f3f4f6', borderRadius: 6, letterSpacing: '.04em' }}>{n}</span>
+              ))}
+              <span style={{ marginLeft: 8, fontSize: '0.60rem', color: '#9ca3af' }}>· 116 features · &lt; 1s</span>
+            </div>
           </div>
         ) : (
           <>
             {/* Chat header */}
-            <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: 'rgba(6,6,15,0.70)', position: 'sticky', top: 0, zIndex: 10, backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                <Avatar name={activeLabel} size={42} rgb={activeRgb} online={!isGroup && onlineUsers.has(activeConv?.other_user_id)} />
+            <div style={{ position: 'relative', borderBottom: '1px solid #efefef', flexShrink: 0, background: '#ffffff' }}>
+            <div style={{ padding: '11px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <Avatar name={activeLabel} size={38} rgb={activeRgb} online={!isGroup && onlineUsers.has(activeConv?.other_user_id)} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#e0e0e0', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 5 }}>
                     {activeLabel}
-                    {isGroup && (
-                      <span style={{ fontSize: '0.65rem', background: '#f0f6ff', color: '#0077ff', fontWeight: 700, padding: '1px 6px', borderRadius: 6 }}>
-                        GROUP · {activeConv?.member_count || 0}
-                      </span>
-                    )}
+                    {isGroup && <span style={{ fontSize: '0.60rem', background: 'rgba(109,40,217,0.08)', color: '#7c3aed', fontWeight: 700, padding: '1px 6px', borderRadius: 5 }}>GROUP · {activeConv?.member_count || 0}</span>}
                   </div>
-                  {!isGroup && onlineUsers.has(activeConv?.other_user_id) ? (
-                    <div style={{ fontSize: '0.73rem', color: '#22c55e' }}>Active now</div>
-                  ) : (
-                    <div style={{ fontSize: '0.73rem', color: '#9ca3af' }}>{isGroup ? 'Group chat' : 'Offline'}</div>
-                  )}
+                  <div style={{ fontSize: '0.70rem', color: !isGroup && onlineUsers.has(activeConv?.other_user_id) ? '#16a34a' : '#9ca3af' }}>
+                    {!isGroup && onlineUsers.has(activeConv?.other_user_id) ? 'Active now' : isGroup ? 'Group chat' : 'Offline'}
+                  </div>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
                 {isGroup && (
-                  <button onClick={() => setMemberPanelOpen(p => !p)}
-                    title="Manage members"
-                    style={{ background: memberPanelOpen ? '#f0f6ff' : 'none', border: `1px solid ${memberPanelOpen ? '#0077ff' : 'rgba(0,0,0,.10)'}`, borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.75rem', color: memberPanelOpen ? '#0077ff' : '#6b7280', fontWeight: 500, transition: 'all .15s' }}>
+                  <button onClick={() => setMemberPanelOpen(p => !p)} title="Manage members"
+                    style={{ background: memberPanelOpen ? 'rgba(109,40,217,0.08)' : 'none', border: `1px solid ${memberPanelOpen ? 'rgba(109,40,217,.30)' : '#efefef'}`, borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.72rem', color: memberPanelOpen ? '#7c3aed' : '#6b7280', fontWeight: 500, transition: 'all .15s' }}>
                     👥 Members
                   </button>
                 )}
-
                 {socketRef && onDemoStart && (
-                  <DemoRunner
-                    currentUser={currentUser}
-                    socketRef={socketRef}
-                    onDemoStart={onDemoStart}
-                  />
+                  <DemoRunner currentUser={currentUser} socketRef={socketRef} onDemoStart={onDemoStart} />
                 )}
-
                 {onInjectDemo && (
                   <button
-                    onClick={() => {
-                      const demos = buildDemoMessages(currentUser.display_name, activeLabel || 'Other');
-                      onInjectDemo(demos);
-                    }}
-                    title="Inject demo conversation with pre-built ML analysis"
-                    style={{ background: 'rgba(0,0,0,.04)', border: '1px solid rgba(0,0,0,.08)', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.70rem', color: '#9ca3af', fontWeight: 500, transition: 'background .12s, color .12s' }}
-                    onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#374151'; }}
-                    onMouseOut={e => { e.currentTarget.style.background = 'rgba(0,0,0,.04)'; e.currentTarget.style.color = '#9ca3af'; }}
-                  >
-                    ⚗ Demo
-                  </button>
+                    onClick={() => onInjectDemo(buildDemoMessages(currentUser.display_name, activeLabel || 'Other'))}
+                    title="Inject demo conversation"
+                    style={{ background: 'none', border: '1px solid #efefef', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.70rem', color: '#6b7280', fontWeight: 500, transition: 'all .12s' }}
+                    onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+                  >⚗ Demo</button>
                 )}
-
-                <button
-                  onClick={() => { setInsightsPanelOpen(p => !p); setSelectedMsg(null); }}
-                  title={insightsPanelOpen ? 'Hide pipeline panel' : 'Show pipeline panel'}
-                  style={{
-                    background: insightsPanelOpen ? (dark ? 'rgba(88,86,214,.15)' : '#f0f0ff') : 'none',
-                    border: `1px solid ${insightsPanelOpen ? 'rgba(88,86,214,.30)' : (dark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.10)')}`,
-                    borderRadius: 8, padding: '5px 10px', cursor: 'pointer',
-                    fontSize: '0.75rem', fontWeight: 500, transition: 'all .15s',
-                    color: insightsPanelOpen ? '#4f46e5' : (dark ? '#c0c0c0' : '#6b7280'),
-                  }}
+                <button onClick={onGoToAnalytics} title="Analytics"
+                  style={{ background: 'none', border: 'none', borderRadius: 8, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', transition: 'all .12s' }}
+                  onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+                  onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
                 >
-                  Pipeline
+                  <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 </button>
-                <button onClick={onGoToAnalytics} title="View Analytics"
-                  style={{ background: 'none', border: 'none', borderRadius: 10, width: 38, height: 38, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: dark ? '#c0c0c0' : '#1c1c2e', transition: 'background .12s' }}
-                  onMouseOver={e => e.currentTarget.style.background = dark ? 'rgba(255,255,255,0.05)' : '#f3f4f6'}
-                  onMouseOut={e => e.currentTarget.style.background = 'none'}
+                <button onClick={() => setRightPanelOpen(p => !p)} title="Toggle analysis panel"
+                  style={{ background: rightPanelOpen ? 'rgba(109,40,217,0.08)' : 'none', border: 'none', borderRadius: 8, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: rightPanelOpen ? '#7c3aed' : '#6b7280', transition: 'all .12s' }}
+                  onMouseOver={e => { e.currentTarget.style.background = rightPanelOpen ? 'rgba(109,40,217,0.12)' : '#f3f4f6'; }}
+                  onMouseOut={e => { e.currentTarget.style.background = rightPanelOpen ? 'rgba(109,40,217,0.08)' : 'none'; }}
                 >
-                  <svg width="22" height="22" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                  <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
                 </button>
               </div>
             </div>
-
-            {/* Member panel for groups */}
-            {isGroup && memberPanelOpen && (
-              <div style={{ borderBottom: dark ? '1px solid #2a2a35' : '1px solid #efefef', padding: '12px 20px', background: dark ? '#1a1a28' : '#fafafa', maxHeight: 220, overflowY: 'auto' }}>
-                <div style={{ fontWeight: 600, fontSize: '0.82rem', color: dark ? '#8b8fa3' : '#6b7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>
-                  Members ({activeConv?.member_count || 0})
+            {/* Emotion color strip — 2px bar that pulses with dominant emotion */}
+            {currentAnalysis?.data && (() => {
+              const d = currentAnalysis.data;
+              const eRgb = EmotionPalette[d.final_dominant_emotion?.toLowerCase()] || EmotionPalette.neutral;
+              const conf = d.meta_confidence ?? 0;
+              return (
+                <div style={{ height: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
+                  <div style={{ height: '100%', width: `${conf * 100}%`, background: `rgba(${eRgb},0.70)`, transition: 'width .8s ease, background .6s ease', boxShadow: `0 0 8px rgba(${eRgb},0.60)` }} />
                 </div>
+              );
+            })()}
+            </div>
+
+            {/* Member panel */}
+            {isGroup && memberPanelOpen && (
+              <div style={{ borderBottom: '1px solid #efefef', padding: '12px 18px', background: '#f9fafb', maxHeight: 200, overflowY: 'auto', flexShrink: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.72rem', color: '#9ca3af', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>Members ({activeConv?.member_count || 0})</div>
                 {(activeConv?.members || []).map(m => {
-                  const isMe      = m.user_id === currentUser?.user_id;
-                  const isOwner   = m.user_id === activeConv?.creator_user_id;
+                  const isMe    = m.user_id === currentUser?.user_id;
+                  const isOwner = m.user_id === activeConv?.creator_user_id;
                   return (
-                    <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-                      <Avatar name={m.display_name} size={28} rgb="0,119,255" online={onlineUsers.has(m.user_id)} />
-                      <span style={{ flex: 1, fontSize: '0.88rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>{m.display_name}{isMe ? ' (you)' : ''}</span>
-                      {isOwner && <span style={{ fontSize: '0.65rem', background: dark ? 'rgba(217,119,6,0.15)' : '#fef3c7', color: '#d97706', padding: '1px 6px', borderRadius: 6, fontWeight: 700 }}>★ Creator</span>}
+                    <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+                      <Avatar name={m.display_name} size={26} rgb="91,138,106" online={onlineUsers.has(m.user_id)} />
+                      <span style={{ flex: 1, fontSize: '0.85rem', color: '#1c1c2e' }}>{m.display_name}{isMe ? ' (you)' : ''}</span>
+                      {isOwner && <span style={{ fontSize: '0.60rem', color: '#d97706', fontWeight: 700 }}>★</span>}
                       {isCreator && !isMe && (
                         <button onClick={() => handleRemoveMember(m.user_id)}
-                          style={{ background: 'none', border: '1px solid #fca5a5', borderRadius: 6, padding: '2px 8px', cursor: 'pointer', fontSize: '0.72rem', color: '#ef4444', transition: 'background .12s' }}
-                          onMouseOver={e => e.currentTarget.style.background = dark ? 'rgba(239,68,68,0.1)' : '#fff5f5'}
-                          onMouseOut={e => e.currentTarget.style.background = 'none'}
+                          style={{ background: 'none', border: '1px solid rgba(220,38,38,0.20)', borderRadius: 5, padding: '2px 7px', cursor: 'pointer', fontSize: '0.68rem', color: '#dc2626' }}
                         >Remove</button>
                       )}
                     </div>
                   );
                 })}
-
-                {isCreator && (
-                  <div style={{ marginTop: 10, borderTop: dark ? '1px solid #2a2a35' : '1px solid #efefef', paddingTop: 10 }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.78rem', color: '#9ca3af', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '.05em' }}>Add member</div>
-                    {globalUsers
-                      .filter(u => !(activeConv?.members || []).some(m => m.user_id === u.user_id))
-                      .map(u => (
-                        <button key={u.user_id} onClick={() => handleAddMember(u.user_id)}
-                          style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', padding: '5px 0', cursor: 'pointer', textAlign: 'left' }}
-                          onMouseOver={e => e.currentTarget.style.opacity = '0.7'}
-                          onMouseOut={e => e.currentTarget.style.opacity = '1'}
-                        >
-                          <Avatar name={u.display_name} size={22} rgb="0,119,255" />
-                          <span style={{ fontSize: '0.85rem', color: dark ? '#c0c0c0' : '#374151' }}>{u.display_name}</span>
-                          <span style={{ fontSize: '0.72rem', color: '#0077ff', marginLeft: 'auto', fontWeight: 600 }}>+ Add</span>
-                        </button>
-                      ))
-                    }
-                  </div>
-                )}
-                {memberError && <div style={{ fontSize: '0.78rem', color: '#ef4444', marginTop: 6 }}>{memberError}</div>}
+                {isCreator && globalUsers.filter(u => !(activeConv?.members || []).some(m => m.user_id === u.user_id)).map(u => (
+                  <button key={u.user_id} onClick={() => handleAddMember(u.user_id)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer', textAlign: 'left' }}
+                  >
+                    <Avatar name={u.display_name} size={22} rgb="91,138,106" />
+                    <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>{u.display_name}</span>
+                    <span style={{ fontSize: '0.70rem', color: '#7c3aed', marginLeft: 'auto', fontWeight: 600 }}>+ Add</span>
+                  </button>
+                ))}
+                {memberError && <div style={{ fontSize: '0.75rem', color: '#dc2626', marginTop: 5 }}>{memberError}</div>}
               </div>
             )}
 
-            {/* Mood arc wave */}
-            <ValenceSparkline messages={messages} />
-
             {/* Messages */}
-            <div ref={messagesContainerRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '20px 32px', display: 'flex', flexDirection: 'column', gap: 4, background: 'transparent' }}>
+            <div
+              ref={messagesContainerRef}
+              style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 4 }}
+            >
               {messages.length === 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 12, color: '#9ca3af' }}>
-                  <Avatar name={activeLabel} size={72} rgb={activeRgb} />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
+                  <div style={{ position: 'relative' }}>
+                    <div style={{ position: 'absolute', inset: -10, borderRadius: '50%', background: `rgba(${activeRgb},0.06)`, animation: 'pulseGlow 2.5s ease infinite' }} />
+                    <Avatar name={activeLabel} size={72} rgb={activeRgb} />
+                  </div>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: '#e0e0e0', marginBottom: 4 }}>{activeLabel}</div>
-                    <div style={{ fontSize: '0.83rem', color: '#9ca3af' }}>Say hi and start the conversation</div>
+                    <div style={{ fontWeight: 800, fontSize: '1.0rem', color: '#1c1c2e', marginBottom: 5 }}>{activeLabel}</div>
+                    <div style={{ fontSize: '0.78rem', color: '#6b7280', lineHeight: 1.6 }}>
+                      Say hello and start the conversation.<br />
+                      <span style={{ color: '#7c3aed' }}>Every message gets full emotion analysis.</span>
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                    {['👋', '😊', '❤️'].map((em, i) => (
+                      <button key={i} onClick={() => { if (onSend && inputValue === em) onSend(); else { setInputValue(em); setTimeout(() => onSend && onSend(), 50); } }}
+                        style={{ background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 12, padding: '8px 14px', cursor: 'pointer', fontSize: '1.1rem', transition: 'all .2s' }}
+                        onMouseOver={e => { e.currentTarget.style.background = 'rgba(109,40,217,0.06)'; e.currentTarget.style.borderColor = 'rgba(109,40,217,0.20)'; }}
+                        onMouseOut={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.borderColor = '#e5e7eb'; }}
+                      >{em}</button>
+                    ))}
                   </div>
                 </div>
               )}
-
               {messages.map((msg, idx) => {
                 const isOwn    = msg.sender === 'user';
                 const prev     = messages[idx - 1];
-                // Show sender name for non-own messages, or always in group chats
                 const showName = !isOwn && (prev?.sender !== 'ai' || idx === 0 || isGroup);
-
                 const isRegen  = regeneratingIds.has(msg.id);
-
                 return (
-                  <div key={msg.id ?? idx} style={{
-                    display: 'flex',
-                    justifyContent: isOwn ? 'flex-end' : 'flex-start',
-                    marginTop: (!prev || prev.sender !== msg.sender) ? 12 : 2,
-                    position: 'relative',
-                  }}>
-                    <div style={{ maxWidth: '70%', display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
-                    {showName && (
-                      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, marginBottom: 2 }}>
-                        <Avatar name={msg.senderName || activeLabel} size={26} rgb={activeRgb} />
-                        <span style={{ fontSize: '0.72rem', color: '#9ca3af', marginBottom: 2 }}>{msg.senderName}</span>
-                      </div>
-                    )}
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: !isOwn && !showName ? 34 : 0 }}>
-                      <MsgBubble
-                        msg={msg}
-                        isOwn={isOwn}
-                        isRegenerating={isRegen}
-                        onClick={(m) => setSelectedMsg(m)}
-                        onDelete={onDeleteMessage}
-                        partialModels={!msg.analysis && msg.sender === 'user' ? partialModels : null}
-                        theme={theme}
-                        dark={dark}
-                      />
-
-                      {msg.analysis && !isRegen && onRegenerateAnalysis && (
-                        <button
-                          onClick={() => onRegenerateAnalysis(msg.id)}
-                          title="Re-run ML pipeline"
-                          style={{ background: 'none', border: '1px solid rgba(0,0,0,.10)', borderRadius: '50%', width: 24, height: 24, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.75rem', color: '#9ca3af', flexShrink: 0, opacity: 0, transition: 'opacity .15s' }}
-                          className="regen-btn"
-                        >↺</button>
+                  <div key={msg.id ?? idx} style={{ display: 'flex', justifyContent: isOwn ? 'flex-end' : 'flex-start', marginTop: (!prev || prev.sender !== msg.sender) ? 10 : 2 }}>
+                    <div style={{ maxWidth: '68%', display: 'flex', flexDirection: 'column', alignItems: isOwn ? 'flex-end' : 'flex-start' }}>
+                      {showName && (
+                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, marginBottom: 2 }}>
+                          <Avatar name={msg.senderName || activeLabel} size={24} rgb={activeRgb} />
+                          <span style={{ fontSize: '0.68rem', color: '#9ca3af', marginBottom: 2 }}>{msg.senderName}</span>
+                        </div>
                       )}
-                    </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: !isOwn && !showName ? 30 : 0 }}>
+                        <MsgBubble
+                          msg={msg} isOwn={isOwn} isRegenerating={isRegen}
+                          onClick={(m) => setSelectedMsg(m)}
+                          onDelete={onDeleteMessage}
+                          partialModels={!msg.analysis && msg.sender === 'user' ? partialModels : null}
+                          theme={theme}
+                        />
+                        {msg.analysis && !isRegen && onRegenerateAnalysis && (
+                          <button onClick={() => onRegenerateAnalysis(msg.id)} title="Re-run pipeline"
+                            style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.70rem', color: '#9ca3af', flexShrink: 0, opacity: 0, transition: 'opacity .15s' }}
+                            className="regen-btn"
+                          >↺</button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 );
               })}
-              <div ref={messagesEndRef} />
             </div>
 
             {/* Crisis alert */}
-            {isCrisis && !crisisDismissed && (
-              <CrisisAlert onDismiss={() => setCrisisDismissed(true)} />
-            )}
+            <AnimatePresence>
+              {isCrisis && !crisisDismissed && (
+                <motion.div
+                  key="crisis"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+                  style={{ overflow: 'hidden' }}
+                >
+                  <CrisisAlert onDismiss={() => setCrisisDismissed(true)} />
+                </motion.div>
+              )}
+            </AnimatePresence>
 
-            {/* Suggested responses (above input) */}
+            {/* Suggested responses */}
             {suggestionEmotion && SUGGESTIONS[suggestionEmotion?.toLowerCase()] && (
               <SuggestedResponses
                 dominant={suggestionEmotion}
@@ -1251,15 +1583,20 @@ export default function IGDashboard({
               />
             )}
 
-            {/* Input bar */}
-            <div style={{ padding: '8px 20px 12px', borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(6,6,15,0.70)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)' }}>
+            {/* Emotional Arc Strip */}
+            <EmotionalArcStrip
+              messages={messages}
+              onSelectMsg={(m) => setSelectedMsg(m)}
+            />
+
+            {/* Input */}
+            <div style={{ padding: '8px 18px 12px', borderTop: '1px solid #efefef', background: '#ffffff', flexShrink: 0 }}>
               <div style={{
-                display: 'flex', alignItems: 'center', gap: 10,
-                border: `1px solid ${dominantRgb ? `rgba(${dominantRgb},.30)` : 'rgba(255,255,255,.10)'}`,
-                borderRadius: 28, padding: '4px 6px 4px 16px',
-                transition: 'border-color .4s',
-                background: dominantRgb ? `rgba(${dominantRgb},0.07)` : 'rgba(255,255,255,0.04)',
-                boxShadow: dominantRgb ? `0 0 20px rgba(${dominantRgb},0.08)` : 'none',
+                display: 'flex', alignItems: 'center', gap: 8,
+                border: `1px solid ${dominantRgb ? `rgba(${dominantRgb},.30)` : '#e5e7eb'}`,
+                borderRadius: 26, padding: '4px 6px 4px 14px',
+                transition: 'border-color .4s, background .4s',
+                background: dominantRgb ? `rgba(${dominantRgb},0.04)` : '#f9fafb',
               }}>
                 <textarea
                   ref={inputRef} rows={1}
@@ -1267,62 +1604,110 @@ export default function IGDashboard({
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
-                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.95rem', color: '#e0e0e0', fontFamily: 'inherit', padding: '9px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.93rem', color: '#1c1c2e', fontFamily: 'inherit', padding: '8px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
                 />
                 {inputValue.trim() ? (
-                  <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', color: '#fff', padding: '8px 16px', borderRadius: 22, flexShrink: 0, boxShadow: '0 2px 12px rgba(99,102,241,0.35)', transition: 'opacity .15s' }}>Send</button>
+                  <motion.button
+                    onClick={onSend}
+                    whileHover={{ scale: 1.05 }}
+                    whileTap={{ scale: 0.90 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+                    style={{ background: 'linear-gradient(135deg,#5b21b6,#6d28d9)', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.82rem', color: '#fff', padding: '8px 16px', borderRadius: 20, flexShrink: 0, boxShadow: '0 3px 12px rgba(109,40,217,.35)' }}
+                  >Send</motion.button>
                 ) : (
-                  <button onClick={() => { setInputValue('❤️'); setTimeout(() => onSend(), 50); }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.4rem', padding: '4px 6px', flexShrink: 0, transition: 'transform .15s' }}
-                    onMouseOver={e => e.currentTarget.style.transform = 'scale(1.2)'}
-                    onMouseOut={e => e.currentTarget.style.transform = 'scale(1)'}
-                  >❤️</button>
+                  <motion.button
+                    onClick={() => { setInputValue('❤️'); setTimeout(() => onSend(), 50); }}
+                    whileTap={{ scale: 1.40 }}
+                    whileHover={{ scale: 1.15 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 18 }}
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.3rem', padding: '4px 6px', flexShrink: 0 }}
+                  >❤️</motion.button>
                 )}
               </div>
             </div>
           </>
         )}
+        </div>{/* end content wrapper */}
       </div>
 
-      {/* ── Right Panel: opens on Pipeline btn or message click ─────── */}
+      {/* ── Right Rail — toggled via header button ────────────────────────── */}
+      <AnimatePresence>
       {activeConversationId && rightPanelOpen && (
-        <div style={{
-          width: 320, borderLeft: '1px solid rgba(255,255,255,0.06)',
-          display: 'flex', flexDirection: 'column',
-          background: 'rgba(6,6,15,0.92)', backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)', flexShrink: 0,
-        }}>
-          {selectedMsg ? (
-            <AnalysisDrawer
-              msg={selectedMsg}
-              onClose={() => setSelectedMsg(null)}
-              onFeedbackSent={() => {}}
-              dark={true}
-            />
-          ) : (
-            <EmotionIntelligencePanel
-              lastAnalysis={currentAnalysis}
-              processing={processing}
-              partialModels={partialModels}
-              messages={messages}
-            />
-          )}
-        </div>
+        <motion.div
+          key="right-rail"
+          initial={{ width: 0, opacity: 0 }}
+          animate={{ width: 300, opacity: 1 }}
+          exit={{ width: 0, opacity: 0 }}
+          transition={{ type: 'spring', stiffness: 340, damping: 32 }}
+          style={{
+            flexShrink: 0, position: 'relative',
+            borderLeft: '1px solid rgba(255,255,255,0.07)',
+            display: 'flex', flexDirection: 'column',
+            background: 'rgb(14,11,32)',
+            overflow: 'hidden',
+          }}
+        >
+          {/* Rail header */}
+          <div style={{ padding: '12px 16px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase', letterSpacing: '.10em' }}>
+              {selectedMsg ? 'Message X-Ray' : 'Emotional Signal'}
+            </span>
+            {selectedMsg && (
+              <button onClick={() => setSelectedMsg(null)}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', color: 'rgba(255,255,255,0.38)', padding: '2px 6px', borderRadius: 5, transition: 'all .12s' }}
+                onMouseOver={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#fff'; }}
+                onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'rgba(255,255,255,0.38)'; }}
+              >← Live</button>
+            )}
+          </div>
+
+          {/* Rail content */}
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            {selectedMsg ? (
+              <AnalysisDrawer
+                msg={selectedMsg}
+                onClose={() => setSelectedMsg(null)}
+                onFeedbackSent={() => {}}
+              />
+            ) : (
+              <LiveAnalysisPanel
+                currentAnalysis={currentAnalysis}
+                processing={processing}
+                partialModels={partialModels}
+                messages={messages}
+              />
+            )}
+          </div>
+        </motion.div>
       )}
+      </AnimatePresence>
 
       <style>{`
         @keyframes igMsgIn {
-          from { opacity:0; transform:translateY(6px) scale(.96); }
+          from { opacity:0; transform:translateY(5px) scale(.97); }
           to   { opacity:1; transform:translateY(0) scale(1); }
         }
         @keyframes igModalIn {
-          from { opacity:0; transform:scale(.94) translateY(8px); }
+          from { opacity:0; transform:scale(.94) translateY(6px); }
           to   { opacity:1; transform:scale(1) translateY(0); }
         }
-        @keyframes regen-spin {
-          to { transform: rotate(360deg); }
+        @keyframes shimmer {
+          0%   { background-position: -200% 0; }
+          100% { background-position:  200% 0; }
+        }
+        @keyframes pulseGlow {
+          0%,100% { opacity:1; }
+          50%      { opacity:.4; }
+        }
+        @keyframes slideUp {
+          from { opacity:0; transform:translateY(8px); }
+          to   { opacity:1; transform:translateY(0); }
         }
         div:hover > div > .regen-btn { opacity: 1 !important; }
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: #f3f4f6; }
+        ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 2px; }
+        ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
       `}</style>
     </div>
   );

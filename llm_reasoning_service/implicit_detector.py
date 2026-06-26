@@ -1,18 +1,3 @@
-"""
-implicit_detector.py — Stage 2: Situation-aware implicit emotion detector.
-
-Four-layer scoring:
-  1. Phrase rules       — exact situational patterns (Stage 1)
-  2. Situation encoder  — COMET-ATOMIC-2020-inspired archetype + modifier scoring (Stage 2)
-  3. Narrative markers  — boosts top emotion when temporal/causal cues are present
-  4. Negation guard     — penalises "not {emotion}" constructions
-
-All 28 GoEmotions labels are covered. Interface is identical to Stage 0.
-
-Returns: {"emotion": str, "confidence": float, "scores": dict, "method": str}
-         or None if no signal fires above MIN_CONFIDENCE.
-"""
-
 from typing import Optional
 import situation_encoder as _SIT
 
@@ -23,9 +8,6 @@ NARRATIVE_BOOST    = 0.06   # added to top emotion when a narrative marker fires
 MAX_NARRATIVE      = 0.12   # hard cap on total narrative boost
 NEGATION_PENALTY   = 0.30   # multiplied on score when negation before emotion word detected
 
-# ── Narrative markers ──────────────────────────────────────────────────────────
-# Presence of these words/phrases anywhere in the text suggests something
-# happened TO the speaker — signal that the sentence is situational.
 _NARRATIVE_MARKERS = [
     "ended up", "turned out", "only to", "only to find", "only to discover",
     "found out", "just found out", "just heard", "just got", "just learned",
@@ -38,16 +20,12 @@ _NARRATIVE_MARKERS = [
     "can't believe", "cannot believe", "i couldn't believe",
 ]
 
-# ── Negation guard ─────────────────────────────────────────────────────────────
-# If any of these appears immediately before an emotion keyword, penalise that
-# emotion's score (e.g. "not embarrassed", "wasn't upset").
 _NEGATION_TOKENS = [
     "not ", "didn't ", "did not ", "isn't ", "is not ", "wasn't ",
     "was not ", "don't ", "do not ", "can't ", "cannot ",
     "never ", "hardly ", "barely ",
 ]
 
-# ── Emotion keyword map (used only for negation guard) ────────────────────────
 _EMO_KEYWORDS: dict[str, list[str]] = {
     "joy":             ["happy", "joy", "excited", "thrilled", "delighted"],
     "sadness":         ["sad", "upset", "down", "depressed", "heartbroken", "crying"],
@@ -78,13 +56,9 @@ _EMO_KEYWORDS: dict[str, list[str]] = {
     "desire":          ["want so badly", "wish i had", "dying for"],
 }
 
-# ── Rule table ────────────────────────────────────────────────────────────────
-# Each entry: (phrases, emotion_label, base_confidence)
-# Longer/more-specific phrases listed first within each group.
-# base_confidence is the score for a single phrase hit.
 _RULES: list[tuple[list[str], str, float]] = [
 
-    # ── Joy / Happiness ───────────────────────────────────────────────────────
+    # Joy / Happiness
     (["they picked me", "i got in", "i got accepted", "i got the job",
       "i start monday", "i start next week", "i got the call",
       "they said yes", "i passed", "we won", "it worked out",
@@ -132,7 +106,7 @@ _RULES: list[tuple[list[str], str, float]] = [
 
     # ── Disappointment ────────────────────────────────────────────────────────
     (["studied for weeks", "studied every night", "worked so hard for",
-      "practiced for", "prepared for months", "got cancelled", "was cancelled",
+      "practiced for months", "practiced for years", "prepared for months", "got cancelled", "was cancelled",
       "got canceled", "was canceled", "all for nothing", "wasted my time",
       "didn't even get", "never happened", "didn't make it through",
       "got rejected", "rejection letter", "they said no",

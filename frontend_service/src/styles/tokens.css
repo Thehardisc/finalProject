@@ -1,86 +1,80 @@
 /* ─────────────────────────────────────────────────────────────────────────────
-   InnerLink Design Tokens — single source of truth for all visual constants.
-   All values in HSL so gradients between emotions are perceptually uniform.
+   InnerLink Design Tokens — Warm Wellness theme
    ───────────────────────────────────────────────────────────────────────────── */
 
 :root {
-  /* ── Emotion palette (HSL) ──────────────────────────────────────────────── */
-  --emo-joy:           52  96%  53%;
-  --emo-excitement:    28  95%  54%;
-  --emo-anger:          2  84%  60%;
-  --emo-annoyance:     22  88%  54%;
-  --emo-fear:         275  58%  56%;
-  --emo-sadness:      215  72%  50%;
-  --emo-grief:        228  70%  26%;
-  --emo-disgust:       30  72%  26%;
-  --emo-disapproval:    2  52%  54%;
-  --emo-remorse:      240  16%  42%;
-  --emo-nervousness:  285  56%  56%;
-  --emo-disappointment:210  44%  46%;
-  --emo-confusion:    238  60%  59%;
-  --emo-surprise:      46  95%  50%;
-  --emo-admiration:   330  72%  64%;
-  --emo-amusement:     43  96%  50%;
-  --emo-curiosity:     46  92%  52%;
-  --emo-caring:       340  72%  74%;
-  --emo-gratitude:    132  68%  58%;
-  --emo-love:         330  90%  54%;
-  --emo-optimism:      46 100%  50%;
-  --emo-pride:        270  74%  52%;
-  --emo-approval:     142  58%  46%;
-  --emo-realization:  198  90%  50%;
-  --emo-relief:       192  52%  74%;
-  --emo-desire:       348  82%  46%;
-  --emo-embarrassment:330  52%  60%;
-  --emo-neutral:      238  30%  58%;
+  /* ── Emotion palette (HSL) — unchanged, work on any background ──────────── */
+  --emo-joy:           52  96%  48%;
+  --emo-excitement:    28  95%  50%;
+  --emo-anger:          2  72%  52%;
+  --emo-annoyance:     22  80%  48%;
+  --emo-fear:         275  50%  50%;
+  --emo-sadness:      215  62%  44%;
+  --emo-grief:        228  60%  30%;
+  --emo-disgust:       30  60%  30%;
+  --emo-disapproval:    2  44%  48%;
+  --emo-remorse:      240  14%  38%;
+  --emo-nervousness:  285  48%  50%;
+  --emo-disappointment:210  38%  42%;
+  --emo-confusion:    238  52%  54%;
+  --emo-surprise:      46  90%  46%;
+  --emo-admiration:   330  62%  58%;
+  --emo-amusement:     43  90%  46%;
+  --emo-curiosity:     46  86%  48%;
+  --emo-caring:       340  62%  62%;
+  --emo-gratitude:    132  58%  46%;
+  --emo-love:         330  80%  50%;
+  --emo-optimism:      46  95%  46%;
+  --emo-pride:        270  64%  48%;
+  --emo-approval:     142  50%  40%;
+  --emo-realization:  198  80%  44%;
+  --emo-relief:       192  44%  56%;
+  --emo-desire:       348  72%  44%;
+  --emo-embarrassment:330  44%  54%;
+  --emo-neutral:      30   16%  54%;
 
   /* ── Ambient orb trajectory ─────────────────────────────────────────────── */
-  --orb-hue-positive: 215;   /* cool blue   — positive valence  */
-  --orb-hue-neutral:  245;   /* indigo      — baseline          */
-  --orb-hue-negative:  28;   /* warm amber  — tension/negative  */
-  --orb-sat:           68%;
-  --orb-lit:           58%;
+  --orb-hue-positive: 145;   /* sage green — positive valence  */
+  --orb-hue-neutral:   40;   /* warm sand  — baseline          */
+  --orb-hue-negative:  15;   /* terracotta — tension/negative  */
+  --orb-sat:           40%;
+  --orb-lit:           70%;
 
-  /* ── Surfaces — dark foundation ─────────────────────────────────────────── */
-  --surface-base:       #0b0d17;
-  --surface-raised:     rgba(255 255 255 / 0.04);
-  --surface-hover:      rgba(255 255 255 / 0.06);
-  --surface-border:     rgba(255 255 255 / 0.07);
-  --surface-border-mid: rgba(255 255 255 / 0.12);
+  /* ── Surfaces — warm cream foundation ───────────────────────────────────── */
+  --surface-base:       #FAF9F6;
+  --surface-raised:     #FFFFFF;
+  --surface-hover:      #F5F3EE;
+  --surface-border:     rgba(0, 0, 0, 0.07);
+  --surface-border-mid: rgba(0, 0, 0, 0.12);
 
   /* ── Text ───────────────────────────────────────────────────────────────── */
-  --text-primary:   #e8eaf2;
-  --text-secondary: #8b8fa8;
-  --text-muted:     #555870;
+  --text-primary:   #1C1B1A;
+  --text-secondary: #6B6560;
+  --text-muted:     #9B958F;
 
   /* ── Brand ──────────────────────────────────────────────────────────────── */
-  --brand-blue:    #0077ff;
-  --brand-purple:  #7000ff;
-  --brand-success: #22c55e;
-  --brand-warn:    #f59e0b;
+  --brand-blue:    #5B8A6A;   /* sage green */
+  --brand-purple:  #B56E4F;   /* terracotta */
+  --brand-success: #3D9B6E;
+  --brand-warn:    #C47B2A;
 
   /* ── Bubble defaults ─────────────────────────────────────────────────────── */
-  --bubble-own-bg:    rgba(0 119 255 / 0.14);
-  --bubble-other-bg:  rgba(255 255 255 / 0.05);
-  --bubble-own-border:  rgba(0 119 255 / 0.28);
-  --bubble-other-border: var(--surface-border);
+  --bubble-own-bg:      rgba(91, 138, 106, 0.10);
+  --bubble-other-bg:    rgba(0, 0, 0, 0.03);
+  --bubble-own-border:  rgba(91, 138, 106, 0.22);
+  --bubble-other-border: rgba(0, 0, 0, 0.08);
 
-  /* ── Glassmorphism ───────────────────────────────────────────────────────── */
-  --glass-blur:   blur(16px) saturate(180%);
-  --glass-bg:     rgba(255 255 255 / 0.05);
-  --glass-border: rgba(255 255 255 / 0.08);
+  /* ── Glass ───────────────────────────────────────────────────────────────── */
+  --glass-blur:   none;
+  --glass-bg:     #FFFFFF;
+  --glass-border: rgba(0, 0, 0, 0.07);
 
   /* ── Animation ───────────────────────────────────────────────────────────── */
   --spring:          cubic-bezier(0.34, 1.56, 0.64, 1);
   --spring-duration: 280ms;
   --ease-out:        cubic-bezier(0.25, 0.46, 0.45, 0.94);
-
-  /* Ambient orb and context-shift use a long ease so the brain processes it
-     as a natural environmental change, not a UI event (Weiser & Brown 1996). */
   --shift-duration:  960ms;
   --shift-easing:    cubic-bezier(0.25, 0.46, 0.45, 0.94);
-
-  /* Entrance animation — spring feel without JS */
   --enter-duration:  260ms;
   --enter-easing:    cubic-bezier(0.34, 1.4, 0.64, 1);
 }

@@ -40,7 +40,6 @@ export const EmotionPalette = {
   // ── Reflective / Cognitive ────────────────────────────────────────────
   realization:  '0,   185, 255',  // Sky Blue
   relief:       '150, 215, 235',  // Pale Cyan
-  curiosity:    '255, 196,  45',  // Already above — alias kept for safety
 
   // ── Low Energy / Melancholic ──────────────────────────────────────────
   sadness:      '0,   122, 255',  // Ocean Blue
@@ -50,7 +49,6 @@ export const EmotionPalette = {
 
   // ── Calm / Baseline ───────────────────────────────────────────────────
   nervousness:  '180,  75, 205',  // Orchid
-  relief:       '150, 215, 235',  // Already above — alias kept
 
   /*
    * Neutral uses deep indigo, NOT gray.

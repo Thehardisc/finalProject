@@ -227,7 +227,15 @@ async def main():
 
 
         except Exception as e:
-            logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)
+            if "NOGROUP" in str(e):
+                logger.warning("NOGROUP error in persistence worker — re-creating consumer groups.")
+                for stream, group in STREAMS.items():
+                    try:
+                        await r.xgroup_create(stream, group, mkstream=True)
+                    except Exception:
+                        pass
+            else:
+                logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
         # R1: exit cleanly after finishing a batch

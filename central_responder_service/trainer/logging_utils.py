@@ -1,7 +1,3 @@
-"""
-trainer/logging_utils.py — HuggingFace logging capture utilities.
-"""
-
 import re
 import sys
 import logging
@@ -11,7 +7,6 @@ logger = get_logger("trainer")
 
 
 def _setup_hf_logging():
-    """Route HuggingFace datasets + transformers logging into our trainer logger."""
     _ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
 
     class _HFHandler(logging.Handler):
@@ -31,7 +26,6 @@ def _setup_hf_logging():
 
 
 class _StderrToLogger:
-    """Context manager: redirect stderr lines to logger.info during downloads."""
     _ANSI = re.compile(r'\x1b\[[0-9;]*[A-Za-z]|\r')
 
     def __init__(self):
