@@ -1,0 +1,33 @@
+/* ── Sarcasm inline icon ────────────────────────────────────────────────── */
+
+.bubble__sarcasm-icon {
+  margin-left: 5px;
+  font-size: 0.68rem;
+  color: rgba(217, 119, 6, 0.80);
+  vertical-align: middle;
+  cursor: help;
+  user-select: none;
+}
+
+/* ── MoodTimeline ───────────────────────────────────────────────────────── */
+
+.mood-timeline {
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 5px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.mood-timeline__seg {
+  flex: 1;
+  min-height: 5px;
+  max-height: 28px;
+  border-radius: 3px;
+  background: rgba(var(--emotion-rgb), 0.60);
+}

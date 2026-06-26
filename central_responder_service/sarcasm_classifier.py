@@ -1,16 +1,3 @@
-"""
-sarcasm_classifier.py — Inference wrapper for binary sarcasm/passive-aggression detection.
-
-Loads:   models/sarcasm_clf.pt
-         models/sarcasm_clf_config.json
-
-Public API (mirrors trajectory/inference.py pattern):
-  load_sarcasm_model(model_path, config_path) -> SarcasmInference | None
-  SarcasmInference.predict(text, context)     -> float [0, 1]
-
-Degrades gracefully: returns 0.0 when model files are absent.
-"""
-
 import json
 import os
 from typing import List, Optional
@@ -34,11 +21,7 @@ def _get_tokenizer(base_model: str):
     return _TOKENIZER
 
 
-# ── Model architecture (must match train_sarcasm_classifier.py) ───────────────
-
 class _SarcasmNet(nn.Module):
-    """DistilBERT [CLS] → Dropout → Linear(768, 1). Outputs raw logit."""
-
     def __init__(self, base_model: str, dropout: float):
         super().__init__()
         from transformers import DistilBertModel
@@ -52,16 +35,7 @@ class _SarcasmNet(nn.Module):
         return self.head(self.drop(cls)).squeeze(-1) # [B]  (logit)
 
 
-# ── Inference wrapper ─────────────────────────────────────────────────────────
-
 class SarcasmInference:
-    """
-    Thin wrapper around _SarcasmNet that handles text building and thresholding.
-
-    context: list of prior message texts, oldest first, up to 3 entries.
-             Matches the window stored by implicit_emotion.store_message_for_history.
-    """
-
     def __init__(
         self,
         model:      _SarcasmNet,
@@ -76,21 +50,11 @@ class SarcasmInference:
 
     @staticmethod
     def _build_text(text: str, context: List[str]) -> str:
-        """Join context + target with [SEP] as boundary. Mirrors training."""
         parts = [c.strip() for c in context if c.strip()]
         parts.append(text.strip())
         return " [SEP] ".join(parts)
 
     def predict(self, text: str, context: Optional[List[str]] = None) -> float:
-        """
-        Return sarcasm probability [0, 1].
-
-        text:    the target message being classified.
-        context: up to 3 prior message texts (oldest first). Pass [] for first message.
-
-        Safe to call from an async handler — forward pass is ~50 ms on CPU;
-        wrap in run_in_executor if stricter latency budget is needed.
-        """
         try:
             input_text = self._build_text(text, context or [])
             enc = self.tokenizer(
@@ -111,13 +75,7 @@ class SarcasmInference:
         return self.predict(text, context) >= self.threshold
 
 
-# ── Loader (mirrors load_trajectory_model) ────────────────────────────────────
-
 def load_sarcasm_model(model_path: str, config_path: str) -> Optional[SarcasmInference]:
-    """
-    Load SarcasmInference from checkpoint files.
-    Returns None (with a warning) if model_path is missing — caller receives 0.0 scores.
-    """
     if not os.path.exists(model_path):
         logger.warning(
             f"Sarcasm model not found at {model_path} — sarcasm_score will be 0.0 "

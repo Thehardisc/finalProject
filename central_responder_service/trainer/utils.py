@@ -1,11 +1,7 @@
-"""
-trainer/utils.py — Reporting, NLP analyser helpers, and data-filtering utilities.
-"""
-
+import os
 import statistics
 from collections import Counter
-
-import os
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -15,8 +11,6 @@ from shared.utils.logger import get_logger
 
 logger = get_logger("trainer")
 
-
-# ── Reporting ───────────────────────────────────────────────────────────────────
 
 def _bar(value: float, width: int = 25) -> str:
     filled = int(value * width)
@@ -55,7 +49,37 @@ def print_report(
     logger.log_stats("Retraining Report", stats)
 
 
-# ── NLP analyser utilities ──────────────────────────────────────────────────────
+_TRAINER_PROTO_SENTENCES = [
+    "I truly admire and respect this person, it is deeply impressive",
+    "This is hilarious and funny, I cannot stop laughing",
+    "I am furious and extremely angry, this enrages me",
+    "This is so annoying and irritating to deal with",
+    "I approve of this decision and think it is the right choice",
+    "I care deeply about this and want to help and support",
+    "I am confused and do not understand what is happening here",
+    "I am curious and want to explore and learn more about this",
+    "I want this so badly and desire it deeply",
+    "I am deeply disappointed and let down by what happened",
+    "I strongly disapprove of this and think it is wrong",
+    "This disgusts me and makes me feel revolted and sick",
+    "I feel embarrassed and ashamed about what occurred",
+    "I am incredibly excited and thrilled, this is amazing",
+    "I am terrified and scared, this fills me with fear and dread",
+    "I am very grateful and thankful for this kindness",
+    "I am overwhelmed with grief and deep sorrow and loss",
+    "I feel joyful and happy, this fills me with pure happiness",
+    "I feel deep love and affection for this person",
+    "I feel nervous and anxious and worried about what might happen",
+    "I feel optimistic and hopeful that things will work out well",
+    "I feel proud of this great achievement and accomplishment",
+    "I just realized something important that I had not noticed before",
+    "I feel such relief that this difficult situation resolved well",
+    "I feel deep remorse and regret for what I said or did",
+    "I feel very sad and melancholy, my heart is heavy with sorrow",
+    "I am completely surprised and shocked by this unexpected event",
+    "This is a normal everyday situation with no particular emotional response",
+]
+
 
 def _get_analyzers(device):
     logger.info("Loading analyzers transiently into RAM...")
@@ -70,13 +94,73 @@ def _get_analyzers(device):
         top_k=None,
         device=device,
     )
-    goe   = hf_pipeline(
+    _finetuned = str(Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")).parent / "samlowe_finetuned")
+    _goe_primary_model = _finetuned if os.path.isdir(_finetuned) else "SamLowe/roberta-base-go_emotions"
+    logger.info(f"Loading GoEmotions primary model ({_goe_primary_model})...")
+    goe_primary = hf_pipeline(
         "text-classification",
-        model="SamLowe/roberta-base-go_emotions",
+        model=_goe_primary_model,
         top_k=None,
         device=device,
     )
-    logger.info("Analyzers fully loaded.")
+    goe_secondary = hf_pipeline(
+        "text-classification",
+        model="bhadresh-savani/bert-base-go-emotion",
+        top_k=None,
+        device=device,
+    )
+
+    # Sentence transformer for semantic NLI blend — same model as goemotions_service
+    logger.info("Loading sentence transformer for semantic NLI (all-MiniLM-L6-v2)...")
+    from sentence_transformers import SentenceTransformer
+    sent_model = SentenceTransformer("all-MiniLM-L6-v2")
+    proto_embs = sent_model.encode(_TRAINER_PROTO_SENTENCES, convert_to_numpy=True)   # [28, 384]
+    proto_norms = np.linalg.norm(proto_embs, axis=1, keepdims=True) + 1e-8
+    proto_norm  = proto_embs / proto_norms                                             # [28, 384]
+
+    # Wrap into an ensemble callable matching the pipeline interface
+    class _GoEEnsemble:
+        def __init__(self):
+            # expose .model.device so _run_parallel_batches MPS-cache check doesn't error
+            self.model = goe_primary.model
+
+        def __call__(self, texts, batch_size=32):
+            if isinstance(texts, str):
+                texts = [texts]
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                f_primary   = pool.submit(goe_primary,   texts, batch_size=batch_size)
+                f_secondary = pool.submit(goe_secondary, texts, batch_size=batch_size)
+                p_out = f_primary.result()
+                s_out = f_secondary.result()
+
+            # Semantic NLI: batch encode all texts, cosine sim to prototypes
+            sent_embs = sent_model.encode(texts, batch_size=batch_size, convert_to_numpy=True)   # [N, 384]
+            e_norms   = np.linalg.norm(sent_embs, axis=1, keepdims=True) + 1e-8
+            sent_norm = sent_embs / e_norms                               # [N, 384]
+            sims      = sent_norm @ proto_norm.T                          # [N, 28]
+            exp_s     = np.exp((sims - sims.max(axis=1, keepdims=True)) * 5.0)
+            sims_prob = exp_s / exp_s.sum(axis=1, keepdims=True)         # [N, 28]
+
+            results = []
+            for idx, (p_item, s_item) in enumerate(zip(p_out, s_out)):
+                p_map   = {r["label"]: r["score"] for r in p_item}
+                s_map   = {r["label"]: r["score"] for r in s_item}
+                sem_map = {e: float(sims_prob[idx, i]) for i, e in enumerate(EMOTION_LABELS)}
+                merged  = {
+                    lbl: 0.55 * p_map.get(lbl, 0.0) + 0.25 * s_map.get(lbl, 0.0) + 0.20 * sem_map.get(lbl, 0.0)
+                    for lbl in set(p_map) | set(s_map) | set(sem_map)
+                }
+                results.append([{"label": k, "score": v} for k, v in merged.items()])
+            return results
+
+        # expose device for GPU-detection logic in _run_parallel_batches
+        @property
+        def device(self):
+            return goe_primary.device
+
+    goe = _GoEEnsemble()
+    logger.info("Analyzers fully loaded (GoEmotions: 55% SamLowe + 25% bhadresh + 20% semantic NLI).")
     return vader, bert, goe
 
 
@@ -93,7 +177,6 @@ def _run(model, text: str) -> dict:
 
 
 def _run_batch(model, texts: list, batch_size: int = 32, label: str = "") -> list:
-    """Run a HuggingFace pipeline on a list of texts in batches. Returns one dict per text."""
     import time as _time
     results = []
     total = len(texts)
@@ -104,8 +187,6 @@ def _run_batch(model, texts: list, batch_size: int = 32, label: str = "") -> lis
     for i in range(0, total, batch_size):
         chunk = [t[:512] for t in texts[i:i + batch_size]]
         try:
-            # Crucial: HF pipeline needs batch_size passed explicitly, otherwise it defaults to 1
-            # and processes the list sequentially even if it's running on a GPU.
             out = model(chunk, batch_size=batch_size)
             for item in out:
                 results.append({r['label']: r['score'] for r in item})
@@ -143,24 +224,11 @@ def _run_parallel_batches(
     vader_analyzer=None,
     batch_size: int = 32, label_prefix: str = "",
 ) -> tuple:
-    """
-    Run BERT and GoEmotions concurrently using threads, with per-100-sample
-    progress logging from each model. VADER runs inline first (it's rule-based
-    and finishes in <1s).
-
-    HuggingFace pipelines release the GIL during the C++/CUDA forward pass,
-    so threading gives near-perfect overlap on CPU and partial overlap on GPU.
-
-    Returns:
-        If vader_analyzer is provided: (vader_results, bert_results, goe_results)
-        Otherwise: (bert_results, goe_results)
-    """
     import time as _time
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     total = len(texts)
 
-    # ── VADER: run inline (rule-based, <1s for 20k texts) ─────────────────
     vader_results = None
     if vader_analyzer:
         t_v = _time.time()
@@ -177,7 +245,6 @@ def _run_parallel_batches(
             f"({v_speed:.0f} samples/s)"
         )
 
-    # ── BERT + GoEmotions: run in parallel with progress logging ──────────
     logger.info(
         f"  [{label_prefix}] Running BERT + GoEmotions in parallel — "
         f"{total} texts, batch_size={batch_size}"
@@ -191,7 +258,6 @@ def _run_parallel_batches(
         for i in range(0, total, batch_size):
             chunk = [t[:512] for t in texts[i:i + batch_size]]
             try:
-                # Crucial: HF pipeline needs batch_size explicitly passed!
                 out = model(chunk, batch_size=batch_size)
                 for item in out:
                     results.append({r['label']: r['score'] for r in item})
@@ -228,7 +294,6 @@ def _run_parallel_batches(
     bert_results = None
     goe_results  = None
 
-    # Check if GPU is used. If not CPU, run sequentially to avoid stream contention.
     is_gpu = bert_model.device.type != "cpu"
 
     if is_gpu:
@@ -265,10 +330,7 @@ def _run_parallel_batches(
     return bert_results, goe_results
 
 
-# ── Data filtering ──────────────────────────────────────────────────────────────
-
 def filter_outliers(X: list, y: list, goe_list: list, has_cdm: list = None):
-    """Drop samples where GoEmotions gives < 5% confidence to the gold label."""
     cX, cy, cdm, removed = [], [], [], 0
     for i, (fv, label, goe) in enumerate(zip(X, y, goe_list)):
         if label not in EMOTION_LABELS or goe.get(label, 0.0) < 0.05:
@@ -282,7 +344,6 @@ def filter_outliers(X: list, y: list, goe_list: list, has_cdm: list = None):
 
 
 def filter_balance(X: list, y: list, has_cdm: list = None):
-    """Cap any class at 3× the median class count."""
     if not y:
         return (X, y, has_cdm) if has_cdm is not None else (X, y)
     counts = Counter(y)

@@ -5,7 +5,7 @@ Input:  GoE history window [B, N, 28] — last N real GoE distributions (oldest 
 Output: prior [B, 28] Softmax, phase_logits [B, 6]
 
 prior is stored at trajectory:{conv_id}:prior and consumed by meta_learner.py
-as feature vector slot [79:107].  FEATURE_DIM=107 and the slot width are unchanged.
+as feature vector slot [82:110].  FEATURE_DIM=116 and the slot width are unchanged.
 """
 
 import torch

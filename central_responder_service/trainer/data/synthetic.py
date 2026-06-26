@@ -1,7 +1,3 @@
-"""
-trainer/data/synthetic.py — Synthetic context vector generation and sentence loading.
-"""
-
 import json
 import os
 import pickle
@@ -12,6 +8,7 @@ import numpy as np
 
 from shared.constants import (
     EMOTION_LABELS, FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, N_CDM_STATES,
+    SARCASM_DIM, DYNAMICS_DIM, APPRAISAL_DIM,
 )
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
@@ -21,7 +18,14 @@ logger = get_logger("trainer")
 
 MODEL_PATH = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"))
 
-# ── Label → likely CDM intent state (primary, secondary, tertiary) ───────────────
+_SYNTHETIC_SYSTEM_PROMPT = (
+    "You generate first-person situational sentences for emotion classification training data. "
+    "Style: EmpatheticDialogues 'situation' field — 1-2 sentences describing a real-life context "
+    "where someone feels a given emotion. "
+    "Vary the settings: work, relationships, hobbies, discovery, everyday moments. "
+    "Output one situation per line. No numbering, no bullets, no preamble."
+)
+
 _LABEL_TO_INTENT: dict = {
     'admiration':     (2,  14,  1),
     'amusement':      (4,  10,  0),
@@ -59,7 +63,6 @@ _STRONG_LABELS = frozenset({
     'disgust', 'gratitude', 'pride', 'remorse', 'sadness', 'excitement',
 })
 
-# ── Approximate valence baselines for synthetic context generation ──────────────
 _LABEL_BASE_VALENCE: dict = {
     'admiration':    0.62,  'amusement':      0.68,  'approval':    0.52,
     'caring':        0.58,  'curiosity':      0.18,  'desire':      0.42,
@@ -78,29 +81,11 @@ def build_synthetic_context_vector(
     label: str = None,
     mode: str = "train",
 ) -> list:
-    """
-    Generate a synthetic context vector for static dataset samples.
-
-    The critical invariant: valence-related features are label-correlated but
-    NOT deterministically derived from the label.  Three mechanisms enforce this:
-
-      1. Gaussian noise  σ=0.35 on all valence scalars — SNR ≈ 1.8:1 for
-         strong emotions (e.g. joy base=0.82, noise keeps [-0.2, 1.8] → clipped)
-      2. Adversarial flip (25% chance) — injects the wrong polarity to force
-         the network to treat context as a soft prior, not a cheat sheet
-      3. Per-feature dropout (15%) — simulates missing sensors / cold starts
-
-    Modes:
-      "train"  — full augmentation (items 1–3 above)
-      "val"    — moderate noise only (σ=0.20, no adversarial flip)
-      "cold"   — all zeros (for live SQL data with no conversation history)
-    """
     if mode == "cold":
         return [0.0] * CONTEXT_DIM
 
     rng = np.random.RandomState()  # unseeded — each call is independent
 
-    # ── CDM intent state: label-correlated when label is known ──────────────────
     if label and label in _LABEL_TO_INTENT:
         primary, secondary, tertiary = _LABEL_TO_INTENT[label]
         # 20% adversarial: random state to prevent lookup-table memorization
@@ -115,12 +100,10 @@ def build_synthetic_context_vector(
     cdm_one_hot     = [0.0] * N_CDM_STATES
     cdm_one_hot[cdm_state] = 1.0
 
-    # ── Temporal / structural scalars (independent of label) ─────────────────
     residency  = float(rng.beta(2.0, 5.0))
     transition = [float(rng.randint(0, N_CDM_STATES) / float(N_CDM_STATES)) for _ in range(3)]
     abruptness = float(rng.beta(1.0, 3.0))
 
-    # ── Semantic scalars (independent of label) ───────────────────────────────
     coherence      = float(rng.beta(3.0, 2.0))
     entropy        = float(rng.beta(2.0, 3.0))
     spk_divergence = float(rng.beta(1.0, 4.0))
@@ -131,14 +114,12 @@ def build_synthetic_context_vector(
     msg_length   = float(rng.uniform(10, 450))
     latency_norm = float(rng.uniform(50, 3000))
 
-    # ── Valence scalars: label-correlated but heavily noisy ───────────────────
     noise_sigma = 0.35 if mode == "train" else 0.20
     base_val    = _LABEL_BASE_VALENCE.get(label, 0.0) if label else 0.0
 
     cur_valence  = float(np.clip(base_val + rng.normal(0.0, noise_sigma), -1.0, 1.0))
     velocity     = float(np.clip(rng.normal(0.0, 0.25),                   -1.0, 1.0))
 
-    # Episodic memory: 3-dim sentiment vector (pos, neu, neg) correlated with label
     _pos_base = max(0.0, base_val)
     _neg_base = max(0.0, -base_val)
     hist_pos = float(np.clip(_pos_base * 0.6 + rng.uniform(0.0, 0.3), 0.0, 1.0))
@@ -149,7 +130,6 @@ def build_synthetic_context_vector(
         cur_valence = -cur_valence
         hist_pos, hist_neg = hist_neg, hist_pos
 
-    # ── HMM-derived features: label-correlated ───────────────────────────────
     is_strong   = label in _STRONG_LABELS if label else False
     conf_base   = float(rng.uniform(0.55, 0.85) if is_strong else rng.uniform(0.35, 0.65))
     alpha_raw   = rng.dirichlet([0.5] * N_CDM_STATES)
@@ -184,7 +164,8 @@ def build_synthetic_context_vector(
          hmm_emit,                 # [35]
         ] + top3_next +            # [36:39]
         [intent_stab]              # [39]
-        + [0.0] * PRIOR_DIM        # [40:68] trajectory prior — zeros for static single-turn data
+        + [0.0] * PRIOR_DIM                                          # [40:68] trajectory prior
+        + [0.0] * (SARCASM_DIM + DYNAMICS_DIM + APPRAISAL_DIM)      # [68:74] sarcasm/dynamics/appraisal
     )
 
     # Per-feature dropout: 15% of features zeroed on each training sample
@@ -195,8 +176,6 @@ def build_synthetic_context_vector(
     assert len(ctx) == CONTEXT_DIM, f"ctx dim={len(ctx)} != {CONTEXT_DIM}"
     return ctx
 
-
-# ── Synthetic sentence generation for missing GoEmotions classes ──────────────
 
 _SYNTHETIC_COUNTS: dict = {
     "neutral":     1069,
@@ -210,13 +189,7 @@ _BATCH_SIZE        = 250   # max sentences per Claude API call (fits in 4096 tok
 
 
 def _generate_synthetic_sentences() -> dict:
-    """
-    Call Claude Haiku to generate synthetic training sentences for each missing class.
-    Executes all 5 emotion classes in parallel threads for maximum speed.
-    """
     import anthropic
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    
     client     = anthropic.Anthropic()
     result     = {}
     total_all  = sum(_SYNTHETIC_COUNTS.values())
@@ -237,16 +210,13 @@ def _generate_synthetic_sentences() -> dict:
             logger.info(f"  [Synthetic]   batch {batch_num} for '{label}' — requesting {needed}...")
             prompt = (
                 f"Generate {needed} diverse first-person situational sentences "
-                f"expressing the emotion '{label}'. "
-                "Style: EmpatheticDialogues 'situation' field — 1-2 sentences describing "
-                "a real-life context where someone feels this emotion. "
-                "Vary the settings: work, relationships, hobbies, discovery, everyday moments. "
-                "One situation per line. No numbering, no bullets."
+                f"expressing the emotion '{label}'."
             )
             try:
                 msg = client.messages.create(
                     model="claude-haiku-4-5-20251001",
                     max_tokens=4096,
+                    system=[{"type": "text", "text": _SYNTHETIC_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
                     messages=[{"role": "user", "content": prompt}],
                 )
                 batch = [l.strip() for l in msg.content[0].text.splitlines() if l.strip()]
@@ -276,22 +246,12 @@ def _generate_synthetic_sentences() -> dict:
 
 
 def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_size: int = 32) -> tuple:
-    """
-    Load (or auto-generate) synthetic sentences for the 5 missing GoEmotions classes
-    and process them through the same NLP pipeline as EmpatheticDialogues.
-
-    Sentences are stored in MODEL_PATH.parent/synthetic_sentences.json (bind-mounted,
-    persists container rebuilds). Computed features are cached in
-    synthetic_features_cache.pkl keyed by the JSON file's MD5 hash — NLP only runs
-    once per unique JSON file.
-    """
     import hashlib
 
     json_path   = MODEL_PATH.parent / "synthetic_sentences.json"
     cache_path  = MODEL_PATH.parent / "synthetic_features_cache.pkl"
     empty       = np.empty((0, FEATURE_DIM), dtype=np.float32)
 
-    # ── 1. Obtain JSON (generate if missing) ────────────────────────────────────
     if not json_path.exists() or json_path.stat().st_size == 0:
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         if not api_key:
@@ -322,7 +282,6 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
         loaded = {k: len(v) for k, v in data.items()}
         logger.info(f"[Synthetic] Loaded existing synthetic_sentences.json: {loaded}")
 
-    # ── 2. Compute syn_hash to check feature cache ──────────────────────────────
     syn_hash = hashlib.md5(json_path.read_bytes()).hexdigest()[:12]
 
     if cache_path.exists():
@@ -345,7 +304,6 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
         except Exception as e:
             logger.warning(f"[Synthetic] Cache load failed: {e} — recomputing.")
 
-    # ── 3. Batch NLP processing ─────────────────────────────────────────────────
     ordered_pairs: list = []  # (goemo_label, text)
     for goemo_label, sentences in data.items():
         if goemo_label not in EMOTION_LABELS:
@@ -387,7 +345,6 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
         f"({rate:.1f} samples/s)"
     )
 
-    # ── 4. Build feature vectors ─────────────────────────────────────────────────
     features, labels, gs_list = [], [], []
     class_counts: dict = {}
     for (goemo_label, _text), vader_out, bert_out, goe_out in zip(
@@ -397,7 +354,7 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
         fv  = build_feature_vector(
             {"vader": vader_out, "basic_bert": bert_out, "go_emotions": goe_out},
             context_vector=ctx[:CDM_CTX_DIM],
-            trajectory_prior=ctx[CDM_CTX_DIM:],
+            trajectory_prior=ctx[CDM_CTX_DIM:CDM_CTX_DIM + PRIOR_DIM],
         )
         features.append(fv.flatten())
         labels.append(goemo_label)
@@ -407,7 +364,6 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
     for lbl, cnt in class_counts.items():
         logger.info(f"  [Synthetic] '{lbl}': {cnt} feature vectors built")
 
-    # ── 5. Save feature cache ────────────────────────────────────────────────────
     try:
         with open(cache_path, "wb") as f:
             pickle.dump({
@@ -436,14 +392,6 @@ def pretrain_context_encoder(
     lr: float = 1e-3,
     device: str = "cpu",
 ):
-    """
-    Pre-train enc_ctx_expert + ctx_prior_head on context → emotion before
-    full pipeline training. Forces the context encoder to learn emotion-predictive
-    representations rather than noise, giving the Bayesian prior a useful starting point.
-
-    Only trains enc_ctx_expert and ctx_prior_head — all other parameters frozen.
-    When has_cdm is provided, only real-CDM samples are used for pretraining.
-    """
     import torch
     import torch.nn.functional as F
 

@@ -1,7 +1,3 @@
-"""
-trainer/data/meld.py — MELD multi-turn conversation feature extraction.
-"""
-
 import gc
 import json
 import os
@@ -53,9 +49,6 @@ _MELD_VALENCE: dict = {
 
 
 def _download_meld_raw(out_path: Path, max_rows: int = 3000) -> None:
-    """Download MELD and save only (dialogue_id, utterance_id, text, emotion, speaker)
-    to a compact JSON. Called BEFORE NLP models are loaded so HuggingFace dataset and
-    BERT/GoEmotions don't share RAM simultaneously."""
     try:
         from datasets import load_dataset
         slice_size = min(max_rows * 2, 4000)
@@ -86,18 +79,11 @@ def _meld_build_cdm(
     current_speaker: str,
     current_text: str,
 ) -> np.ndarray:
-    """
-    Build a real 40-dim CDM context vector from MELD conversation history.
-    Uses the same slot layout as context_engine_service so the meta-learner
-    trains on vectors that look like real inference-time CDM output.
-    """
     ctx = np.zeros(CDM_CTX_DIM, dtype=np.float32)
     n   = len(history)
 
-    # ── CDM intent one-hot [0:15] ──────────────────────────────────────────
     ctx[current_intent] = 1.0
 
-    # ── state_residency [15] — how long in this state ─────────────────────
     streak = 1
     for h in reversed(history):
         if h["intent_state"] == current_intent:
@@ -106,23 +92,19 @@ def _meld_build_cdm(
             break
     ctx[CTX_RESIDENCY] = min(streak / max(n + 1, 1), 1.0)
 
-    # ── transition_path [16:19] — last 3 intent indices / N_CDM_STATES ────
     recent = [h["intent_state"] for h in history[-3:]]
     for i, s in enumerate(recent):
         ctx[CTX_TRANSITION.start + i] = s / N_CDM_STATES
 
-    # ── entry_abruptness [19] — sudden valence jump ────────────────────────
     prev_val = history[-1]["valence"] if history else 0.0
     ctx[CTX_ABRUPTNESS] = min(abs(current_valence - prev_val), 1.0)
 
-    # ── topic_coherence [20] — stable intent = high coherence ─────────────
     if n > 0:
         same = sum(1 for h in history[-5:] if h["intent_state"] == current_intent)
         ctx[CTX_COHERENCE] = same / min(n, 5)
     else:
         ctx[CTX_COHERENCE] = 0.5
 
-    # ── emotion_entropy [21] — diversity of previous labels ───────────────
     if n > 0:
         ec     = Counter(h["intent_state"] for h in history[-5:])
         total  = sum(ec.values())
@@ -130,52 +112,35 @@ def _meld_build_cdm(
         ent    = -sum(p * np.log(p + 1e-9) for p in probs)
         ctx[CTX_ENTROPY] = float(np.clip(ent / np.log(N_CDM_STATES), 0.0, 1.0))
 
-    # ── speaker_divergence [22] ────────────────────────────────────────────
     if history:
         ctx[CTX_SPK_DIVERGENCE] = float(history[-1]["speaker"] != current_speaker)
 
-    # ── velocity [23] and acceleration [24] ───────────────────────────────
     velocity = current_valence - prev_val
     ctx[CTX_VELOCITY] = float(np.clip(velocity, -1.0, 1.0))
     if len(history) >= 2:
         prev_velocity = history[-1]["valence"] - history[-2]["valence"]
         ctx[CTX_ACCELERATION] = float(np.clip(velocity - prev_velocity, -1.0, 1.0))
 
-    # ── valence history [25:28] ────────────────────────────────────────────
     all_vals = [h["valence"] for h in history] + [current_valence]
     ctx[CTX_HIST_POS] = float(np.mean([v > 0.2  for v in all_vals]))
     ctx[CTX_HIST_NEU] = float(np.mean([abs(v) <= 0.2 for v in all_vals]))
     ctx[CTX_HIST_NEG] = float(np.mean([v < -0.2 for v in all_vals]))
 
-    # ── topic_resonance [28] — reuse coherence as proxy ───────────────────
     ctx[CTX_RESONANCE] = ctx[CTX_COHERENCE]
 
-    # ── volatility [29] — std of valence trajectory ────────────────────────
     if len(all_vals) > 1:
         ctx[CTX_VOLATILITY] = float(np.clip(np.std(all_vals), 0.0, 1.0))
 
-    # ── current_valence [30] ───────────────────────────────────────────────
     ctx[CTX_CURR_VALENCE] = float(np.clip(current_valence, -1.0, 1.0))
-
-    # ── message_length [31] (raw chars — normalized by build_feature_vector)
-    ctx[CTX_MSG_LENGTH] = float(len(current_text))
-
-    # ── latency_ms [32] — 0 (not available in MELD) ───────────────────────
-    ctx[CTX_LATENCY_MS] = 0.0
-
-    # ── HMM slots [33:39] — moderate confidence since we have real context ─
-    # CTX_HMM_EMISSION mirrors context_engine's emit_norm which is in [0,1]:
-    # emit_norm = clip((raw_lp - log(1e-12)) / (0 - log(1e-12)), 0, 1)
-    # 0.65 represents a reasonably likely emission (strong-ish HMM signal).
-    ctx[CTX_HMM_CONF]    = 0.65
-    ctx[CTX_HMM_ENTROPY] = 0.40
+    ctx[CTX_MSG_LENGTH]   = float(len(current_text))
+    ctx[CTX_LATENCY_MS]   = 0.0
+    ctx[CTX_HMM_CONF]     = 0.65
+    ctx[CTX_HMM_ENTROPY]  = 0.40
     ctx[CTX_HMM_EMISSION] = 0.65
     ctx[CTX_HMM_NEXT3.start]     = 0.50
     ctx[CTX_HMM_NEXT3.start + 1] = 0.30
     ctx[CTX_HMM_NEXT3.start + 2] = 0.20
-
-    # ── intent_stability [39] — same as residency ─────────────────────────
-    ctx[CTX_INTENT_STAB] = ctx[CTX_RESIDENCY]
+    ctx[CTX_INTENT_STAB]  = ctx[CTX_RESIDENCY]
 
     return ctx
 
@@ -187,22 +152,6 @@ def extract_meld_features(
     max_utterances: int = 6000,
     batch_size: int = 32,
 ) -> tuple:
-    """
-    Build (X, y, has_cdm) from MELD with REAL conversation context.
-
-    Unlike EmpatheticDialogues (topic-level label) or GoEmotions (single sentence),
-    MELD provides multi-turn conversations where each utterance's CDM vector is
-    built from the actual preceding messages in the same dialogue.
-
-    This teaches the meta-learner:
-      - "Previous messages were angry → current ambiguous message = probably anger"
-      - "Context is neutral → trust NLP signal directly"
-      - When context genuinely changes the answer vs when NLP is sufficient
-
-    has_cdm = True for all MELD samples with at least 1 prior utterance,
-    so the CDM block is NOT zeroed during training — the context path gets
-    real gradient signal for the first time.
-    """
     cache_path = MODEL_PATH.parent / "meld_features_cache.pkl"
     cache_key  = f"meld_ctx_v2_{max_utterances}_{FEATURE_DIM}"
     empty      = np.empty((0, FEATURE_DIM), dtype=np.float32)
@@ -219,7 +168,6 @@ def extract_meld_features(
         except Exception as e:
             logger.warning(f"[MELD] Cache load failed: {e} — recomputing.")
 
-    # ── Pass 1: load raw MELD rows ────────────────────────────────────────────
     raw_json_path = MODEL_PATH.parent / "meld_raw_cache.json"
     raw_rows = []
     if raw_json_path.exists():
@@ -328,7 +276,6 @@ def extract_meld_features(
 
     logger.info(f"[MELD] NLP done in {time.time()-t0:.0f}s. Building CDM vectors from conversation history...")
 
-    # ── Pass 2: build features with real context ───────────────────────────
     conv_history: dict = {}
 
     features, labels, has_cdm_list = [], [], []

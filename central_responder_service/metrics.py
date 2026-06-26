@@ -1,20 +1,4 @@
-"""
-metrics.py — Prometheus metrics for the central_responder service.
-
-Exposes counters/gauges describing pipeline health and trainer state.
-A small HTTP server on port 9090 (started by main.py at boot) serves
-the standard /metrics endpoint scrapeable by Prometheus.
-
-Why these specific metrics:
-  - "did the pipeline stop processing?"   → `messages_processed_total` flatlines
-  - "is the accuracy gate failing forever?" → `trainer_runs_total{result="rejected"}`
-                                              keeps climbing without "accepted"
-  - "what was the last accepted accuracy?" → `trainer_last_accuracy`
-  - "is the trainer alive at all?"          → `trainer_last_run_timestamp`
-"""
 from prometheus_client import Counter, Gauge, Histogram
-
-# ── Pipeline throughput ───────────────────────────────────────────────────────
 
 messages_processed_total = Counter(
     "central_responder_messages_processed_total",
@@ -32,8 +16,6 @@ meta_predictions_total = Counter(
     "Meta-learner inference outcomes.",
     labelnames=("outcome",),  # "success" | "fallback"
 )
-
-# ── Trainer health ────────────────────────────────────────────────────────────
 
 trainer_runs_total = Counter(
     "central_responder_trainer_runs_total",

@@ -51,9 +51,23 @@ async def run_nlp_worker(
 
     while True:
         try:
-            messages = await r.xreadgroup(
-                group_name, consumer_name, {STREAM_KEY: ">"}, count=1, block=2000
-            )
+            # PEL recovery: reclaim messages idle >30s (handles crash-before-ACK)
+            try:
+                _, stale, _ = await r.xautoclaim(
+                    STREAM_KEY, group_name, consumer_name,
+                    min_idle_time=30_000, start_id="0-0", count=5,
+                )
+                if stale:
+                    logger.info(f"[PEL] Reclaimed {len(stale)} stale message(s)")
+                    messages = [(STREAM_KEY, stale)]
+                else:
+                    messages = await r.xreadgroup(
+                        group_name, consumer_name, {STREAM_KEY: ">"}, count=10, block=2000,
+                    )
+            except Exception:
+                messages = await r.xreadgroup(
+                    group_name, consumer_name, {STREAM_KEY: ">"}, count=10, block=2000,
+                )
 
             if messages:
                 for _stream, msgs in messages:
@@ -63,7 +77,8 @@ async def run_nlp_worker(
                             start = time.time()
                             logger.debug(f"Analyzing message {message_id} with {model_name}...")
 
-                            scores = analyzer.analyze(text)
+                            loop = asyncio.get_running_loop()
+                            scores = await loop.run_in_executor(None, analyzer.analyze, text)
                             elapsed = (time.time() - start) * 1000
 
                             if format_stats:

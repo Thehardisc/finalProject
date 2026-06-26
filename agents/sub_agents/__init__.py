@@ -8,6 +8,7 @@ from .infra_agent import InfraAgent
 from .aggregation_agent import AggregationAgent
 from .persistence_agent import PersistenceAgent
 from .llm_agent import LLMAgent
+from .ui_ux_agent import UiUxAgent
 
 ALL_AGENTS = {
     "pipeline":       PipelineAgent,
@@ -20,4 +21,5 @@ ALL_AGENTS = {
     "aggregation":    AggregationAgent,
     "persistence":    PersistenceAgent,
     "llm":            LLMAgent,
+    "ui_ux":          UiUxAgent,
 }

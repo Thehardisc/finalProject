@@ -1,13 +1,3 @@
-"""
-ConnectionManager tests — covers both:
-  - api_service/websocket/manager.py (imported by websocket/listener.py)
-  - api_service/main.py              (the one actually used at runtime)
-
-Both classes must have the same dead-connection cleanup behaviour.
-
-Run:
-    python -m pytest api_service/tests/test_websocket_manager.py -v
-"""
 import sys, os, pytest, types, importlib
 from unittest.mock import AsyncMock, MagicMock
 
@@ -15,7 +5,6 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-# ── stub heavy deps so imports don't need the full stack ─────────────────────
 for _mod in ["fastapi", "fastapi.middleware", "fastapi.middleware.cors",
              "fastapi.staticfiles", "fastapi.responses",
              "pydantic", "pydantic.fields",
@@ -27,7 +16,6 @@ for _mod in ["fastapi", "fastapi.middleware", "fastapi.middleware.cors",
     if _mod not in sys.modules:
         sys.modules[_mod] = types.ModuleType(_mod)
 
-# fastapi must expose WebSocket / WebSocketDisconnect
 fa = sys.modules["fastapi"]
 fa.FastAPI           = MagicMock(return_value=MagicMock())
 fa.WebSocket         = object
@@ -38,22 +26,18 @@ fa.Query             = MagicMock()
 fa.status            = MagicMock()
 fa.Response          = MagicMock()
 
-# shared stubs
 sys.modules["shared.utils.logger"].get_logger = lambda name: MagicMock()
 sys.modules["shared.utils.logger"].sanitize_email = lambda x: x
 sys.modules["shared.constants"].EMOTION_LABELS = []
 
 from api_service.websocket.manager import ConnectionManager as WsConnectionManager
 
-# Load the ConnectionManager that lives inside main.py by extracting the class
-# without executing module-level side effects (FastAPI app creation, etc.).
 import ast as _ast, inspect as _inspect
 _main_src = open(os.path.join(_ROOT, "api_service", "main.py")).read()
 _globs: dict = {
     "WebSocket": object,
     "logger": MagicMock(),
 }
-# Execute only the ConnectionManager class definition
 _tree = _ast.parse(_main_src)
 for node in _tree.body:
     if isinstance(node, _ast.ClassDef) and node.name == "ConnectionManager":
@@ -61,8 +45,6 @@ for node in _tree.body:
         break
 MainConnectionManager = _globs["ConnectionManager"]
 
-
-# ── helpers ──────────────────────────────────────────────────────────────────
 
 def _ws(send_ok=True):
     ws = AsyncMock()
@@ -72,8 +54,6 @@ def _ws(send_ok=True):
     ws.accept = AsyncMock(return_value=None)
     return ws
 
-
-# ── shared test body — parameterised over both ConnectionManager classes ─────
 
 def _make_suite(manager_cls):
     class Suite:
@@ -105,7 +85,6 @@ def _make_suite(manager_cls):
 
         @pytest.mark.asyncio
         async def test_broadcast_removes_dead_connection(self):
-            """Dead connection must be evicted from active_connections after send failure."""
             mgr  = manager_cls()
             good = _ws(send_ok=True)
             dead = _ws(send_ok=False)
@@ -147,11 +126,9 @@ def _make_suite(manager_cls):
     return Suite
 
 
-# ── test classes ─────────────────────────────────────────────────────────────
-
 class TestConnectionManager(_make_suite(WsConnectionManager)):
-    """Tests api_service/websocket/manager.py:ConnectionManager"""
+    pass
 
 
 class TestMainConnectionManager(_make_suite(MainConnectionManager)):
-    """Tests api_service/main.py:ConnectionManager — the one used at runtime."""
+    pass

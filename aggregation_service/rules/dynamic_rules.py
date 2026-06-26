@@ -40,6 +40,7 @@ async def handle_dynamic_rules(
             meaning = match.group(2).strip().lower()
             logger.info(f"LEARNING RULE: '{trigger}' -> '{meaning}'")
             await r.hset(rule_key, trigger, meaning)
+            await r.expire(rule_key, 86400 * 7)
             return None, None
 
     # Test against existing rules

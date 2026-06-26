@@ -1,4 +1,5 @@
 import asyncio
+import json
 import sys
 import os
 import uuid
@@ -8,7 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from preprocessing_service.utils import clean_text, demojize_text
-from preprocessing_service.debouncer import MessageDebouncer, DEBOUNCE_WINDOW_MS
+from preprocessing_service.debouncer import MessageDebouncer, FAST_DISPATCH_MS, BURST_WINDOW_MS
 
 logger = get_logger("preprocessing_service")
 
@@ -80,7 +81,7 @@ async def main():
     debouncer = MessageDebouncer()
     logger.info(
         f"Preprocessing worker started.  "
-        f"Debounce window={DEBOUNCE_WINDOW_MS}ms"
+        f"Fast dispatch={FAST_DISPATCH_MS}ms  Burst window={BURST_WINDOW_MS}ms"
     )
 
     async def _flush_burst(
@@ -104,18 +105,23 @@ async def main():
         if len(items) > 1:
             combined_text = " ".join(data.get("text", "") for _, data in items)
             fragments_data = [{"message_id": data.get("message_id")} for _, data in items]
-            
+
             # Use the first item's metadata as the base payload
             first_record_id, first_data = items[0]
             first_data = first_data.copy()
             first_data["text"] = combined_text
-            
-            import json
+
             await _process_one(
                 r, first_record_id, first_data,
                 is_continuation=flags[0],
                 burst_fragments=json.dumps(fragments_data)
             )
+            # ACK all non-first items — their content is folded into the combined burst above.
+            for record_id, _ in items[1:]:
+                try:
+                    await r.xack(STREAM_KEY, GROUP_NAME, record_id)
+                except Exception:
+                    pass
         else:
             first_record_id, first_data = items[0]
             await _process_one(r, first_record_id, first_data, is_continuation=flags[0])

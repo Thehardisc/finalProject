@@ -16,6 +16,12 @@ Usage:
   python relabel.py --mode sarcasm --limit 50          # label first 50 conversations
   ANTHROPIC_API_KEY=sk-ant-... python relabel.py --mode sarcasm
   ANTHROPIC_API_KEY=sk-ant-... python relabel.py --mode sarcasm --model claude-haiku-4-5-20251001
+
+Batch API (50% cost reduction, async):
+  python relabel.py --batch                            # batch implicit mode
+  python relabel.py --mode sarcasm --batch             # batch sarcasm mode
+  python relabel.py --mode sarcasm --batch --limit 200 # batch 200 conversations
+  The batch ID is saved to <output>.batch_id for crash recovery.
 """
 
 import argparse
@@ -370,7 +376,7 @@ def call_claude(
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        system=system,
+        system=[{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
         messages=[{"role": "user", "content": user_message}],
     )
     return response.content[0].text
@@ -391,6 +397,178 @@ def parse_response(raw: str, conversation_id: str):
         return None
 
 
+# ── Batch API mode ────────────────────────────────────────────────────────────
+
+def run_batch_mode(args, conversations: list, api_key: str) -> None:
+    """Submit all labeling requests to Anthropic Batch API (50% cost reduction).
+
+    custom_id format: "<conv_id>||<msg_index>" for sarcasm mode,
+                      "<conv_id>" for implicit mode.
+    The "||" separator cannot appear in conversation IDs (which are UUIDs).
+    """
+    import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
+
+    is_sarcasm = args.mode == "sarcasm"
+    if is_sarcasm:
+        output_path = _HERE / "training_data" / "sarcasm_labels.jsonl"
+        sys_prompt = SARCASM_SYSTEM_PROMPT
+        max_tokens = 128
+    else:
+        output_path = _HERE / args.output
+        sys_prompt = SYSTEM_PROMPT
+        max_tokens = 2048
+
+    output_path.parent.mkdir(exist_ok=True)
+
+    # Build resume set from existing output
+    done: set[str] = set()
+    if output_path.exists():
+        for line in output_path.read_text().splitlines():
+            if not line.strip():
+                continue
+            try:
+                rec = json.loads(line)
+                if is_sarcasm:
+                    done.add(f"{rec['conversation_id']}||{rec['message_index']}")
+                else:
+                    done.add(rec["conversation_id"])
+            except Exception:
+                pass
+    if done:
+        print(f"Resuming — {len(done)} items already labeled, skipping.")
+
+    # Build requests list and keep metadata for result reconstruction
+    requests = []
+    request_meta: dict = {}
+
+    if is_sarcasm:
+        for conv in conversations:
+            cid = conv["conversation_id"]
+            msgs = conv.get("messages", [])
+            for msg_i, msg in enumerate(msgs):
+                custom_id = f"{cid}||{msg_i}"
+                if custom_id in done:
+                    continue
+                prompt = build_sarcasm_prompt(msgs, msg_i)
+                requests.append({
+                    "custom_id": custom_id,
+                    "params": {
+                        "model": args.model,
+                        "max_tokens": max_tokens,
+                        "system": [{"type": "text", "text": sys_prompt, "cache_control": {"type": "ephemeral"}}],
+                        "messages": [{"role": "user", "content": prompt}],
+                    },
+                })
+                request_meta[custom_id] = {"conv": conv, "msg_i": msg_i, "msg": msg, "msgs": msgs}
+    else:
+        for conv in conversations:
+            cid = conv["conversation_id"]
+            if cid in done:
+                continue
+            user_msg = build_user_message(conv)
+            requests.append({
+                "custom_id": cid,
+                "params": {
+                    "model": args.model,
+                    "max_tokens": max_tokens,
+                    "system": [{"type": "text", "text": sys_prompt, "cache_control": {"type": "ephemeral"}}],
+                    "messages": [{"role": "user", "content": user_msg}],
+                },
+            })
+            request_meta[cid] = {"conv": conv}
+
+    if not requests:
+        print("All items already labeled. Nothing to submit.")
+        return
+
+    print(f"Submitting {len(requests)} requests to Batch API (skipping {len(done)} already done)...")
+
+    batch = client.beta.messages.batches.create(requests=requests)
+    batch_id = batch.id
+    print(f"Batch submitted: {batch_id}")
+
+    # Persist batch_id so a crashed run can resume without re-submitting
+    batch_id_path = output_path.with_suffix(output_path.suffix + ".batch_id")
+    batch_id_path.write_text(batch_id)
+    print(f"Batch ID saved to: {batch_id_path}")
+
+    # Poll until complete
+    print("Polling for completion (checking every 60s)...")
+    while True:
+        batch = client.beta.messages.batches.retrieve(batch_id)
+        counts = batch.request_counts
+        print(
+            f"  [{batch.processing_status}] "
+            f"succeeded={counts.succeeded} errored={counts.errored} "
+            f"processing={counts.processing} canceled={counts.canceled}"
+        )
+        if batch.processing_status == "ended":
+            break
+        time.sleep(60)
+
+    # Stream results and write output
+    processed = failed = 0
+    with output_path.open("a", encoding="utf-8") as out:
+        for result in client.beta.messages.batches.results(batch_id):
+            custom_id = result.custom_id
+            if result.result.type != "succeeded":
+                print(f"  [FAILED] {custom_id}: {result.result.error}", file=sys.stderr)
+                failed += 1
+                continue
+
+            raw = result.result.message.content[0].text
+            meta = request_meta.get(custom_id)
+            if meta is None:
+                print(f"  [WARN] Unknown custom_id: {custom_id}", file=sys.stderr)
+                continue
+
+            if is_sarcasm:
+                cid, _, msg_idx_str = custom_id.partition("||")
+                msg_i = int(msg_idx_str)
+                parsed = parse_sarcasm_response(raw, cid, msg_i)
+                if parsed is None:
+                    failed += 1
+                    continue
+                msg = meta["msg"]
+                msgs = meta["msgs"]
+                record = {
+                    "conversation_id": cid,
+                    "message_index":   msg_i,
+                    "speaker":         _get_speaker(msg),
+                    "text":            msg.get("text", "").strip(),
+                    "context": [
+                        {"speaker": _get_speaker(msgs[j]), "text": msgs[j].get("text", "").strip()}
+                        for j in range(max(0, msg_i - 3), msg_i)
+                    ],
+                    "is_sarcastic": parsed["is_sarcastic"],
+                    "subtype":      parsed["subtype"],
+                    "reasoning":    parsed.get("reasoning", ""),
+                    "model":        args.model,
+                }
+                out.write(json.dumps(record, ensure_ascii=False) + "\n")
+            else:
+                conv = meta["conv"]
+                cid = conv["conversation_id"]
+                parsed = parse_response(raw, cid)
+                if parsed is None:
+                    failed += 1
+                    continue
+                enriched = dict(conv)
+                enriched["relabeled_chunks"] = parsed.get("conversation_analysis", [])
+                enriched["relabeled_model"]  = args.model
+                out.write(json.dumps(enriched, ensure_ascii=False) + "\n")
+
+            processed += 1
+
+    total = processed + len(done)
+    print(f"\nDone.  processed={processed}  skipped={len(done)}  failed={failed}")
+    print(f"Total in file: {total}")
+    print(f"Output: {output_path}")
+    if failed:
+        print(f"[WARN] {failed} requests failed — check stderr for details.")
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -407,6 +585,9 @@ def main():
                         help="Print a sample prompt. No API calls.")
     parser.add_argument("--limit",   type=int, default=None,
                         help="Process only the first N conversations")
+    parser.add_argument("--batch",   action="store_true",
+                        help="Use Anthropic Batch API (50%% cost reduction, async). "
+                             "Batch ID is saved to <output>.batch_id for crash recovery.")
     args = parser.parse_args()
 
     input_path = _HERE / args.input
@@ -419,6 +600,19 @@ def main():
         conversations = conversations[:args.limit]
 
     print(f"Conversations loaded: {len(conversations)}")
+
+    # ── Batch mode ────────────────────────────────────────────────────────────
+    if args.batch:
+        if args.dry_run:
+            print("[--batch --dry-run] Would submit requests to Anthropic Batch API.")
+            print(f"  Mode: {args.mode} | Conversations: {len(conversations)} | Model: {args.model}")
+            return
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            print("ERROR: ANTHROPIC_API_KEY not set.", file=sys.stderr)
+            sys.exit(1)
+        run_batch_mode(args, conversations, api_key)
+        return
 
     # ── Dispatch ──────────────────────────────────────────────────────────────
     if args.mode == "sarcasm":

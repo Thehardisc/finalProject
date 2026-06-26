@@ -17,10 +17,15 @@ logger = get_logger("api_service")
 router = APIRouter()
 
 _redis_client = None
+_invalidate_participant_cache = None
 
 def set_redis(client):
     global _redis_client
     _redis_client = client
+
+def set_cache_invalidator(fn):
+    global _invalidate_participant_cache
+    _invalidate_participant_cache = fn
 
 
 class CreateConversationRequest(BaseModel):
@@ -38,31 +43,33 @@ class AddMemberRequest(BaseModel):
 
 
 @router.post("/conversations")
-async def create_conversation(req: CreateConversationRequest):
-    if req.user_id == req.target_user_id:
+async def create_conversation(req: CreateConversationRequest,
+                               current_user: dict = Depends(get_current_user)):
+    user_id = current_user["sub"]
+    if user_id == req.target_user_id:
         raise HTTPException(status_code=400, detail="Cannot create a conversation with yourself.")
     pool = get_pool()
     async with pool.acquire() as conn:
-        existing = await conn.fetchval(
-            """
-            SELECT c.conversation_id
-            FROM conversations c
-            JOIN conversation_participants p1 ON c.conversation_id = p1.conversation_id
-            JOIN conversation_participants p2 ON c.conversation_id = p2.conversation_id
-            WHERE c.type = 'direct' AND p1.user_id = $1 AND p2.user_id = $2
-            """,
-            req.user_id, req.target_user_id
-        )
-        if existing:
-            return {"conversation_id": existing}
-
-        conv_id = f"conv-{str(uuid.uuid4())[:8]}"
         async with conn.transaction():
+            existing = await conn.fetchval(
+                """
+                SELECT c.conversation_id
+                FROM conversations c
+                JOIN conversation_participants p1 ON c.conversation_id = p1.conversation_id
+                JOIN conversation_participants p2 ON c.conversation_id = p2.conversation_id
+                WHERE c.type = 'direct' AND p1.user_id = $1 AND p2.user_id = $2
+                """,
+                user_id, req.target_user_id
+            )
+            if existing:
+                return {"conversation_id": existing}
+
+            conv_id = f"conv-{str(uuid.uuid4())[:8]}"
             await conn.execute(
                 "INSERT INTO conversations (conversation_id, type, created_at) "
                 "VALUES ($1, 'direct', $2)", conv_id, time.time()
             )
-            for uid in [req.user_id, req.target_user_id]:
+            for uid in [user_id, req.target_user_id]:
                 await conn.execute(
                     "INSERT INTO conversation_participants "
                     "(conversation_id, user_id, joined_at) VALUES ($1, $2, $3)",
@@ -140,6 +147,8 @@ async def add_group_member(conv_id: str, req: AddMemberRequest,
             "VALUES ($1, $2, $3)",
             conv_id, req.user_id, time.time()
         )
+    if _invalidate_participant_cache:
+        _invalidate_participant_cache(conv_id)
     return {"status": "added", "user_id": req.user_id}
 
 
@@ -172,11 +181,15 @@ async def remove_group_member(conv_id: str, target_user_id: str,
             "DELETE FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2",
             conv_id, target_user_id
         )
+    if _invalidate_participant_cache:
+        _invalidate_participant_cache(conv_id)
     return {"status": "removed", "user_id": target_user_id}
 
 
 @router.get("/conversations/{user_id}")
-async def my_conversations(user_id: str):
+async def my_conversations(user_id: str, current_user: dict = Depends(get_current_user)):
+    if user_id != current_user["sub"]:
+        raise HTTPException(status_code=403, detail="Access denied.")
     pool = get_pool()
     async with pool.acquire() as conn:
         # Direct conversations
@@ -341,8 +354,6 @@ async def get_emotional_state(conversation_id: str):
         "status":            "active",
     }
 
-
-# ── Post-conversation analysis ────────────────────────────────────────────────
 
 _EMOTION_TO_MOOD: dict = {
     'admiration': 'warm',      'amusement':      'joyful',
@@ -573,6 +584,9 @@ async def set_conversation_session(conversation_id: str, req: SessionRequest):
         pipe.delete(f"conv:{conversation_id}:mood_arc")
         pipe.delete(f"conv:{conversation_id}:valence_hist")
         await pipe.execute()
+        # Delete per-speaker CDM keys (pattern scan — context_engine per-speaker state)
+        async for key in r.scan_iter(f"conv:{conversation_id}:spk:*"):
+            await r.delete(key)
         logger.info(
             "session_reset",
             extra={"event": "session_reset", "conversation_id": conversation_id},
@@ -582,13 +596,21 @@ async def set_conversation_session(conversation_id: str, req: SessionRequest):
     return {"conversation_id": conversation_id, "mode": "continue", "status": "preserved"}
 
 
-@router.get("/conversation/{conversation_id}/messages",
-            dependencies=[Depends(get_current_user)])
-async def get_conversation_messages(conversation_id: str, limit: int = 50):
+@router.get("/conversation/{conversation_id}/messages")
+async def get_conversation_messages(conversation_id: str, limit: int = 50,
+                                     current_user: dict = Depends(get_current_user)):
     """Get messages with their latest emotion analysis for a conversation."""
+    user_id = current_user["sub"]
     pool = get_pool()
     try:
         async with pool.acquire() as conn:
+            is_member = await conn.fetchval(
+                "SELECT 1 FROM conversation_participants WHERE conversation_id = $1 AND user_id = $2",
+                conversation_id, user_id
+            )
+            if not is_member:
+                raise HTTPException(status_code=403, detail="Access denied.")
+
             rows = await conn.fetch(
                 """
                 SELECT m.message_id AS id, m.text AS content, m.timestamp,
@@ -605,6 +627,8 @@ async def get_conversation_messages(conversation_id: str, limit: int = 50):
                 conversation_id, limit
             )
         return [dict(row) for row in rows]
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"DB Error: {e}")
         return []

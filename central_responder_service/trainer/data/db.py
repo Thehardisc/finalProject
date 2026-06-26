@@ -1,23 +1,26 @@
-"""
-trainer/data/db.py — Live database data fetching and relabeled conversation loading.
-"""
-
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
 from sqlalchemy import create_engine, text
 
-from shared.constants import EMOTION_LABELS, FEATURE_DIM, CDM_CTX_DIM
+from shared.constants import EMOTION_LABELS, FEATURE_DIM, CDM_CTX_DIM, PRIOR_DIM
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
 from trainer.utils import _vader, _run
 from trainer.data.synthetic import build_synthetic_context_vector
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'goemotions_service'))
+try:
+    from vad_lexicon import compute_vad as _compute_vad
+except ImportError:
+    def _compute_vad(text):  # noqa: F811
+        return {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
+
 logger = get_logger("trainer")
 
-# ── Database ────────────────────────────────────────────────────────────────────
 DB_USER     = os.getenv("POSTGRES_USER",     "user")
 DB_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
 DB_NAME     = os.getenv("POSTGRES_DB",       "emotion_db")
@@ -35,10 +38,6 @@ RELABELED_DATA_PATH = Path(os.environ.get(
 
 
 def fetch_live_data(vader, bert, goe) -> tuple:
-    """
-    Fetch verified samples from PostgreSQL.
-    Context is set to zeros (cold) — no conversation history available for SQL rows.
-    """
     X, y = [], []
     try:
         engine = create_engine(DATABASE_URL)
@@ -68,8 +67,23 @@ def fetch_live_data(vader, bert, goe) -> tuple:
         if not rows:
             return [], []
 
-        logger.info(f"  [SQL] Found {len(rows)} verified live samples.")
+        _valid_labels = set(EMOTION_LABELS)
+        # Cap neutral to 3× the expected average class count to guard against
+        # contamination from pipeline periods where "neutral" was the default output.
+        _avg_expected = max(len(rows) // len(EMOTION_LABELS), 10)
+        _neutral_cap  = _avg_expected * 3
+        _neutral_seen = 0
+        skipped = 0
+        logger.info(f"  [SQL] Found {len(rows)} verified live samples. neutral_cap={_neutral_cap}.")
         for text_content, label in rows:
+            if label not in _valid_labels:
+                skipped += 1
+                continue
+            if label == "neutral":
+                if _neutral_seen >= _neutral_cap:
+                    skipped += 1
+                    continue
+                _neutral_seen += 1
             vs  = {f"vader_{k}": v for k, v in _vader(vader, text_content).items()}
             bs  = _run(bert, text_content)
             gs  = _run(goe,  text_content)
@@ -77,10 +91,13 @@ def fetch_live_data(vader, bert, goe) -> tuple:
             fv  = build_feature_vector(
                 {"vader": vs, "basic_bert": bs, "go_emotions": gs},
                 context_vector=ctx[:CDM_CTX_DIM],
-                trajectory_prior=ctx[CDM_CTX_DIM:],
+                trajectory_prior=ctx[CDM_CTX_DIM:CDM_CTX_DIM + PRIOR_DIM],
+                vad_scores=_compute_vad(text_content),
             )
             X.append(fv.flatten())
             y.append(label)
+        if skipped:
+            logger.warning(f"  [SQL] Skipped {skipped} rows (invalid label or neutral cap).")
 
         return X, y
     except Exception as e:
@@ -89,19 +106,6 @@ def fetch_live_data(vader, bert, goe) -> tuple:
 
 
 def load_relabeled_conversations() -> tuple:
-    """
-    Load re-labeled conversations produced by relabel.py.
-
-    Key difference from GoEmotions training data:
-      - Labels come from Claude's implicit emotion recognition (not GoEmotions predictions)
-      - NLP features are the real pipeline outputs stored in conversations.jsonl
-      - GoEmotions features in the vector may DISAGREE with the label →
-        the model learns that GoEmotions can be wrong and context matters
-
-    CDM context is synthetic (correlated with the Claude-assigned label, same
-    augmentation as GoEmotions training) — real CDM vectors are not stored in
-    the collected data at sufficient resolution to reconstruct the full 40-dim block.
-    """
     if not RELABELED_DATA_PATH.exists():
         logger.info(f"  [Relabeled] {RELABELED_DATA_PATH} not found — skipping.")
         return np.empty((0, FEATURE_DIM), dtype=np.float32), []
@@ -127,7 +131,6 @@ def load_relabeled_conversations() -> tuple:
             if not emotions_dict:
                 continue
 
-            # Dominant emotion = argmax of Claude's 28-dim scores
             valid = {k: v for k, v in emotions_dict.items() if k in EMOTION_LABELS}
             if not valid:
                 continue
@@ -140,7 +143,6 @@ def load_relabeled_conversations() -> tuple:
                 if not stages:
                     continue
 
-                # Map stored stage keys → build_feature_vector format
                 model_outputs = {
                     "vader":       stages.get("vader",       {}),
                     "basic_bert":  stages.get("bert",        {}),
@@ -148,10 +150,12 @@ def load_relabeled_conversations() -> tuple:
                 }
 
                 ctx = build_synthetic_context_vector(label=chunk_label, mode="train")
+                text_content = messages[idx].get("text", "")
                 fv  = build_feature_vector(
                     model_outputs,
                     context_vector=ctx[:CDM_CTX_DIM],
-                    trajectory_prior=ctx[CDM_CTX_DIM:],
+                    trajectory_prior=ctx[CDM_CTX_DIM:CDM_CTX_DIM + PRIOR_DIM],
+                    vad_scores=_compute_vad(text_content),
                 )
                 features.append(fv.flatten())
                 labels.append(chunk_label)

@@ -1,6 +1,3 @@
-"""
-ml/loader.py — Load and validate the trained meta-learner model from disk.
-"""
 import os
 import json
 import pickle
@@ -18,17 +15,11 @@ DEFAULT_META_PATH  = DEFAULT_MODEL_PATH.replace(".pkl", "_meta.json")
 
 
 def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
-    """
-    Attempt to load the trained sklearn Pipeline from disk.
-    Verifies SHA-256 integrity before unpickling.
-    Returns the model or None — never raises.
-    """
     try:
         if not os.path.exists(model_path):
             logger.warning(f"No model file at '{model_path}'. Fallback mode will be used.")
             return None
 
-        # ── Integrity check (S4) ──────────────────────────────────────────────
         if not _verify_checksum(model_path):
             logger.warning("Model file failed SHA-256 integrity check. Fallback mode.")
             return None

@@ -35,7 +35,7 @@ services:
   ingestion_service:
     build:
       context: .
-      dockerfile: ingestion_service/Dockerfile
+      dockerfile: goemotions_service/ingestion_service/Dockerfile
     ports:
       - "8000:8000"
     depends_on:
@@ -257,6 +257,8 @@ services:
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       LLM_PROVIDER: ${LLM_PROVIDER:-RULE_BASED}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_INSIGHT_MODEL: ${LLM_INSIGHT_MODEL:-claude-haiku-4-5-20251001}
       PYTHONUNBUFFERED: "1"
       SERVICE_NAME: llm_reasoning_service
       LOG_DIR: /app/logs

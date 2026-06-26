@@ -8,7 +8,7 @@ Public API (unchanged from LSTM version):
 Changes from LSTM:
   - No hidden state serialization (no h/c tensors, no distributed lock)
   - Redis stores plain JSON list of last N GoE distributions (trajectory:{conv_id}:goe_history)
-  - Trajectory prior [79:107] is still written to trajectory:{conv_id}:prior
+  - Trajectory prior [82:110] is still written to trajectory:{conv_id}:prior
   - Phase label written to trajectory:{conv_id}:phase
 """
 
@@ -56,7 +56,6 @@ def _goe_vec_to_valence(vec: np.ndarray) -> float:
 
 
 def _derive_phase(valence_window: List[float]) -> str:
-    from trajectory.model import PHASES
     if len(valence_window) < 3:
         return "opening"
 
@@ -114,7 +113,7 @@ async def run_trajectory_step(
     EDE inference step.  Drop-in for the old LSTM run_trajectory_step.
 
     Extracts go_emotions scores from model_outputs, runs EDE over stored
-    history window, writes trajectory prior [79:107] to Redis, returns dict.
+    history window, writes trajectory prior [82:110] to Redis, returns dict.
     """
     if model is None:
         return {}
@@ -161,7 +160,7 @@ async def run_trajectory_step(
         # Save updated history (current message)
         await _save_goe_history(conv_id, goe_scores, redis)
 
-        # Write trajectory prior for meta-learner [79:107]
+        # Write trajectory prior for meta-learner [82:110]
         try:
             await redis.set(
                 f"trajectory:{conv_id}:prior",

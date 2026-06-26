@@ -71,9 +71,10 @@ _ARCHETYPES: list[tuple[str, list[list[str]]]] = [
          "didn't make the team", "didn't make the cut",
          "failed the exam", "failed the test", "didn't pass",
          "missed the deadline", "missed the cutoff",
-         "application was rejected", "proposal was rejected"],
-        ["studied for", "practiced for", "prepared for", "trained for",
-         "worked hard for", "put everything into", "gave it everything"],
+         "application was rejected", "proposal was rejected",
+         "studied for weeks", "practiced for months", "prepared for months",
+         "trained for months", "trained for years", "worked hard for nothing",
+         "put everything into it and", "gave it everything and"],
     ]),
 
     ("LOSS_DEATH", [
@@ -254,7 +255,7 @@ _PRIORS: dict[str, dict[str, float]] = {
     "ACHIEVEMENT_SUCCESS":   {"joy": 0.75, "excitement": 0.68, "pride": 0.65, "gratitude": 0.40},
     "ACHIEVEMENT_FAIL":      {"disappointment": 0.78, "sadness": 0.60, "remorse": 0.40},
     "LOSS_DEATH":            {"grief": 0.88, "sadness": 0.72, "remorse": 0.50},
-    "LOSS_ABANDONMENT":      {"sadness": 0.78, "disappointment": 0.60, "loneliness": 0.55},
+    "LOSS_ABANDONMENT":      {"sadness": 0.78, "disappointment": 0.60, "grief": 0.50},
     "LOSS_CONNECTION":       {"sadness": 0.68, "grief": 0.55, "remorse": 0.45},
     "PRE_PERFORMANCE":       {"nervousness": 0.80, "fear": 0.55, "excitement": 0.40},
     "PERSONAL_REGRET":       {"remorse": 0.82, "sadness": 0.65, "grief": 0.50},

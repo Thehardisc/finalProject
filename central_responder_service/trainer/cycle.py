@@ -1,7 +1,3 @@
-"""
-trainer/cycle.py — Main training orchestrator: run_one_cycle() and start_trainer_thread().
-"""
-
 import datetime
 import gc
 import json
@@ -30,12 +26,13 @@ from trainer.data.synthetic import (
 from trainer.data.empathetic import extract_empathetic_dialogues_features
 from trainer.data.goemotions import extract_goemotions_direct_features
 from trainer.data.meld import extract_meld_features, _download_meld_raw
+from trainer.data.dailydialog import extract_dailydialog_features
 from trainer.data.db import fetch_live_data, load_relabeled_conversations
+from trainer.data.csv_local import extract_csv_local_features
 from trainer.models import train_gating_network
 
 logger = get_logger("trainer")
 
-# ── Configuration ───────────────────────────────────────────────────────────────
 RETRAIN_INTERVAL        = int(os.environ.get("RETRAIN_INTERVAL_SECONDS",   1800))
 ACCURACY_GATE           = float(os.environ.get("ACCURACY_GATE",            0.40))
 MAX_EMPATHETIC_SAMPLES  = int(os.environ.get("MAX_EMPATHETIC_SAMPLES",     25_000))
@@ -47,20 +44,6 @@ RELOAD_CHANNEL = "model_reload_signal"
 
 
 def run_one_cycle(reload_callback=None) -> None:
-    """
-    Full build → filter → train → gate → deploy cycle.
-
-    Two phases:
-      Bootstrap  — runs once when no model file exists.
-                   Trains on EmpatheticDialogues (size: MAX_EMPATHETIC_SAMPLES).
-                   Results are cached so NLP inference isn't repeated every cycle.
-      Continuous — every subsequent cycle trains only on verified PostgreSQL data
-                   + relabeled conversations. Skips if fewer than MIN_DB_SAMPLES
-                   samples are available.
-
-    On success, calls reload_callback(wrapper) so main.py hot-swaps the
-    global META_LEARNER without restarting the container.
-    """
     cycle_start = time.time()
     logger.info(f"═══ Starting cycle at {datetime.datetime.utcnow():%H:%M:%S UTC} ═══")
     phase_times = {}  # track wall-clock seconds per phase
@@ -83,10 +66,7 @@ def run_one_cycle(reload_callback=None) -> None:
         logger.info("Training device: CUDA GPU — NLP batch_size=128")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = "mps"
-        # Apple Unified Memory silently swaps to SSD if we exceed physical RAM.
-        # Batch size 1024 uses >12GB of RAM for attention matrices alone, causing swapping!
-        # We cap it at 128 to stay entirely within fast physical RAM.
-        nlp_batch_size = 128
+        nlp_batch_size = 128  # capped: Unified Memory swaps to SSD above 128
         logger.info(f"Training device: Apple MPS ({cpu_count} CPU cores) — NLP batch_size=128")
 
 
@@ -96,16 +76,12 @@ def run_one_cycle(reload_callback=None) -> None:
         nlp_batch_size = 64
         logger.info(f"Training device: CPU ({cpu_count} cores) — NLP batch_size=64")
 
-    # Maximize CPU utilization for NLP inference.
-    # BERT and GoEmotions run in parallel threads; PyTorch releases the GIL during
-    # C++ ops, so each model can use its own thread pool. Setting num_threads high
-    # lets each model saturate the CPU during its forward pass.
     try:
         torch.set_num_threads(max(4, cpu_count - 1))
     except RuntimeError:
         pass
     try:
-        torch.set_num_interop_threads(2)  # 2 models run in parallel
+        torch.set_num_interop_threads(2)
     except RuntimeError:
         pass
     os.environ["TOKENIZERS_PARALLELISM"] = "true"
@@ -121,7 +97,6 @@ def run_one_cycle(reload_callback=None) -> None:
     logger.info(f"  ⏱ Analyzers loaded in {phase_times['Analyzer loading']:.1f}s")
 
     if is_bootstrap:
-        # ── One-time bootstrap from EmpatheticDialogues ────────────────────────
         CACHE_PATH = MODEL_PATH.parent / "dataset_features_cache.pkl"
         DATASET_ID = "empathetic_dialogues_multiturn_v1"
 
@@ -210,7 +185,6 @@ def run_one_cycle(reload_callback=None) -> None:
         gs_tr = [{label: 1.0} for label in y_tr]
         n_ed = len(X_tr)
 
-        # ── Synthetic augmentation for the 5 missing GoEmotions classes ────────
         X_syn, y_syn, gs_syn = load_synthetic_features(vader, bert, goe, batch_size=nlp_batch_size)
         n_syn = 0
         if len(X_syn) > 0:
@@ -224,7 +198,6 @@ def run_one_cycle(reload_callback=None) -> None:
                 f"({_SYNTHETIC_CLASSES}) → {len(X_tr)} total train"
             )
 
-        # ── GoEmotions direct (NLP-aligned) augmentation ─────────────────────
         from sklearn.model_selection import train_test_split as _tts
         X_goe_d, y_goe_d, gs_goe_d = extract_goemotions_direct_features(vader, bert, goe, batch_size=nlp_batch_size)
         n_goe_d = 0
@@ -278,7 +251,6 @@ def run_one_cycle(reload_callback=None) -> None:
                 f"→ {len(X_tr)} total train"
             )
 
-        # ── MELD (real multi-turn context) augmentation ───────────────────────
         X_meld, y_meld, has_cdm_meld = extract_meld_features(vader, bert, goe, batch_size=nlp_batch_size)
         n_meld = 0
         n_meld_ctx = 0
@@ -294,17 +266,43 @@ def run_one_cycle(reload_callback=None) -> None:
                 f"({n_meld_ctx} with real context) → {len(X_tr)} total train"
             )
 
+        X_dd, y_dd, has_cdm_dd = extract_dailydialog_features(vader, bert, goe, batch_size=nlp_batch_size)
+        n_dd = 0
+        n_dd_ctx = 0
+        if len(X_dd) > 0:
+            n_dd     = len(X_dd)
+            n_dd_ctx = sum(has_cdm_dd)
+            X_tr       = list(X_tr) + list(X_dd)
+            y_tr       = y_tr + y_dd
+            gs_tr      = gs_tr + [{label: 1.0} for label in y_dd]
+            has_cdm_tr = has_cdm_tr + list(has_cdm_dd)
+            logger.info(
+                f"Bootstrap: +{n_dd} DailyDialog samples "
+                f"({n_dd_ctx} with real context) → {len(X_tr)} total train"
+            )
+
+        X_csv, y_csv = extract_csv_local_features(vader, bert, goe, batch_size=nlp_batch_size)
+        n_csv = 0
+        if len(X_csv) > 0:
+            n_csv      = len(X_csv)
+            X_tr       = list(X_tr) + list(X_csv)
+            y_tr       = y_tr + list(y_csv)
+            gs_tr      = gs_tr + [{label: 1.0} for label in y_csv]
+            has_cdm_tr = has_cdm_tr + [False] * n_csv
+            logger.info(f"Bootstrap: +{n_csv} local CSV samples → {len(X_tr)} total train")
+
         dataset_composition = {
-            "EmpatheticDialogues (train)": n_ed,
-            "Synthetic (train, 5 classes)": n_syn,
-            f"GoEmotions-direct (train 3×)": n_goe_d,
-            f"GoEmotions-direct (val)": n_goe_val,
-            f"GoEmotions-direct (test)": n_goe_test,
+            "EmpatheticDialogues (train)":    n_ed,
+            "Synthetic (train, 5 classes)":   n_syn,
+            f"GoEmotions-direct (train 3×)":  n_goe_d,
+            f"GoEmotions-direct (val)":        n_goe_val,
+            f"GoEmotions-direct (test)":       n_goe_test,
             f"MELD ({n_meld_ctx} w/ real ctx)": n_meld,
+            f"DailyDialog ({n_dd_ctx} w/ real ctx)": n_dd,
+            "Local CSV (gold labels)":        n_csv,
         }
 
     else:
-        # ── Continuous learning from database + cached external datasets ────────
         from sklearn.model_selection import train_test_split as _tts
 
         X_live, y_live = fetch_live_data(vader, bert, goe)
@@ -324,8 +322,6 @@ def run_one_cycle(reload_callback=None) -> None:
 
         logger.info(f"  [DB] {len(X_db)} samples available for continuous learning.")
 
-        # GoEmotions direct (balanced 500/class × 28 classes) — loads from disk cache
-        # when available, no NLP inference needed. Dramatically expands training set.
         X_goe_d, y_goe_d, _ = extract_goemotions_direct_features(
             vader, bert, goe, batch_size=nlp_batch_size
         )
@@ -333,8 +329,6 @@ def run_one_cycle(reload_callback=None) -> None:
         if n_goe_cont > 0:
             logger.info(f"  [GoEDirect] +{n_goe_cont} cached GoEmotions samples added to continuous cycle.")
 
-        # MELD (multi-turn with real CDM context) — loads from cache if available,
-        # otherwise runs NLP inference on meld_raw_cache.json.
         X_meld_c, y_meld_c, has_cdm_meld_c = extract_meld_features(
             vader, bert, goe, batch_size=nlp_batch_size
         )
@@ -342,9 +336,50 @@ def run_one_cycle(reload_callback=None) -> None:
         if n_meld_cont > 0:
             logger.info(f"  [MELD] +{n_meld_cont} MELD samples added to continuous cycle.")
 
-        X_all = X_db + list(X_goe_d) + list(X_meld_c)
-        y_all = y_db + list(y_goe_d) + list(y_meld_c)
-        has_cdm_all = [False] * len(X_db) + [False] * n_goe_cont + list(has_cdm_meld_c)
+        X_emp_c, y_emp_c, has_cdm_emp_c = extract_empathetic_dialogues_features(
+            vader, bert, goe, split="train", batch_size=nlp_batch_size
+        )
+        n_emp_cont = len(X_emp_c)
+        if n_emp_cont > 0:
+            logger.info(f"  [EmpDialogues] +{n_emp_cont} cached samples added to continuous cycle.")
+
+        X_dd_c, y_dd_c, has_cdm_dd_c = extract_dailydialog_features(
+            vader, bert, goe, batch_size=nlp_batch_size
+        )
+        n_dd_cont = len(X_dd_c)
+        n_dd_ctx_c = sum(has_cdm_dd_c) if has_cdm_dd_c else 0
+        if n_dd_cont > 0:
+            logger.info(f"  [DailyDialog] +{n_dd_cont} cached samples added to continuous cycle.")
+
+        X_csv_c, y_csv_c = extract_csv_local_features(vader, bert, goe, batch_size=nlp_batch_size)
+        n_csv_cont = len(X_csv_c)
+        if n_csv_cont > 0:
+            logger.info(f"  [CSVLocal] +{n_csv_cont} local CSV samples added to continuous cycle.")
+
+        X_all = (
+            X_db
+            + list(X_goe_d)
+            + list(X_meld_c)
+            + list(X_emp_c)
+            + list(X_dd_c)
+            + list(X_csv_c)
+        )
+        y_all = (
+            y_db
+            + list(y_goe_d)
+            + list(y_meld_c)
+            + list(y_emp_c)
+            + list(y_dd_c)
+            + list(y_csv_c)
+        )
+        has_cdm_all = (
+            [False] * len(X_db)
+            + [False] * n_goe_cont
+            + list(has_cdm_meld_c)
+            + list(has_cdm_emp_c)
+            + list(has_cdm_dd_c)
+            + [False] * n_csv_cont
+        )
 
         X_tr, X_v, y_tr, y_v, hc_tr, _ = _tts(
             X_all, y_all, has_cdm_all,
@@ -354,14 +389,18 @@ def run_one_cycle(reload_callback=None) -> None:
         gs_tr      = [{label: 1.0} for label in y_tr]
         has_cdm_tr = hc_tr
         dataset_composition = {
-            "Live DB samples (3×)":           len(X_live) * 3,
-            "Relabeled conversations (3×)":   len(X_rel)  * 3,
-            "GoEmotions-direct (cache)":      n_goe_cont,
-            f"MELD (cache, {sum(has_cdm_meld_c)} w/ real ctx)": n_meld_cont,
+            "Live DB samples (3×)":                          len(X_live) * 3,
+            "Relabeled conversations (3×)":                  len(X_rel)  * 3,
+            "GoEmotions-direct (cache)":                     n_goe_cont,
+            f"MELD (cache, {sum(has_cdm_meld_c)} w/ ctx)":  n_meld_cont,
+            "EmpatheticDialogues (cache)":                   n_emp_cont,
+            f"DailyDialog (cache, {n_dd_ctx_c} w/ ctx)":    n_dd_cont,
+            "Local CSV (gold labels)":                       n_csv_cont,
         }
         logger.info(
             f"Continuous cycle: {len(X_tr)} train / {len(X_v)} val samples "
-            f"({len(X_db)} DB + {n_goe_cont} GoE + {n_meld_cont} MELD)."
+            f"({len(X_db)} DB + {n_goe_cont} GoE + {n_meld_cont} MELD "
+            f"+ {n_emp_cont} Emp + {n_dd_cont} DD)."
         )
 
     del vader, bert, goe
@@ -372,7 +411,6 @@ def run_one_cycle(reload_callback=None) -> None:
         f"⏱ Data phase complete in {phase_times['Data loading (total)']:.1f}s"
     )
 
-    # ── Dataset composition summary ────────────────────────────────────────────
     comp_rows = {src: cnt for src, cnt in dataset_composition.items() if cnt > 0}
     comp_rows["─── Totals ───"] = ""
     comp_rows["  Train samples"] = len(X_tr)
@@ -380,7 +418,6 @@ def run_one_cycle(reload_callback=None) -> None:
     comp_rows["  Test samples "] = len(X_te)
     logger.log_stats("Dataset Composition (before training)", comp_rows)
 
-    # ── Filters ────────────────────────────────────────────────────────────────
     t_filter = time.time()
     dist_before = Counter(y_tr).most_common(5)
     logger.log_stats("Pre-Filter Distribution (Top 5)", dict(dist_before))
@@ -409,12 +446,42 @@ def run_one_cycle(reload_callback=None) -> None:
         logger.error("No samples after filtering. Aborting.")
         return
 
-    # ── Build numpy arrays ─────────────────────────────────────────────────────
     X_tr_arr = np.vstack([np.array(fv).flatten() for fv in X_tr])
     X_v_arr  = np.vstack([np.array(fv).flatten() for fv in X_v])
     X_te_arr = np.vstack([np.array(fv).flatten() for fv in X_te])
 
-    # ── Train GatingEnsembleNet ────────────────────────────────────────────────
+    def _augment_rare(X: np.ndarray, y: list, threshold: int = 100) -> tuple:
+        counts = Counter(y)
+        rng = np.random.RandomState(42)
+        X_new, y_new = [X], list(y)
+        for label, count in counts.items():
+            if count >= threshold:
+                continue
+            indices = [i for i, lbl in enumerate(y) if lbl == label]
+            n_need  = threshold - count
+            extras  = []
+            for _ in range(n_need):
+                src = X[rng.choice(indices)].copy()
+                noise = rng.normal(0, 0.02, size=42).astype(np.float32)
+                src[0:3]   = np.clip(src[0:3]   + noise[0:3],   0.0,  1.0)
+                src[3:4]   = np.clip(src[3:4]   + noise[3:4],  -1.0,  1.0)
+                src[4:39]  = np.clip(src[4:39]  + noise[4:39],  0.0,  1.0)
+                src[39:42] = np.clip(src[39:42] + noise[39:42], -1.0,  1.0)
+                extras.append(src)
+            if extras:
+                X_new.append(np.stack(extras))
+                y_new.extend([label] * len(extras))
+        X_out = np.vstack(X_new)
+        n_added = len(X_out) - len(X)
+        if n_added:
+            logger.info(f"  [Augment] Added {n_added} noise-augmented samples for rare classes.")
+        return X_out, y_new
+
+    _n_before_aug = len(has_cdm_tr)
+    X_tr_arr, y_tr = _augment_rare(X_tr_arr, y_tr)
+    if len(X_tr_arr) > _n_before_aug:
+        has_cdm_tr = list(has_cdm_tr) + [False] * (len(X_tr_arr) - _n_before_aug)
+
     t_train = time.time()
     logger.info("⚡ PHASE: GatingEnsembleNet Training (v2)...")
     if torch.cuda.is_available():
@@ -424,13 +491,11 @@ def run_one_cycle(reload_callback=None) -> None:
     else:
         train_device = "cpu"
 
-    # Scale epochs and batch size to dataset size: larger datasets train better
-    # with bigger batches (less noisy gradients) and more epochs.
-    n_samples = len(X_tr_arr)
-    dynamic_epochs    = 120 if n_samples > 5000 else 80
-    dynamic_batch     = 512 if n_samples > 5000 else 256
-    dynamic_patience  = 20  if n_samples > 5000 else 10
-    dynamic_lb_coeff  = 1e-3 if n_samples > 5000 else 5e-4  # stronger balance on large sets
+    n_samples         = len(X_tr_arr)
+    dynamic_epochs    = 120  if n_samples > 5000 else 80
+    dynamic_batch     = 512  if n_samples > 5000 else 256
+    dynamic_patience  = 20   if n_samples > 5000 else 10
+    dynamic_lb_coeff  = 1e-3 if n_samples > 5000 else 5e-4
     logger.info(
         f"  [HParams] n={n_samples}: epochs={dynamic_epochs}  batch={dynamic_batch}  "
         f"patience={dynamic_patience}  lb_coeff={dynamic_lb_coeff}"
@@ -460,7 +525,6 @@ def run_one_cycle(reload_callback=None) -> None:
         _train_str = f"{_train_secs:.1f}s"
     logger.info(f"  ⏱ Model training phase complete in {_train_str}")
 
-    # ── Evaluation ────────────────────────────────────────────────────────────
     t_eval = time.time()
     y_v_pred  = wrapper.predict(X_v_arr)
     y_te_pred = wrapper.predict(X_te_arr)
@@ -472,7 +536,6 @@ def run_one_cycle(reload_callback=None) -> None:
     logger.info(f"  [Metrics] Val  — Acc: {val_acc:.4f}  Macro-F1: {val_f1:.4f}")
     logger.info(f"  [Metrics] Test — Acc: {test_acc:.4f}  Macro-F1: {test_f1:.4f}")
 
-    # ── Per-class breakdown (test set) ────────────────────────────────────────
     all_labels = sorted(set(y_te) | set(y_te_pred))
     report = classification_report(
         y_te, y_te_pred,
@@ -509,16 +572,15 @@ def run_one_cycle(reload_callback=None) -> None:
     )
     logger.info(sep)
 
-    # Log mean gate weights on test set for monitoring (expert collapse detection)
     alpha_te = wrapper.get_gate_weights(X_te_arr)
     alpha_means = alpha_te.mean(axis=0)
-    ctx_log = f"  ctx:{alpha_means[3]:.3f}" if len(alpha_means) > 3 else ""
+    vad_log = f"  vad:{alpha_means[3]:.3f}" if len(alpha_means) > 4 else ""
+    ctx_log = f"  ctx:{alpha_means[-1]:.3f}" if len(alpha_means) > 3 else ""
     logger.info(
         f"  [Gate α] Test mean — "
-        f"vader:{alpha_means[0]:.3f}  bert:{alpha_means[1]:.3f}  goe:{alpha_means[2]:.3f}{ctx_log}"
+        f"vader:{alpha_means[0]:.3f}  bert:{alpha_means[1]:.3f}  goe:{alpha_means[2]:.3f}{vad_log}{ctx_log}"
     )
 
-    # ── Temperature calibration (Platt scaling) ──────────────────────────────
     calibration_temperature = 1.0
     try:
         from scipy.optimize import minimize_scalar
@@ -542,15 +604,12 @@ def run_one_cycle(reload_callback=None) -> None:
     phase_times["Evaluation"] = time.time() - t_eval
     logger.info(f"  ⏱ Evaluation complete in {phase_times['Evaluation']:.1f}s")
 
-    # ── Accuracy gate + deploy ─────────────────────────────────────────────────
     t_deploy = time.time()
     deployed = test_acc >= ACCURACY_GATE
 
     if deployed:
         tmp = MODEL_PATH.with_suffix(".tmp.pkl")
-        # Move to CPU before pickling — the pkl must be portable to Docker (Linux/CPU)
-        # even when training ran on MPS or CUDA.
-        wrapper.model_.cpu()
+        wrapper.model_.cpu()  # pkl must be portable (Linux/CPU) even if trained on MPS/CUDA
         wrapper._device = torch.device("cpu")
         with open(tmp, "wb") as f:
             pickle.dump(wrapper, f)
@@ -575,7 +634,8 @@ def run_one_cycle(reload_callback=None) -> None:
                     "vader":   round(float(alpha_means[0]), 4),
                     "bert":    round(float(alpha_means[1]), 4),
                     "goe":     round(float(alpha_means[2]), 4),
-                    **( {"context": round(float(alpha_means[3]), 4)} if len(alpha_means) > 3 else {} ),
+                    **( {"vad": round(float(alpha_means[3]), 4)} if len(alpha_means) > 4 else {} ),
+                    **( {"context": round(float(alpha_means[-1]), 4)} if len(alpha_means) > 3 else {} ),
                 },
             }, f, indent=2)
 
@@ -585,7 +645,6 @@ def run_one_cycle(reload_callback=None) -> None:
         ready_marker = MODEL_PATH.parent / ".ready"
         ready_marker.touch()
 
-        # Publish model stats to Redis for API health endpoint consumption
         try:
             _r = redis_sync.Redis(
                 host=os.getenv("REDIS_HOST", "localhost"),
@@ -596,7 +655,7 @@ def run_one_cycle(reload_callback=None) -> None:
                 "test_accuracy":         str(round(test_acc, 4)),
                 "test_f1_macro":         str(round(test_f1, 4)),
                 "val_f1_macro":          str(round(val_f1, 4)),
-                "ctx_gate":              str(round(float(alpha_means[3]), 4)) if len(alpha_means) > 3 else "0",
+                "ctx_gate":              str(round(float(alpha_means[-1]), 4)) if len(alpha_means) > 3 else "0",
                 "goe_gate":              str(round(float(alpha_means[2]), 4)),
                 "vader_gate":            str(round(float(alpha_means[0]), 4)),
                 "bert_gate":             str(round(float(alpha_means[1]), 4)),
@@ -627,7 +686,6 @@ def run_one_cycle(reload_callback=None) -> None:
 
     phase_times["Deploy / gate"] = time.time() - t_deploy
 
-    # ── Cycle timing summary ──────────────────────────────────────────────────
     total_cycle = time.time() - cycle_start
     if total_cycle >= 60:
         total_cycle_str = f"{int(total_cycle // 60)}m {int(total_cycle % 60)}s"
@@ -636,7 +694,6 @@ def run_one_cycle(reload_callback=None) -> None:
     phase_times["─── Total Cycle ───"] = ""
     phase_times["  Wall-clock time"] = total_cycle_str
 
-    # Format all phase times for the summary table
     phase_summary = {}
     for k, v in phase_times.items():
         if isinstance(v, float):
@@ -651,14 +708,7 @@ def run_one_cycle(reload_callback=None) -> None:
     print_report(prev_meta, test_acc, test_f1, len(X_tr), n_filtered, deployed, dataset_composition)
 
 
-# ── Background worker ───────────────────────────────────────────────────────────
-
 def start_trainer_thread(reload_callback) -> threading.Thread:
-    """
-    Spawn a daemon thread that runs run_one_cycle() every RETRAIN_INTERVAL seconds.
-    reload_callback(wrapper) is called after each successful deploy so main.py
-    can hot-swap META_LEARNER without restarting the container.
-    """
     def _loop():
         logger.info("Trainer started.")
         logger.log_stats("Trainer Configuration", {

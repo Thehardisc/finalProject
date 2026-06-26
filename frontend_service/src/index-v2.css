@@ -1,4 +1,4 @@
-/* InnerLink v2 Base Styles — always dark */
+/* InnerLink v2 Base Styles — Warm Wellness */
 @import './styles/tokens.css';
 @import './sarcasm.css';
 
@@ -14,8 +14,8 @@ html, body, #root {
 
 body {
   font-family: var(--font-sans, 'Inter', -apple-system, BlinkMacSystemFont, sans-serif);
-  background: var(--bg-base, #06060f);
-  color: var(--text-primary, #ededf5);
+  background: var(--bg-base, #FAF9F6);
+  color: var(--text-primary, #1C1B1A);
   height: 100vh;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
@@ -83,5 +83,5 @@ body {
 /* ── Scrollbars ──────────────────────────────────────────────────── */
 ::-webkit-scrollbar         { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track   { background: transparent; }
-::-webkit-scrollbar-thumb   { background: rgba(255,255,255,0.07); border-radius: 99px; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+::-webkit-scrollbar-thumb   { background: rgba(0,0,0,0.12); border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.22); }

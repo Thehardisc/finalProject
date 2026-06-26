@@ -83,7 +83,7 @@ function emotionFor(w, role) {
 
 // classify(text) → [{ text, ws, word|null, role, conf, emotion }]
 export function classify(text) {
-  if (!text) return [];
+  if (!text || typeof text !== 'string') return [];
   const raw = text.match(/([A-Za-z']+|[0-9]+)|([^A-Za-z'0-9]+)/g) || [];
   const tokens = [], wordIdx = [];
   for (const chunk of raw) {
@@ -139,7 +139,7 @@ export const THEMES = {
     'hedge':['#6b6450','#b8ad8e'],'intensifier':['#8a5a2c','#caa06b'],'absolute':['#9a3b63','#d18bab'],'negation':['#7a4a6e','#bb96b3'] } },
 };
 
-const hexToRgb = (hex) => { const h = hex.replace('#',''); return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; };
+const hexToRgb = (hex) => { const h = (typeof hex === 'string' ? hex : '#000000').replace('#',''); return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)]; };
 
 // roleColor(theme, role, dark) → { color, tint }
 export function roleColor(themeName, role, dark) {

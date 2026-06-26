@@ -1,13 +1,5 @@
-"""
-trainer/data/empathetic.py — EmpatheticDialogues feature extraction with real multi-turn CDM.
-
-Uses facebook/empathetic_dialogues (17,844 conversations, ~76k utterances) instead of the
-single-sentence bdotloh variant. Each utterance gets a real CDM vector built from the
-preceding turns in its conversation — same logic as meld.py — so has_cdm=True for every
-turn that has at least one prior utterance.
-"""
-
 import os
+import pickle
 import time
 from collections import Counter
 from pathlib import Path
@@ -27,7 +19,6 @@ logger = get_logger("trainer")
 MODEL_PATH             = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"))
 MAX_EMPATHETIC_SAMPLES = int(os.environ.get("MAX_EMPATHETIC_SAMPLES", 25_000))
 
-# ── EmpatheticDialogues 32 emotions → GoEmotions 28 labels ────────────────────
 _EMPATHETIC_TO_GOEMOTION: dict = {
     'sentimental': 'love',         'afraid':       'fear',
     'proud':       'pride',        'faithful':     'caring',
@@ -47,16 +38,89 @@ _EMPATHETIC_TO_GOEMOTION: dict = {
     'apprehensive':'nervousness',  'touched':      'caring',
 }
 
-# GoEmotions label → primary CDM intent state (derived from synthetic._LABEL_TO_INTENT primaries)
+# GoEmotions label → primary CDM intent state (primary values from synthetic._LABEL_TO_INTENT)
 _GOEMO_TO_CDM_STATE: dict = {
-    'admiration': 0, 'amusement': 1,   'anger': 6,       'annoyance': 6,
-    'approval':   0, 'caring': 7,      'confusion': 8,   'curiosity': 8,
-    'desire':     9, 'disappointment': 3, 'disapproval': 5, 'disgust': 5,
-    'embarrassment': 3, 'excitement': 4, 'fear': 2,      'gratitude': 0,
-    'grief':      3, 'joy': 4,         'love': 7,        'nervousness': 2,
-    'optimism':   4, 'pride': 0,       'realization': 8, 'relief': 4,
-    'remorse':    3, 'sadness': 3,     'surprise': 1,    'neutral': 0,
+    'admiration':    2,   # PRAISE
+    'amusement':     4,   # HUMOR
+    'anger':         6,   # CONFLICT
+    'annoyance':     5,   # TENSION
+    'approval':     14,   # AGREEMENT
+    'caring':       12,   # EMPATHY
+    'confusion':    11,   # ASSERTIVENESS
+    'curiosity':    10,   # CURIOSITY
+    'desire':        1,   # WARMTH
+    'disappointment':8,   # WITHDRAWAL
+    'disapproval':   5,   # TENSION
+    'disgust':       6,   # CONFLICT
+    'embarrassment': 8,   # WITHDRAWAL
+    'excitement':    2,   # PRAISE
+    'fear':          3,   # HELP_REQUEST
+    'gratitude':    14,   # AGREEMENT
+    'grief':         8,   # WITHDRAWAL
+    'joy':           1,   # WARMTH
+    'love':          1,   # WARMTH
+    'nervousness':   3,   # HELP_REQUEST
+    'optimism':     14,   # AGREEMENT
+    'pride':         2,   # PRAISE
+    'realization':   0,   # NEUTRAL
+    'relief':        9,   # RECONCILIATION
+    'remorse':       9,   # RECONCILIATION
+    'sadness':       8,   # WITHDRAWAL
+    'surprise':      4,   # HUMOR
+    'neutral':       0,   # NEUTRAL
 }
+
+
+_EMP_ARCHIVE_URL = "https://dl.fbaipublicfiles.com/parlai/empatheticdialogues/empatheticdialogues.tar.gz"
+_EMP_SPLIT_FILES = {
+    "train":      "empatheticdialogues/train.csv",
+    "validation": "empatheticdialogues/valid.csv",
+    "test":       "empatheticdialogues/test.csv",
+}
+
+
+def _download_empathetic_csv(hf_split: str) -> list:
+    """Download EmpatheticDialogues tar.gz from Facebook CDN and extract the requested split."""
+    import csv
+    import io
+    import tarfile
+    import urllib.request
+
+    archive_path = MODEL_PATH.parent / "empatheticdialogues.tar.gz"
+
+    if not archive_path.exists():
+        try:
+            logger.info(f"[EmpDialogues] Downloading archive from Facebook CDN (~28 MB)...")
+            with urllib.request.urlopen(_EMP_ARCHIVE_URL, timeout=300) as resp:
+                data = resp.read()
+            with open(archive_path, "wb") as f:
+                f.write(data)
+            logger.info(f"[EmpDialogues] Archive saved → {archive_path} ({len(data)/1e6:.1f} MB)")
+        except Exception as e:
+            logger.warning(f"[EmpDialogues] Download failed: {e}")
+            return []
+
+    member_name = _EMP_SPLIT_FILES.get(hf_split)
+    if not member_name:
+        logger.warning(f"[EmpDialogues] Unknown split: {hf_split}")
+        return []
+
+    try:
+        with tarfile.open(archive_path, "r:gz") as tar:
+            member = tar.getmember(member_name)
+            f = tar.extractfile(member)
+            if f is None:
+                logger.warning(f"[EmpDialogues] Could not extract {member_name}")
+                return []
+            text = f.read().decode("utf-8")
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+        logger.info(f"[EmpDialogues] {hf_split}: {len(rows)} rows from archive.")
+        return rows
+    except Exception as e:
+        logger.warning(f"[EmpDialogues] Failed to read {member_name} from archive: {e}")
+        archive_path.unlink(missing_ok=True)
+        return []
 
 
 def extract_empathetic_dialogues_features(
@@ -64,30 +128,32 @@ def extract_empathetic_dialogues_features(
     split: str = "train",
     batch_size: int = 32,
 ) -> tuple:
-    """
-    Build (X [N, FEATURE_DIM], y [N], has_cdm [N]) from facebook/empathetic_dialogues.
-
-    Groups utterances by conv_id, sorts by utterance_idx, then for each utterance
-    builds a CDM context vector from the preceding turns (identical logic to meld.py).
-    Returns has_cdm=True for all turns with at least one prior utterance in the same
-    conversation — giving real gradient signal to the context encoder.
-
-    Capped at MAX_EMPATHETIC_SAMPLES total utterances (train) or MAX//5 (val/test).
-    """
     hf_split = {"train": "train", "val": "validation", "test": "test"}.get(split, "train")
     cap      = MAX_EMPATHETIC_SAMPLES if split == "train" else MAX_EMPATHETIC_SAMPLES // 5
+    empty    = np.empty((0, FEATURE_DIM), dtype=np.float32)
 
-    try:
-        from datasets import load_dataset
-        emp = load_dataset("facebook/empathetic_dialogues", split=hf_split)
-    except Exception as e:
-        logger.warning(f"EmpatheticDialogues load failed: {e} — skipping {split} split.")
-        return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
+    cache_path = MODEL_PATH.parent / f"empathetic_{split}_cache.pkl"
+    cache_key  = f"empathetic_v2_{split}_{cap}_{FEATURE_DIM}"
+    if cache_path.exists():
+        try:
+            with open(cache_path, "rb") as f:
+                cached = pickle.load(f)
+            if cached.get("cache_key") == cache_key:
+                X, y, has_cdm = cached["data"]
+                logger.info(f"[EmpDialogues] {split} cache hit — {len(y)} utterances.")
+                return np.array(X, dtype=np.float32) if X else empty, y, has_cdm
+        except Exception as e:
+            logger.warning(f"[EmpDialogues] {split} cache load failed: {e} — recomputing.")
+
+    rows_raw = _download_empathetic_csv(hf_split)
+    if not rows_raw:
+        logger.warning(f"EmpatheticDialogues: no data for {split} split — skipping.")
+        return empty, [], []
 
     # Group rows by conversation, preserving only mappable emotions
     convs: dict = {}
     skipped_labels: Counter = Counter()
-    for row in emp:
+    for row in rows_raw:
         context     = str(row.get("context", "neutral")).lower()
         goemo_label = _EMPATHETIC_TO_GOEMOTION.get(context)
         if goemo_label is None:
@@ -180,7 +246,15 @@ def extract_empathetic_dialogues_features(
         f"  [EmpDialogues] {split}: {len(features)} features, "
         f"{real_count} ({100 * real_count / max(len(features), 1):.1f}%) with real CDM."
     )
-    empty = np.empty((0, FEATURE_DIM), dtype=np.float32)
+
+    if features:
+        try:
+            with open(cache_path, "wb") as f:
+                pickle.dump({"cache_key": cache_key, "data": (features, labels, has_cdm_list)}, f)
+            logger.info(f"  [EmpDialogues] {split} cache saved → {cache_path}")
+        except Exception as e:
+            logger.warning(f"  [EmpDialogues] Could not save {split} cache: {e}")
+
     return (
         np.array(features, dtype=np.float32) if features else empty,
         labels,

@@ -11,7 +11,6 @@ import uuid
 from collections import OrderedDict
 from typing import List, Optional
 
-# Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
@@ -31,12 +30,9 @@ logger = get_logger("api_service")
 
 app = FastAPI(title="Emotion API", version="1.0.0")
 
-# Include modular routers — handles all /conversations/*, /conversation/*, /message/* endpoints
 app.include_router(conv_router)
 app.include_router(msg_router)
 
-# Comma-separated list — matches the ingestion_service convention.
-# Default keeps local dev working; production sets ALLOWED_ORIGINS=https://your.host
 _DEFAULT_ORIGINS = "http://localhost:5173,http://localhost,http://127.0.0.1,http://127.0.0.1:5173"
 _allowed_origins = [
     o.strip() for o in os.environ.get("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
@@ -52,10 +48,8 @@ app.add_middleware(
 
 redis_client = RedisClient()
 rate_limiter = None
-db_pool = None  # kept for inline endpoints that reference it directly
+db_pool      = None
 
-
-# ── Health ─────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 @app.get("/health/status")
@@ -141,8 +135,6 @@ async def get_model_health():
     }
 
 
-# ── Stream Metrics ─────────────────────────────────────────────────────────────
-
 MONITORED_STREAMS = [
     "message_stream",
     "preprocessed_stream",
@@ -169,8 +161,6 @@ async def get_stream_depths():
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": str(e)}, status_code=500)
 
-
-# ── WebSocket Manager ──────────────────────────────────────────────────────────
 
 class ConnectionManager:
     def __init__(self):
@@ -211,13 +201,11 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# LRU cache: conversation_id → [user_id, ...]; evicts oldest when >1000 entries
-_participant_cache: OrderedDict = OrderedDict()
+_participant_cache: OrderedDict = OrderedDict()  # conv_id → [user_id,...], LRU evict at 1000
 _PARTICIPANT_CACHE_MAX = 1000
 
 
 async def _get_participants(pool, conv_id: str) -> list:
-    """Fetch conversation participants with LRU caching to avoid N+1 DB queries."""
     if conv_id in _participant_cache:
         _participant_cache.move_to_end(conv_id)
         return _participant_cache[conv_id]
@@ -231,8 +219,6 @@ async def _get_participants(pool, conv_id: str) -> list:
         _participant_cache.popitem(last=False)
     return user_ids
 
-
-# ── Redis Stream → WebSocket bridge ───────────────────────────────────────────
 
 async def _handle_conversation_update(message_id, data):
     raw_text     = data.get("original_text", "") or data.get("text", "")
@@ -335,7 +321,6 @@ async def _handle_model_ready(message_id, data):
 
 
 async def _handle_conversation_idle(data: dict) -> None:
-    """Triggered when a conversation has been idle for CONVERSATION_IDLE_MINUTES."""
     from api_service.routes.conversations import _run_analysis
     cid = data.get("conversation_id", "")
     if not cid:
@@ -351,7 +336,6 @@ async def _handle_conversation_idle(data: dict) -> None:
 
 
 async def redis_listener():
-    """Listen to Redis streams and push updates to connected WebSocket clients."""
     logger.info("Starting Redis Listener for WebSockets...")
     r = redis_client.redis
     STREAM_KEYS = [
@@ -385,8 +369,6 @@ async def redis_listener():
             logger.log_exception("WebSocket Redis Listener Error", e)
             await asyncio.sleep(1)
 
-
-# ── WebSocket endpoint ─────────────────────────────────────────────────────────
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
@@ -439,7 +421,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 msg_obj = json.loads(data)
                 text = msg_obj.get("text")
                 if text:
-                    # Admins may impersonate sender_id (used by DemoRunner for bi-directional demo)
                     sender = (
                         msg_obj.get("sender_id")
                         if user_data.get("role") == "admin" and msg_obj.get("sender_id")
@@ -478,8 +459,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         manager.disconnect(websocket, user_id)
 
 
-# ── Lifecycle ──────────────────────────────────────────────────────────────────
-
 @app.on_event("startup")
 async def startup_event():
     global db_pool, rate_limiter
@@ -488,8 +467,6 @@ async def startup_event():
 
     await redis_client.connect()
     rate_limiter = RateLimiter(redis_client)
-
-    # Wire redis client into routers that need it
     _conv_set_redis(redis_client)
     _msg_set_redis(redis_client)
     _conv_set_cache_invalidator(lambda conv_id: _participant_cache.pop(conv_id, None))
@@ -504,8 +481,6 @@ async def shutdown_event():
     db_pool = None
     await redis_client.close()
 
-
-# ── Auth Endpoints ─────────────────────────────────────────────────────────────
 
 from pydantic import BaseModel, Field
 
@@ -526,7 +501,6 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/register", status_code=201)
 async def register(req: RegisterRequest, response: Response):
-    """Register a new user account with bcrypt-hashed password."""
     import re
     if not re.match(r'^[^@]+@[^@]+\.[^@]+$', req.email):
         raise HTTPException(status_code=400, detail="Invalid email format.")
@@ -561,7 +535,6 @@ async def register(req: RegisterRequest, response: Response):
 
 @app.post("/auth/login")
 async def auth_login(req: LoginRequest, response: Response):
-    """Authenticate user with password, return signed JWT."""
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT user_id, email, display_name, password_hash, role, is_active FROM users WHERE email = $1",
@@ -600,14 +573,12 @@ async def auth_login(req: LoginRequest, response: Response):
 
 @app.post("/auth/logout")
 async def auth_logout(response: Response):
-    """Clear the authentication cookie."""
     response.delete_cookie(key="_req_sid", samesite="lax")
     return {"status": "logged_out"}
 
 
 @app.get("/auth/me")
 async def auth_me(current_user: dict = Depends(get_current_user)):
-    """Return profile of the currently authenticated user."""
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT user_id, email, display_name, role, is_active, created_at, last_login FROM users WHERE user_id = $1",
@@ -618,8 +589,6 @@ async def auth_me(current_user: dict = Depends(get_current_user)):
     return dict(user)
 
 
-# ── Admin Endpoints ────────────────────────────────────────────────────────────
-
 class UpdateUserRequest(BaseModel):
     role:      Optional[str]  = None
     is_active: Optional[bool] = None
@@ -627,7 +596,6 @@ class UpdateUserRequest(BaseModel):
 
 @app.get("/admin/users")
 async def admin_list_users(admin: dict = Depends(require_admin)):
-    """List all users with stats. Admin only."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT user_id, email, display_name, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC"
@@ -637,7 +605,6 @@ async def admin_list_users(admin: dict = Depends(require_admin)):
 
 @app.patch("/admin/users/{user_id}")
 async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = Depends(require_admin)):
-    """Update a user's role or active status. Admin only."""
     if user_id == admin["sub"]:
         raise HTTPException(status_code=400, detail="Admins cannot modify their own account via this endpoint.")
 
@@ -672,7 +639,6 @@ async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = 
 
 @app.delete("/admin/users/{user_id}", status_code=204)
 async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
-    """Permanently delete a user. Admin only."""
     if user_id == admin["sub"]:
         raise HTTPException(status_code=400, detail="Admins cannot delete their own account.")
     async with db_pool.acquire() as conn:
@@ -694,7 +660,6 @@ async def admin_recent_analyses(
     conversation_id: Optional[str] = None,
     admin: dict = Depends(require_admin),
 ):
-    """List recent messages with emotion analyses. Admin only."""
     async with db_pool.acquire() as conn:
         if conversation_id:
             rows = await conn.fetch(
@@ -754,7 +719,6 @@ async def admin_pipeline_detail(
     message_id: str,
     admin: dict = Depends(require_admin),
 ):
-    """Full step-by-step pipeline breakdown for a message. Admin only."""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -852,11 +816,8 @@ async def admin_pipeline_detail(
     }
 
 
-# ── Users / Presence ───────────────────────────────────────────────────────────
-
 @app.get("/users/online", dependencies=[Depends(get_current_user)])
 async def get_online_users():
-    """Return user IDs that currently have an active WebSocket connection."""
     return {"online_user_ids": list(manager.active_connections.keys())}
 
 
@@ -872,7 +833,6 @@ _DEMO_PW = os.environ.get("DEMO_PASSWORD", "demo-innerlink-2026")
 
 @app.post("/auth/demo-login/{slot}")
 async def demo_login(slot: int, response: Response):
-    """One-click login as a preset demo user (slot 0-4). Creates the account on first use."""
     if slot < 0 or slot >= len(DEMO_USERS):
         raise HTTPException(status_code=400, detail="Invalid demo slot.")
     demo = DEMO_USERS[slot]
@@ -918,7 +878,6 @@ async def demo_login(slot: int, response: Response):
 
 @app.get("/users", dependencies=[Depends(get_current_user)])
 async def get_users(current_user_id: str = Query(None)):
-    """Return active users, optionally excluding the calling user."""
     async with db_pool.acquire() as conn:
         if current_user_id:
             rows = await conn.fetch(
@@ -932,11 +891,8 @@ async def get_users(current_user_id: str = Query(None)):
     return [dict(r) for r in rows]
 
 
-# ── Analytics ──────────────────────────────────────────────────────────────────
-
 @app.get("/analytics/calibration", dependencies=[Depends(get_current_user)])
 async def get_calibration_analytics():
-    """Get model performance metrics from human-verified feedback."""
     from collections import Counter
 
     pool = get_pool()
@@ -962,12 +918,9 @@ async def get_calibration_analytics():
     for row in rows:
         actual    = row['ground_truth_emotion']
         ems       = json.loads(row['emotions_json'])
-        # emotions_json is a 28-class distribution dict — dominant is the argmax.
         numeric   = {k: float(v) for k, v in ems.items() if isinstance(v, (int, float)) and k in EMOTION_LABELS}
         if not numeric:
-            # No model output recorded (feedback-only row) — skip to avoid
-            # misattributing "neutral" as the predicted class.
-            total_verified -= 1
+            total_verified -= 1  # feedback-only row, no model output → skip
             continue
         predicted = max(numeric, key=numeric.get)
 
@@ -1012,8 +965,6 @@ async def get_calibration_analytics():
         "timestamp":              time.time(),
     }
 
-
-# ── Static dashboard ───────────────────────────────────────────────────────────
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():

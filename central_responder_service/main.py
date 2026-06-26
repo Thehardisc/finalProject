@@ -6,10 +6,8 @@ import time
 from collections import deque
 from typing import Optional
 
-# Add parent directory to path to import shared (must come before shared imports)
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-# import meta learner
 from meta_learner import (
     load_meta_learner,
     build_feature_vector,
@@ -18,7 +16,6 @@ from meta_learner import (
     apply_context_correction,
 )
 
-# import background trainer
 from trainer import start_trainer_thread
 
 from trajectory.inference import load_trajectory_model, run_trajectory_step
@@ -30,10 +27,11 @@ from prometheus_client import start_http_server as _start_metrics_server
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.constants import (
-    CDM_CTX_DIM, PRIOR_DIM, N_CDM_STATES,
+    CDM_CTX_DIM, PRIOR_DIM, N_CDM_STATES, CDM_STATES,
     CTX_HIST_POS, CTX_HIST_NEU, CTX_HIST_NEG,
     CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
     CTX_RESIDENCY, CTX_ABRUPTNESS,
+    EMOTION_LABELS as _EMOTION_LABELS,
 )
 from shared.module_registry import ModuleRegistry
 from implicit_emotion import (
@@ -53,18 +51,10 @@ CONSUMER_NAME = "responder_1"
 OUTPUT_STREAM = "emotion_stream"
 
 AGGREGATION_TIMEOUT_MS = 5000
-# How long to wait for optional modules after all required have arrived.
-# Tunable via env: set higher (e.g. 100 ms) if context_engine latency is >50 ms p50.
-OPTIONAL_TIMEOUT_MS = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "1000"))
+OPTIONAL_TIMEOUT_MS    = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "1000"))
+TRAINER_EXTERNAL       = os.environ.get("TRAINER_EXTERNAL", "false").lower() == "true"
 
-# When true, the trainer runs in its own container (trainer_service) and signals
-# reloads via Redis pub/sub.  When false (default), trainer runs as a daemon thread.
-TRAINER_EXTERNAL = os.environ.get("TRAINER_EXTERNAL", "false").lower() == "true"
-
-# ── Module registry — populated in main() after Redis connects ──────────────────
-REGISTRY: Optional[ModuleRegistry] = None
-
-# ── Meta-learner ────────────────────────────────────────────────────────────────
+REGISTRY:     Optional[ModuleRegistry] = None
 META_LEARNER = load_meta_learner()
 if META_LEARNER is None:
     logger.warning("No compatible meta_weights.pkl found. Falling back to Rule-Based Aggregation until trainer finishes.")
@@ -110,10 +100,6 @@ if SARCASM_MODEL is not None:
     logger.info("Sarcasm classifier loaded — learned sarcasm_score ACTIVE.")
 
 
-# ── Aggregation helpers ─────────────────────────────────────────────────────────
-
-# Recently-completed message IDs — prevents re-processing late optional arrivals.
-# deque(maxlen) automatically evicts from the left when full.
 _completed_order: deque = deque(maxlen=500)
 _completed_ids:   set   = set()
 
@@ -127,7 +113,6 @@ def _mark_completed(msg_id: str) -> None:
 
 
 async def _do_aggregation(msg_id: str, info: dict, r) -> None:
-    """Execute aggregation and clean up pending state."""
     packets    = list(info["models"].values())
     agg_lat    = (time.time() - info["arrival_timestamp"]) * 1000
     try:
@@ -139,12 +124,6 @@ async def _do_aggregation(msg_id: str, info: dict, r) -> None:
 
 
 async def _optional_timeout(msg_id: str, r) -> None:
-    """
-    Fires OPTIONAL_TIMEOUT_MS after all required modules arrived.
-    Triggers aggregation with whatever optional modules have appeared so far.
-    If aggregation already ran (optional arrived in time), the 'aggregated'
-    flag prevents double-processing.
-    """
     await asyncio.sleep(OPTIONAL_TIMEOUT_MS / 1000.0)
     info = pending_aggregations.get(msg_id)
     if info and not info.get("aggregated"):
@@ -158,12 +137,6 @@ async def _optional_timeout(msg_id: str, r) -> None:
 
 
 async def _model_reload_listener() -> None:
-    """
-    Subscribe to 'model_reload_signal' and hot-swap META_LEARNER from disk.
-    Used when TRAINER_EXTERNAL=true (trainer runs in its own container).
-    The trainer publishes to this channel after saving a new pkl.
-    Reconnects automatically on Redis connection loss.
-    """
     while True:
         try:
             pubsub = redis_client.redis.pubsub()
@@ -195,11 +168,6 @@ async def _model_reload_listener() -> None:
 
 
 async def _registry_refresh_loop(registry: ModuleRegistry) -> None:
-    """
-    Background task: re-reads module_registry Hash every 30 s.
-    The initial 5 s delay gives services time to register on startup before
-    the first scheduled refresh.
-    """
     await asyncio.sleep(5)
     while True:
         try:
@@ -210,15 +178,14 @@ async def _registry_refresh_loop(registry: ModuleRegistry) -> None:
         await asyncio.sleep(30)
 
 
-# ── Core aggregation logic ─────────────────────────────────────────────────────
-
 async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     logger.debug(f"Aggregating results for {message_id}...")
 
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
 
-    model_outputs  = {}
-    context_vector = None
+    model_outputs    = {}
+    context_vector   = None
+    appraisal_scores = None
     for res in partial_results:
         model_name = res.get("model_name")
         if model_name == "context_engine":
@@ -228,6 +195,14 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
                     context_vector = json.loads(raw_cv) if isinstance(raw_cv, str) else raw_cv
                 except (json.JSONDecodeError, TypeError):
                     context_vector = None
+            try:
+                appraisal_scores = {
+                    "novelty":         float(res.get("appraisal_novelty",         0.0)),
+                    "goal_congruence": float(res.get("appraisal_goal_congruence", 0.0)),
+                    "coping":          float(res.get("appraisal_coping",          0.5)),
+                }
+            except (TypeError, ValueError):
+                pass
         else:
             model_outputs[model_name] = res.get("scores", {})
 
@@ -256,8 +231,6 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     except Exception as e:
         logger.warning(f"Failed to fetch prev_emotion for {conv_id}: {e}")
 
-    # Load trajectory prior: predicted_next from the previous message in this conversation.
-    # Zeros on first message or if trajectory model is not running.
     traj_prior = [0.0] * PRIOR_DIM
     try:
         raw_prior = await r.get(f"trajectory:{conv_id}:prior")
@@ -268,9 +241,6 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     except Exception as _tpe:
         logger.debug(f"Could not load trajectory prior for {conv_id}: {_tpe}")
 
-    # Fetch message text and conversation history before build_feature_vector.
-    # History is read here (prior messages only) and reused by the implicit emotion
-    # section below — avoids a second Redis round-trip for the same key.
     _orig_text    = original_data.get("original_text", "")
     _conv_history = await get_conv_history(r, conv_id)
 
@@ -281,16 +251,39 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     )
     logger.debug(f"[Sarcasm] {message_id}: learned={learned_sarcasm:.3f}")
 
+    goe_raw_scores = model_outputs.get("go_emotions", {})
+    vad_scores = {
+        "valence":   float(goe_raw_scores.get("vad_valence",   0.0)),
+        "arousal":   float(goe_raw_scores.get("vad_arousal",   0.0)),
+        "dominance": float(goe_raw_scores.get("vad_dominance", 0.0)),
+    }
+
+    sender_id = original_data.get("user_id", "")
+    dynamics_scores = {"inertia": 0.0, "contagion": 0.0}
+    try:
+        raw_inertia   = await r.get(f"conv:{conv_id}:inertia:{sender_id}")
+        raw_contagion = await r.get(f"conv:{conv_id}:contagion")
+        if raw_inertia:
+            dynamics_scores["inertia"]   = float(raw_inertia)
+        if raw_contagion:
+            dynamics_scores["contagion"] = float(raw_contagion)
+    except Exception as _dyn_err:
+        logger.debug(f"Could not read dynamics for {conv_id}: {_dyn_err}")
+
     fv = build_feature_vector(
         model_outputs,
         context_vector=context_vector,
         trajectory_prior=traj_prior,
         sarcasm_score=learned_sarcasm,
+        vad_scores=vad_scores,
+        dynamics_scores=dynamics_scores,
+        appraisal_scores=appraisal_scores,
     )
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc, gate_alpha = \
         predict_with_meta_learner(META_LEARNER, fv)
 
-    # apply_context_correction is a no-op stub in v2 (gating network handles this natively)
+    ekman_group = final_scores.pop("ekman_group", None)
+
     corrected_scores, ctx_correction_weight = apply_context_correction(
         final_scores, context_vector, prev_emotion=prev_emotion
     )
@@ -299,12 +292,12 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         dominant_emotion = max(final_scores, key=final_scores.get)
         meta_confidence  = final_scores[dominant_emotion]
 
-    # ── AI Confidence & Anomaly Validation Gatekeeper ───────────────────────────
     bert_scores = model_outputs.get("basic_bert", {})
     bert_max_prob = max([float(v) for v in bert_scores.values()]) if bert_scores else 0.0
 
-    goe_scores = model_outputs.get("go_emotions", {})
-    goe_max_prob = max([float(v) for v in goe_scores.values()]) if goe_scores else 0.0
+    goe_scores_raw = model_outputs.get("go_emotions", {})
+    goe_scores = {k: float(v) for k, v in goe_scores_raw.items() if k in _EMOTION_LABELS}
+    goe_max_prob = max(goe_scores.values()) if goe_scores else 0.0
 
     is_anomaly = False
     anomaly_reason = []
@@ -322,11 +315,10 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         is_anomaly = True
         logger.warning(f"[ANOMALY DETECTED] {message_id}: {', '.join(anomaly_reason)}")
 
-        # Fallback to the most confident NLP model to preserve information
         original_conflict_desc = conflict_desc
         conflict_desc = "Anomaly Fallback: Dynamic Recovery"
         if goe_max_prob >= bert_max_prob and goe_scores:
-            final_scores = goe_scores
+            final_scores = goe_scores   # already filtered to emotion labels only
         elif bert_scores:
             final_scores = bert_scores
         else:
@@ -335,8 +327,6 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         dominant_emotion = max(final_scores, key=final_scores.get) if final_scores else "neutral"
         meta_confidence = final_scores.get(dominant_emotion, 0.0)
 
-    # ── Implicit emotion override (Stage 0) ─────────────────────────────────────
-    # _orig_text and _conv_history were already fetched before build_feature_vector.
     _impl_override = False
     if is_implicit_candidate(dominant_emotion, goe_scores, _orig_text, meta_confidence):
         _impl_result  = await request_implicit_emotion(r, message_id, _orig_text, _conv_history)
@@ -409,6 +399,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
 
     cdm_probs     = context_vector[0:N_CDM_STATES] if ce_available else [0.0] * N_CDM_STATES
     cdm_state_idx = cdm_probs.index(max(cdm_probs)) if ce_available else None
+    cdm_state_name = CDM_STATES[cdm_state_idx] if cdm_state_idx is not None else None
 
     pipeline_log = {
         "models":                model_outputs,
@@ -419,10 +410,15 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "logic_map":             logic_map,
         "ctx_correction_weight": ctx_correction_weight,
         "ctx_weight_pct":        round(float(logic_map.get("Context", 0.0)), 4),
-        "gate_weights_alpha":    gate_alpha,  # [vader_w, bert_w, goe_w] or None
+        "gate_weights_alpha":    gate_alpha,
         "sarcasm_score":         float(sarcasm_score),
+        "inversion_applied":     (sarcasm_score > 0.5),
         "conflict":              conflict_desc,
         "trajectory":            trajectory,
+        "vad":                   vad_scores,
+        "dynamics":              dynamics_scores,
+        "appraisal":             appraisal_scores,
+        "ekman_group":           ekman_group,
         "context_snapshot": {
             "prev_emotion":         prev_emotion,
             "cur_valence":          cur_val,
@@ -433,7 +429,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             "volatility":           volatility,
             "ce_available":         ce_available,
             "cdm_state_probs":      [round(float(p), 4) for p in cdm_probs],
-            "cdm_current_state":    cdm_state_idx,
+            "cdm_current_state":    cdm_state_name,
             "cdm_residency":        round(float(context_vector[CTX_RESIDENCY]), 3) if ce_available else 0.0,
             "cdm_entry_abruptness": round(float(context_vector[CTX_ABRUPTNESS]), 3) if ce_available else 0.0,
             "cdm_available":        ce_available,
@@ -443,7 +439,6 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     vader_scalars = {k: v for k, v in model_outputs.get("vader", {}).items()}
 
     output_event                     = original_data.copy()
-    # vader_scalars are already captured in pipeline_log — keep emotions pure (28 GoEmotions only)
     output_event["emotions"]         = json.dumps(final_scores)
     output_event["vader"]            = json.dumps(vader_scalars)
     output_event["dominant_emotion"] = dominant_emotion
@@ -473,12 +468,6 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     await redis_client.publish_event(OUTPUT_STREAM, output_event)
 
 
-# ── Pending aggregations dict ──────────────────────────────────────────────────
-# Structure per msg_id:
-#   arrival_timestamp : float     — when the first partial result arrived
-#   models            : dict      — model_name → full_packet
-#   aggregated        : bool      — True once aggregation has been claimed
-#   optional_task     : Task|None — the pending _optional_timeout coroutine
 pending_aggregations: dict = {}
 
 
@@ -488,7 +477,6 @@ async def main():
     await redis_client.connect()
     r = redis_client.redis
 
-    # ── Build and seed the module registry ────────────────────────────────────
     REGISTRY = ModuleRegistry(r, refresh_interval=30.0)
     await REGISTRY.refresh()
     REGISTRY.log_state(logger)
@@ -516,10 +504,7 @@ async def main():
 
     while True:
         try:
-            # Refresh registry cache if stale (cheap: just a time.time() check)
             await REGISTRY.maybe_refresh()
-
-            # PEL recovery: reclaim stale messages idle >30 s
             try:
                 _, stale, _ = await r.xautoclaim(
                     INPUT_STREAM, GROUP_NAME, CONSUMER_NAME,
@@ -542,24 +527,25 @@ async def main():
                         msg_id     = data.get("message_id")
                         model_name = data.get("model_name")
 
-                        # ── Ignore late arrivals for already-completed messages ──
                         if msg_id in _completed_ids:
                             await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
                             continue
 
-                        # ── Parse the incoming packet ──────────────────────────
                         if model_name == "context_engine":
                             full_packet = {
-                                "model_name":          model_name,
-                                "context_vector":      data.get("context_vector"),
-                                "original_data":       data.get("original_data"),
-                                "ctx_hist_pos":        data.get("ctx_hist_pos"),
-                                "ctx_hist_neu":        data.get("ctx_hist_neu"),
-                                "ctx_hist_neg":        data.get("ctx_hist_neg"),
-                                "ctx_topic_resonance": data.get("ctx_topic_resonance"),
-                                "ctx_volatility":      data.get("ctx_volatility"),
-                                "ctx_curr_valence":    data.get("ctx_curr_valence"),
-                                "ctx_dim":             data.get("ctx_dim"),
+                                "model_name":               model_name,
+                                "context_vector":           data.get("context_vector"),
+                                "original_data":            data.get("original_data"),
+                                "ctx_hist_pos":             data.get("ctx_hist_pos"),
+                                "ctx_hist_neu":             data.get("ctx_hist_neu"),
+                                "ctx_hist_neg":             data.get("ctx_hist_neg"),
+                                "ctx_topic_resonance":      data.get("ctx_topic_resonance"),
+                                "ctx_volatility":           data.get("ctx_volatility"),
+                                "ctx_curr_valence":         data.get("ctx_curr_valence"),
+                                "ctx_dim":                  data.get("ctx_dim"),
+                                "appraisal_novelty":        data.get("appraisal_novelty"),
+                                "appraisal_goal_congruence": data.get("appraisal_goal_congruence"),
+                                "appraisal_coping":         data.get("appraisal_coping"),
                             }
                         else:
                             scores_raw = data.get("scores")
@@ -586,7 +572,6 @@ async def main():
                             except Exception:
                                 pass
 
-                        # ── Accumulate ────────────────────────────────────────
                         if msg_id not in pending_aggregations:
                             pending_aggregations[msg_id] = {
                                 "arrival_timestamp": time.time(),
@@ -597,7 +582,6 @@ async def main():
 
                         pending_aggregations[msg_id]["models"][model_name] = full_packet
 
-                        # ── Publish partial result for frontend stream progress ─
                         if model_name != "context_engine":
                             orig    = full_packet.get("original_data")
                             conv_id = orig.get("conversation_id") if isinstance(orig, dict) else None
@@ -614,8 +598,7 @@ async def main():
                                 except Exception:
                                     pass
 
-                        # ── Registry-driven aggregation trigger ────────────────
-                        info            = pending_aggregations.get(msg_id)
+                        info = pending_aggregations.get(msg_id)
                         if not info or info["aggregated"]:
                             await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
                             continue
@@ -630,33 +613,20 @@ async def main():
                             await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
                             continue
 
-                        # All required models present.
                         if REGISTRY.all_optional_present(received_models):
-                            # Everything arrived — cancel timeout if scheduled, aggregate now.
                             task = info["optional_task"]
                             if task and not task.done():
                                 task.cancel()
                             info["aggregated"] = True
-                            logger.debug(
-                                f"[{msg_id}] all required + optional present — "
-                                f"aggregating immediately"
-                            )
+                            logger.debug(f"[{msg_id}] all required + optional present — aggregating")
                             await _do_aggregation(msg_id, info, r)
                         elif info["optional_task"] is None:
-                            # First time required is complete — start the optional timer.
-                            logger.debug(
-                                f"[{msg_id}] required complete, optional outstanding — "
-                                f"starting {OPTIONAL_TIMEOUT_MS}ms timer"
-                            )
-                            info["optional_task"] = asyncio.create_task(
-                                _optional_timeout(msg_id, r)
-                            )
-                        # else: timer already running, nothing to do this pass.
+                            logger.debug(f"[{msg_id}] required complete, optional outstanding — starting {OPTIONAL_TIMEOUT_MS}ms timer")
+                            info["optional_task"] = asyncio.create_task(_optional_timeout(msg_id, r))
 
                         await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
 
-            # ── Stale cleanup (>60 s old, never completed) ─────────────────────
-            now        = time.time()
+            now = time.time()
             stale_keys = [
                 mid for mid, info in pending_aggregations.items()
                 if now - info["arrival_timestamp"] > 60

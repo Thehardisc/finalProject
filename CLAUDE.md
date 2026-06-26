@@ -1,5 +1,27 @@
 # CLAUDE.md — InnerLink Emotion Analysis System
 
+---
+
+## Workflow Protocol
+
+### Philosophy: The 80/20 Rule
+Use AI for the 80% routine/heavy-lifting tasks; surface the remaining 20% (judgment calls) explicitly for human review.
+
+### Codification Pipeline
+For every complex or repetitive task, follow these 4 steps:
+
+1. **[PIPELINE DEFINITION]** — Outline inputs, processing logic, and expected output before starting.
+2. **[EXECUTION OF THE 80%]** — Do the heavy lifting: formatting, drafting, data extraction, initial implementation.
+3. **[THE 20% JUDGMENT CALL]** — Stop and explicitly flag areas requiring human judgment, strategic choice, or approval. Use clear formatting.
+4. **[HUMAN-IN-THE-LOOP]** — Wait for approval or modification on the flagged 20% before finalizing.
+
+### Operational Rules
+- **High Signal, Low Noise**: No pleasantries. Output tables, diff blocks, and structured lists.
+- **Identify Edge Cases**: Do not guess on ambiguities — quarantine and flag them in the [THE 20% JUDGMENT CALL] section.
+- **Repeatable Structure**: Treat requests as reusable blueprints with consistent output format every time.
+
+---
+
 ## Project Summary
 InnerLink is a real-time emotion analysis chat application. Messages flow through an ML pipeline of parallel NLP analyzers, a meta-learner that fuses their outputs, and a trajectory LSTM that predicts emotional direction. The frontend displays live emotion scores alongside each message.
 
@@ -46,19 +68,23 @@ message_stream
 
 ---
 
-## Feature Vector (107 dimensions)
+## Feature Vector (116 dimensions)
 
-`central_responder_service/meta_learner.py:build_feature_vector` (inference) and `central_responder_service/trainer.py` (training) MUST produce the same layout.
+`central_responder_service/meta_learner.py:build_feature_vector` (inference) and `central_responder_service/trainer/` (training) MUST produce the same layout.
 
 | Block | Indices | Source | Size | Constant |
 |---|---|---|---|---|
 | VADER | [0:4] | `vader_neg, vader_neu, vader_pos, vader_compound` | 4 | — |
 | BERT Ekman | [4:11] | 7 Ekman labels from `BERT_LABELS` | 7 | — |
-| GoEmotions | [11:39] | 28 labels from `EMOTION_LABELS` | 28 | `ML_DIM=39` |
-| CDM Context | [39:79] | context_engine CDM+HMM+scalars | 40 | `CDM_CTX_DIM=40` |
-| Trajectory Prior | [79:107] | LSTM `predicted_next` from previous message | 28 | `PRIOR_DIM=28` |
+| GoEmotions | [11:39] | 28 labels from `EMOTION_LABELS` | 28 | — |
+| VAD lexicon | [39:42] | valence, arousal, dominance (Warriner 2013) | 3 | `VAD_DIM=3` |
+| CDM Context | [42:82] | context_engine CDM+HMM+scalars | 40 | `CDM_CTX_DIM=40` |
+| Trajectory Prior | [82:110] | EDE `predicted_next` from previous message | 28 | `PRIOR_DIM=28` |
+| Sarcasm | [110] | sarcasm classifier score [0,1] | 1 | `SARCASM_DIM=1` |
+| Dynamics | [111:113] | emotional inertia + contagion (Kuppens/Kramer) | 2 | `DYNAMICS_DIM=2` |
+| Appraisal | [113:116] | novelty, goal_congruence, coping (Scherer 2001) | 3 | `APPRAISAL_DIM=3` |
 
-`CONTEXT_DIM = CDM_CTX_DIM + PRIOR_DIM = 68` — this is the full context block that `GatingEnsembleNet` processes as `x_c = x[:, ML_DIM:FEATURE_DIM]`.
+`ML_DIM=42` (NLP block). `CONTEXT_DIM = CDM_CTX_DIM + PRIOR_DIM + SARCASM_DIM + DYNAMICS_DIM + APPRAISAL_DIM = 74` — this is the full context block that `GatingEnsembleNet` processes as `x_c = x[:, ML_DIM:FEATURE_DIM]`.
 
 **CDM context vector layout** (40 dims — indices are *within* the CDM block, i.e. offset from 39):
 - `[0:15]` CDM intent one-hot (15 states — `N_CDM_STATES=15`)
@@ -84,22 +110,24 @@ message_stream
 - `[36:39]` hmm_top3_next_probs
 - `[39]` intent_stability
 
-**Trajectory Prior block** (28 dims, [79:107]): GoEmotions distribution predicted by the LSTM for this message, fetched from Redis `trajectory:{conv_id}:prior`. Zeros on first message or when trajectory model is absent.
+**Trajectory Prior block** (28 dims, [82:110]): GoEmotions distribution predicted by the EDE for this message, fetched from Redis `trajectory:{conv_id}:prior`. Zeros on first message or when trajectory model is absent.
 
 Label lists live in `shared/constants.py`: `EMOTION_LABELS` (28), `BERT_LABELS` (7), `VADER_KEYS` (4), `CDM_STATES` (15).
 Named index constants (`CTX_*`) must be used instead of hardcoded integers.
 
 ---
 
-## Trajectory LSTM
+## Trajectory — EmotionalDialogueEncoder (EDE)
 
-- **Input per step**: 79-dim tensor — GoEmotions(28) + BERT(7) + VADER(4) + EmojiNet(28) + context(12). Actual value read from `trajectory_config.json` (`input_dim=79`).
-- **Architecture**: `central_responder_service/trajectory/model.py:ConversationLSTM`
-- **Inference**: `central_responder_service/trajectory/inference.py` — reads `input_dim` from `trajectory_config.json`
-- **Model files**: `central_responder_service/models/trajectory_lstm.pt` + `trajectory_config.json`
-- **Purpose**: predicts the 28-dim GoEmotions distribution for the *next* message in a conversation
-- **Trajectory prior feedback**: after each step, `inference.py` writes `predicted_next` to Redis `trajectory:{conv_id}:prior` (TTL = `HIDDEN_TTL`). `aggregate_and_publish` reads this before calling `build_feature_vector`, so the prediction becomes part of the feature vector for message T+1 (indices [79:107]).
-- The model is optional — inference degrades gracefully if the file is missing; prior defaults to zeros.
+- **Architecture**: `central_responder_service/trajectory/model.py:EmotionalDialogueEncoder`
+- **Input**: GoE history window `[B, N, 28]` — last N real GoE distributions (oldest first). `d=64`, `window=12`.
+- **Output**: prior `[B, 28]` softmax + phase_logits `[B, 6]` (conversation phase)
+- **Phases**: opening, escalation, peak, turning_point, resolution, sustained
+- **Inference**: `central_responder_service/trajectory/inference.py`
+- **Model files**: `central_responder_service/models/` — bind-mounted, visible without rebuild
+- **Trajectory prior feedback**: after each step, `inference.py` writes `predicted_next` to Redis `trajectory:{conv_id}:prior`. Read before `build_feature_vector` → feature slot [82:110] for message T+1.
+- **Phase**: written to `trajectory:{conv_id}:phase`. Logged in pipeline_log.
+- The model is optional — inference degrades gracefully if files missing; prior defaults to zeros.
 
 ---
 
@@ -114,7 +142,7 @@ The trainer runs as a background thread inside `central_responder_service`.
 - **Gate**: new model only hot-reloaded if test accuracy ≥ `ACCURACY_GATE` (default 0.40)
 - **Interval**: `RETRAIN_INTERVAL_SECONDS` (default 1800)
 
-Key invariant: `trainer.py` feature building and `meta_learner.py:build_feature_vector` must produce identical 107-dim vectors. A mismatch causes `X has N features but StandardScaler expecting M` errors.
+Key invariant: `trainer/cycle.py` feature building and `meta_learner.py:build_feature_vector` must produce identical 116-dim vectors. A mismatch causes `X has N features but StandardScaler expecting M` errors.
 
 ---
 
@@ -201,10 +229,11 @@ docker compose ps
 
 ## Key Invariants & Gotchas
 
-- **Feature vector parity**: `meta_learner.py:build_feature_vector` and `trainer.py` must produce the same 107-dim vector. Mismatch → `X has N features but StandardScaler expecting M` error.
-- **Trajectory input**: 79-dim (GoE+BERT+VADER+Emoji+context). Input dim is read from `trajectory_config.json` via `config.get("input_dim", 67)` — do NOT hardcode it. Current deployed model: `input_dim=79`.
-- **Dimension constants**: `shared/constants.py` is the single source of truth. Key values: `ML_DIM=39`, `CDM_CTX_DIM=40`, `PRIOR_DIM=28`, `CONTEXT_DIM=68`, `FEATURE_DIM=107`, `N_CDM_STATES=15`. Use `CTX_*` named index constants — never hardcode integers. `context_engine_service` uses `CDM_CTX_DIM`; `GatingEnsembleNet` uses `CONTEXT_DIM` (the full 68-dim block).
-- **Trajectory prior Redis key**: `trajectory:{conv_id}:prior` — 28-dim JSON list. Written by `trajectory/inference.py`, read by `aggregate_and_publish` in `central_responder/main.py`. Missing key → zeros (safe).
+- **Feature vector parity**: `meta_learner.py:build_feature_vector` and `trainer/cycle.py` must produce the same 116-dim vector. Mismatch → `X has N features but StandardScaler expecting M` error.
+- **Dimension constants**: `shared/constants.py` is the single source of truth. Key values: `ML_DIM=42`, `CDM_CTX_DIM=40`, `PRIOR_DIM=28`, `CONTEXT_DIM=74`, `FEATURE_DIM=116`, `N_CDM_STATES=15`. Use `CTX_*` named index constants — never hardcode integers. `context_engine_service` uses `CDM_CTX_DIM`; `GatingEnsembleNet` uses `CONTEXT_DIM` (the full 74-dim block).
+- **Trajectory prior Redis key**: `trajectory:{conv_id}:prior` — 28-dim JSON list, feature slot [82:110]. Written by `trajectory/inference.py`, read by `aggregate_and_publish` in `central_responder/main.py`. Missing key → zeros (safe).
+- **GoEmotions gate cap**: `GatingEnsembleNet.forward()` hard-caps GoEmotions gate weight at ≤0.50 via `.clamp(max=0.50)`. Enforced regardless of training data distribution.
+- **Gate weights format**: `gate_weights_alpha` in WebSocket payload is [vader, bert, goe, vad, ctx] (5 elements). UI displays only first 3.
 - **CSS import**: `main.jsx` imports `index-v2.css`, not `index.css`. Edits to `index.css` have no effect on the running app.
 - **Model files on host**: `central_responder_service/models/` is bind-mounted into the container. Model files saved by the trainer are immediately visible to the running service without a rebuild.
 - **Frontend rebuild required**: CSS and JSX changes require `docker compose up --build frontend_service -d` — the container serves a static Vite build.
