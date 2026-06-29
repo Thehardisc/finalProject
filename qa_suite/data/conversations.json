@@ -1,0 +1,142 @@
+{
+  "_README": "Multi-turn conversations for the conversation test. Each turn has the emotion it SHOULD map to (scored at family level in aggregate). 'arc' + 'valence_trend' describe the expected emotional trajectory across the conversation: down | up | down_then_up | up_then_down | flat. The test checks (a) aggregate per-turn family accuracy and (b) the VADER-compound valence trend matches 'valence_trend'.",
+  "conversations": [
+    {
+      "id": "escalation_report",
+      "arc": "escalation",
+      "valence_trend": "down",
+      "turns": [
+        {"speaker": "A", "text": "Hey, did you get a chance to finish the report?", "emotion": "neutral"},
+        {"speaker": "B", "text": "Not yet, I've been really swamped today.", "emotion": "neutral"},
+        {"speaker": "A", "text": "This was supposed to be done yesterday.", "emotion": "annoyance"},
+        {"speaker": "A", "text": "I'm getting really frustrated with these delays.", "emotion": "annoyance"},
+        {"speaker": "A", "text": "This is completely unacceptable and I'm furious.", "emotion": "anger"}
+      ]
+    },
+    {
+      "id": "celebration_promotion",
+      "arc": "celebration",
+      "valence_trend": "up",
+      "turns": [
+        {"speaker": "A", "text": "So I heard back from work today.", "emotion": "neutral"},
+        {"speaker": "B", "text": "Oh? How did it go?", "emotion": "curiosity"},
+        {"speaker": "A", "text": "I got the promotion!", "emotion": "excitement"},
+        {"speaker": "B", "text": "That's wonderful, I'm so happy for you!", "emotion": "joy"},
+        {"speaker": "A", "text": "Thank you so much, I'm thrilled!", "emotion": "excitement"}
+      ]
+    },
+    {
+      "id": "grief_support",
+      "arc": "grief_support",
+      "valence_trend": "down_then_up",
+      "turns": [
+        {"speaker": "A", "text": "I lost my grandmother last night.", "emotion": "grief"},
+        {"speaker": "A", "text": "I feel completely devastated and empty.", "emotion": "sadness"},
+        {"speaker": "B", "text": "I'm so deeply sorry for your loss.", "emotion": "caring"},
+        {"speaker": "B", "text": "I'm here for you, you're not alone in this.", "emotion": "caring"},
+        {"speaker": "A", "text": "Thank you, that really means a lot to me.", "emotion": "gratitude"}
+      ]
+    },
+    {
+      "id": "anxiety_relief_exam",
+      "arc": "anxiety_relief",
+      "valence_trend": "down_then_up",
+      "turns": [
+        {"speaker": "A", "text": "I'm so nervous about the exam results.", "emotion": "nervousness"},
+        {"speaker": "A", "text": "I'm terrified I failed the whole thing.", "emotion": "fear"},
+        {"speaker": "B", "text": "The grades just got posted, go check.", "emotion": "neutral"},
+        {"speaker": "A", "text": "Oh thank goodness, I passed!", "emotion": "relief"},
+        {"speaker": "A", "text": "What a relief, I'm so happy right now.", "emotion": "joy"}
+      ]
+    },
+    {
+      "id": "complaint_resolution",
+      "arc": "complaint_resolution",
+      "valence_trend": "up",
+      "turns": [
+        {"speaker": "A", "text": "My order arrived broken and I'm really upset.", "emotion": "disappointment"},
+        {"speaker": "A", "text": "This is so frustrating, it's the second time.", "emotion": "annoyance"},
+        {"speaker": "B", "text": "I'm so sorry, we'll send a replacement right away.", "emotion": "caring"},
+        {"speaker": "B", "text": "And here's a full refund for the trouble.", "emotion": "neutral"},
+        {"speaker": "A", "text": "Oh wonderful, thank you so much for fixing it!", "emotion": "gratitude"}
+      ]
+    },
+    {
+      "id": "argument_breakup",
+      "arc": "argument",
+      "valence_trend": "down",
+      "turns": [
+        {"speaker": "A", "text": "We need to talk about what happened.", "emotion": "neutral"},
+        {"speaker": "B", "text": "I'm so tired of always being blamed.", "emotion": "annoyance"},
+        {"speaker": "A", "text": "You never listen to anything I say!", "emotion": "anger"},
+        {"speaker": "B", "text": "Maybe we just shouldn't do this anymore.", "emotion": "sadness"},
+        {"speaker": "A", "text": "Forget it, I give up. This whole thing is hopeless and miserable.", "emotion": "sadness"}
+      ]
+    },
+    {
+      "id": "excited_planning",
+      "arc": "excited_planning",
+      "valence_trend": "up",
+      "turns": [
+        {"speaker": "A", "text": "Should we book the trip to Italy?", "emotion": "curiosity"},
+        {"speaker": "B", "text": "Yes! I would absolutely love that.", "emotion": "excitement"},
+        {"speaker": "A", "text": "I can't wait, this is going to be amazing.", "emotion": "excitement"},
+        {"speaker": "B", "text": "I'm so happy we're finally doing this!", "emotion": "joy"}
+      ]
+    },
+    {
+      "id": "confusion_clarity",
+      "arc": "confusion_clarity",
+      "valence_trend": "up",
+      "turns": [
+        {"speaker": "A", "text": "Wait, I don't understand these instructions at all.", "emotion": "confusion"},
+        {"speaker": "B", "text": "You just connect the blue wire to the left port.", "emotion": "neutral"},
+        {"speaker": "A", "text": "Oh, now it makes complete sense.", "emotion": "realization"},
+        {"speaker": "A", "text": "Got it, thanks for clearing that up.", "emotion": "gratitude"}
+      ]
+    },
+    {
+      "id": "neutral_logistics",
+      "arc": "neutral_logistics",
+      "valence_trend": "flat",
+      "turns": [
+        {"speaker": "A", "text": "What time is the call scheduled for?", "emotion": "neutral"},
+        {"speaker": "B", "text": "It's at three in the afternoon.", "emotion": "neutral"},
+        {"speaker": "A", "text": "And which room are we using?", "emotion": "neutral"},
+        {"speaker": "B", "text": "Conference room B on the second floor.", "emotion": "neutral"}
+      ]
+    },
+    {
+      "id": "good_to_bad_news",
+      "arc": "reversal",
+      "valence_trend": "up_then_down",
+      "turns": [
+        {"speaker": "A", "text": "I'm so excited, we got the new contract!", "emotion": "excitement"},
+        {"speaker": "B", "text": "That's fantastic news, congratulations!", "emotion": "joy"},
+        {"speaker": "A", "text": "Wait... they just cancelled it an hour later.", "emotion": "disappointment"},
+        {"speaker": "A", "text": "I'm absolutely gutted, this is awful.", "emotion": "sadness"}
+      ]
+    },
+    {
+      "id": "gratitude_exchange",
+      "arc": "gratitude",
+      "valence_trend": "positive",
+      "turns": [
+        {"speaker": "A", "text": "Thank you for helping me move all weekend.", "emotion": "gratitude"},
+        {"speaker": "B", "text": "Of course, I was happy to help you out.", "emotion": "caring"},
+        {"speaker": "A", "text": "You're honestly the best friend ever.", "emotion": "admiration"},
+        {"speaker": "B", "text": "Aw, that means so much to me, thank you.", "emotion": "gratitude"}
+      ]
+    },
+    {
+      "id": "disgust_complaint",
+      "arc": "disgust",
+      "valence_trend": "down",
+      "turns": [
+        {"speaker": "A", "text": "The restaurant was fine when we sat down.", "emotion": "neutral"},
+        {"speaker": "A", "text": "Then I found a hair in my soup, it's revolting.", "emotion": "disgust"},
+        {"speaker": "A", "text": "I'm honestly disgusted, we're never coming back.", "emotion": "disgust"}
+      ]
+    }
+  ]
+}
