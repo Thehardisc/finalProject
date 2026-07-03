@@ -54,7 +54,7 @@ function Gauge({ label, value, lo, hi, color }) {
         <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#d1d5db' }}>{label}</span>
         <span style={{ fontSize: '0.70rem', color: '#4b5563' }}>{pct}%</span>
       </div>
-      <div style={{ position: 'relative', height: 5, borderRadius: 3, background: 'rgba(0,0,0,0.07)' }}>
+      <div style={{ position: 'relative', height: 5, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.07)' }}>
         <div style={{
           position: 'absolute', top: 0, left: 0, height: '100%',
           width: `${pct}%`,
@@ -109,7 +109,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 
   const data = msg?.analysis?.data;
   if (!data) return (
-    <div style={{ padding: 24, color: '#9B958F', fontSize: '0.85rem', textAlign: 'center', background: 'var(--bg-void,#FAF9F6)', height: '100%' }}>
+    <div style={{ padding: 24, color: 'var(--text-muted, #9B958F)', fontSize: '0.85rem', textAlign: 'center', background: 'var(--bg-void,#FAF9F6)', height: '100%' }}>
       No analysis available for this message yet.
       <button onClick={onClose} style={{ display: 'block', margin: '16px auto 0', background: 'none', border: 'none', color: '#818cf8', cursor: 'pointer', fontWeight: 600 }}>← Back</button>
     </div>
@@ -136,9 +136,9 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
   };
 
   const BG    = 'var(--bg-void, #FAF9F6)';
-  const BORDER = 'rgba(0,0,0,0.07)';
-  const MUTED  = '#9B958F';
-  const TEXT   = '#1C1B1A';
+  const BORDER = 'rgba(var(--ig-ink-rgb),0.09)';
+  const MUTED  = 'var(--text-muted, #9B958F)';
+  const TEXT   = 'var(--text-primary, #1C1B1A)';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', background: BG }}>
@@ -156,7 +156,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         </div>
         <button onClick={onClose} style={{
-          background: 'rgba(0,0,0,0.06)', border: 'none', borderRadius: '50%',
+          background: 'rgba(var(--ig-ink-rgb),0.06)', border: 'none', borderRadius: '50%',
           width: 26, height: 26, cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           color: MUTED, fontSize: '0.85rem', flexShrink: 0,
@@ -204,9 +204,9 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           {displayInsight && (
             <div style={{
               marginTop: 8, padding: '8px 10px',
-              background: 'rgba(0,0,0,0.04)',
+              background: 'rgba(var(--ig-ink-rgb),0.04)',
               borderRadius: 6, fontSize: '0.72rem',
-              color: '#9B958F', lineHeight: 1.55,
+              color: 'var(--text-muted, #9B958F)', lineHeight: 1.55,
               fontStyle: 'italic',
             }}>
               "{displayInsight}"
@@ -219,8 +219,8 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Sarcasm Detector</div>
             <div style={{
-              background: sarcasmScore > 0.4 ? 'rgba(245,158,11,0.08)' : 'rgba(0,0,0,0.03)',
-              border: sarcasmScore > 0.4 ? '1px solid rgba(245,158,11,0.25)' : '1px solid rgba(0,0,0,0.07)',
+              background: sarcasmScore > 0.4 ? 'rgba(245,158,11,0.08)' : 'rgba(var(--ig-ink-rgb),0.03)',
+              border: sarcasmScore > 0.4 ? '1px solid rgba(245,158,11,0.25)' : '1px solid rgba(var(--ig-ink-rgb),0.07)',
               borderRadius: 10, padding: '10px 12px',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -240,7 +240,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                   </span>
                 </div>
               </div>
-              <div style={{ height: 5, borderRadius: 3, background: 'rgba(0,0,0,0.07)' }}>
+              <div style={{ height: 5, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.07)' }}>
                 <div style={{
                   height: '100%', width: `${sarcasmScore * 100}%`,
                   background: sarcasmScore > 0.4 ? 'linear-gradient(90deg,#f59e0b,#d97706)' : '#6b7280',
@@ -263,7 +263,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                   <span style={{ fontSize: '0.76rem', fontWeight: 500, color: TEXT, textTransform: 'capitalize' }}>{label}</span>
                   <span style={{ fontSize: '0.72rem', fontWeight: 700, color: `rgb(${rgb})` }}>{pct.toFixed(0)}%</span>
                 </div>
-                <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.06)' }}>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.06)' }}>
                   <div style={{
                     height: '100%', width: `${pct}%`,
                     background: `linear-gradient(90deg, rgba(${rgb},0.9), rgba(${rgb},0.45))`,
@@ -297,7 +297,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                     {v >= 0 ? '+' : ''}{(v * 100).toFixed(0)}%
                   </span>
                 </div>
-                <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.06)', overflow: 'hidden' }}>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.06)', overflow: 'hidden' }}>
                   <div style={{
                     height: '100%',
                     width: `${Math.min(Math.abs(v) * 100, 100)}%`,
@@ -323,7 +323,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{
                   padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
-                  background: 'rgba(0,0,0,0.06)', color: '#9B958F', textTransform: 'capitalize',
+                  background: 'rgba(var(--ig-ink-rgb),0.06)', color: 'var(--text-muted, #9B958F)', textTransform: 'capitalize',
                 }}>
                   {data.context_snapshot.prev_emotion || 'none'}
                 </div>
@@ -344,7 +344,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                   { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#fbbf24' },
                   { label: 'Episodic', value: data.context_snapshot.ce_available ? 'active' : 'off', color: data.context_snapshot.ce_available ? '#4ade80' : '#4b5563' },
                 ].map(({ label, value, color }) => (
-                  <div key={label} style={{ padding: '7px 10px', background: 'rgba(0,0,0,0.04)', borderRadius: 8 }}>
+                  <div key={label} style={{ padding: '7px 10px', background: 'rgba(var(--ig-ink-rgb),0.04)', borderRadius: 8 }}>
                     <div style={{ fontSize: '0.60rem', color: '#4b5563', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
                     <div style={{ fontSize: '0.82rem', fontWeight: 700, color }}>{value ?? '—'}</div>
                   </div>
@@ -386,7 +386,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 }}>
                   → {data.lstm_trajectory.top_predicted}
                 </div>
-                <span style={{ fontSize: '0.70rem', color: '#9B958F' }}>most likely next emotion</span>
+                <span style={{ fontSize: '0.70rem', color: 'var(--text-muted, #9B958F)' }}>most likely next emotion</span>
               </div>
 
               {Object.entries(data.lstm_trajectory.predicted_next || {})
@@ -399,7 +399,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                       <span style={{ fontSize: '0.74rem', color: '#9ca3b0', textTransform: 'capitalize', fontWeight: 500 }}>{emo}</span>
                       <span style={{ fontSize: '0.70rem', fontWeight: 700, color: `rgb(${rgb})` }}>{(score * 100).toFixed(0)}%</span>
                     </div>
-                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.06)' }}>
+                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.06)' }}>
                       <div style={{
                         height: '100%', width: `${score * 100}%`,
                         background: `linear-gradient(90deg, rgba(${rgb},0.85), rgba(${rgb},0.38))`,
@@ -415,8 +415,8 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 
         {/* ── Human-in-the-loop ── */}
         <div style={{
-          background: 'rgba(0,0,0,0.03)', borderRadius: 12, padding: '13px',
-          border: '1px solid rgba(0,0,0,0.07)',
+          background: 'rgba(var(--ig-ink-rgb),0.03)', borderRadius: 12, padding: '13px',
+          border: '1px solid rgba(var(--ig-ink-rgb),0.07)',
         }}>
           <div style={sectionTitle}>Correct the Model</div>
           {sent ? (
@@ -434,7 +434,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 onChange={e => setSelected(e.target.value)}
                 style={{
                   width: '100%', padding: '9px 12px',
-                  background: 'rgba(0,0,0,0.06)', border: '1px solid rgba(0,0,0,0.10)',
+                  background: 'rgba(var(--ig-ink-rgb),0.06)', border: '1px solid rgba(var(--ig-ink-rgb),0.12)',
                   borderRadius: 8, fontSize: '0.84rem', color: '#d1d5db',
                   outline: 'none', marginBottom: 9, cursor: 'pointer',
                   appearance: 'none',
@@ -450,7 +450,7 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 disabled={!selected || loading}
                 style={{
                   width: '100%', padding: '10px',
-                  background: selected ? 'linear-gradient(135deg,#5B8A6A,#3D9B6E)' : 'rgba(0,0,0,0.06)',
+                  background: selected ? 'linear-gradient(135deg,#5B8A6A,#3D9B6E)' : 'rgba(var(--ig-ink-rgb),0.06)',
                   border: 'none', borderRadius: 8,
                   color: selected ? '#fff' : '#4b5563',
                   fontWeight: 700, fontSize: '0.84rem',

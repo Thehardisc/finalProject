@@ -43,10 +43,10 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
 
   const hasAffective = Object.keys(vad).length > 0 || Object.keys(dynamics).length > 0 || Object.keys(appraisal).length > 0;
 
-  const BORDER = 'rgba(0,0,0,0.07)';
+  const BORDER = 'rgba(var(--ig-ink-rgb),0.07)';
   const MUTED  = 'var(--text-muted, #9B958F)';
   const TEXT   = 'var(--text-primary, #1C1B1A)';
-  const SECT   = { fontSize: '0.58rem', fontWeight: 700, color: '#9B958F', textTransform: 'uppercase', letterSpacing: '.10em', marginBottom: 10 };
+  const SECT   = { fontSize: '0.58rem', fontWeight: 700, color: 'var(--text-muted, #9B958F)', textTransform: 'uppercase', letterSpacing: '.10em', marginBottom: 10 };
 
   const PIPELINE_STAGES = [
     { key: 'vader',          label: 'VADER'   },
@@ -66,7 +66,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '1.6rem', opacity: 0.5,
         }}>🧠</div>
-        <div style={{ fontSize: '0.76rem', fontWeight: 600, textAlign: 'center', lineHeight: 1.7, color: '#374151' }}>
+        <div style={{ fontSize: '0.76rem', fontWeight: 600, textAlign: 'center', lineHeight: 1.7, color: 'var(--text-primary)' }}>
           Send a message to<br />activate emotion analysis
         </div>
       </div>
@@ -85,7 +85,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
           {PIPELINE_STAGES.map(s => (
             <div key={s.key} style={{
               padding: '3px 8px', borderRadius: 99, fontSize: '0.60rem', fontWeight: 700,
-              background: partialModels.has(s.key) ? `rgba(${rgb},0.16)` : 'rgba(0,0,0,0.04)',
+              background: partialModels.has(s.key) ? `rgba(${rgb},0.16)` : 'rgba(var(--ig-ink-rgb),0.04)',
               color: partialModels.has(s.key) ? `rgb(${rgb})` : '#4b5563',
               border: `1px solid ${partialModels.has(s.key) ? `rgba(${rgb},0.30)` : 'transparent'}`,
               transition: 'all 0.3s ease',
@@ -113,7 +113,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
         animation: 'eiFadeIn 0.42s ease both',
         flexShrink: 0,
       }}>
-        <div style={{ fontSize: '0.57rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '.13em', marginBottom: 16 }}>
+        <div style={{ fontSize: '0.57rem', fontWeight: 700, color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: '.13em', marginBottom: 16 }}>
           {processing ? 'Updating…' : 'Current Emotion'}
         </div>
 
@@ -131,7 +131,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
               letterSpacing: '-0.02em',
             }}>{dom}</div>
             {confidence != null && (
-              <div style={{ fontSize: '0.68rem', color: '#374151', marginTop: 6, fontWeight: 500 }}>
+              <div style={{ fontSize: '0.68rem', color: 'var(--text-primary)', marginTop: 6, fontWeight: 500 }}>
                 {(confidence * 100).toFixed(0)}% confidence · live
               </div>
             )}
@@ -183,7 +183,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
             {valence > 0.15 ? 'Positive' : valence < -0.15 ? 'Negative' : 'Neutral'} {valence >= 0 ? '+' : ''}{valence.toFixed(2)}
           </span>
         </div>
-        <div style={{ position: 'relative', height: 8, borderRadius: 4, overflow: 'hidden', background: 'rgba(0,0,0,0.05)' }}>
+        <div style={{ position: 'relative', height: 8, borderRadius: 4, overflow: 'hidden', background: 'rgba(var(--ig-ink-rgb),0.05)' }}>
           <div style={{ position: 'absolute', inset: 0, left: '50%', borderRadius: '0 4px 4px 0', background: 'linear-gradient(90deg, transparent, rgba(74,222,128,0.20))' }} />
           <div style={{ position: 'absolute', inset: 0, right: '50%', borderRadius: '4px 0 0 4px', background: 'linear-gradient(90deg, rgba(248,113,113,0.20), transparent)' }} />
           <div style={{
@@ -197,8 +197,8 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
           }} />
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-          <span style={{ fontSize: '0.54rem', color: '#374151' }}>Negative</span>
-          <span style={{ fontSize: '0.54rem', color: '#374151' }}>Positive</span>
+          <span style={{ fontSize: '0.54rem', color: 'var(--text-primary)' }}>Negative</span>
+          <span style={{ fontSize: '0.54rem', color: 'var(--text-primary)' }}>Positive</span>
         </div>
 
         {valenceHistory.length >= 3 && (
@@ -223,7 +223,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
                   <span style={{ fontSize: '0.74rem', color: '#d1d5db', textTransform: 'capitalize', fontWeight: 500 }}>{label}</span>
                   <span style={{ fontSize: '0.68rem', fontWeight: 700, color: `rgb(${eRgb})` }}>{(score * 100).toFixed(0)}%</span>
                 </div>
-                <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.05)' }}>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.05)' }}>
                   <div style={{
                     height: '100%', width: `${score * 100}%`,
                     background: `linear-gradient(90deg, rgba(${eRgb},0.9), rgba(${eRgb},0.40))`,
@@ -270,7 +270,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
                     <span style={{ fontSize: '0.70rem', color: '#9ca3b0', textTransform: 'capitalize', fontWeight: 500 }}>{emo}</span>
                     <span style={{ fontSize: '0.66rem', fontWeight: 700, color: `rgb(${eRgb})` }}>{(score * 100).toFixed(0)}%</span>
                   </div>
-                  <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.05)' }}>
+                  <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.05)' }}>
                     <div style={{
                       height: '100%', width: `${score * 100}%`,
                       background: `linear-gradient(90deg, rgba(${eRgb},0.85), rgba(${eRgb},0.35))`,
@@ -297,8 +297,8 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
                 { label: 'Episodic',     val: snap.ce_available ? 'Active' : 'Off',                  color: snap.ce_available ? '#4ade80' : '#4b5563' },
                 { label: 'Abruptness',   val: snap.cdm_entry_abruptness != null ? `${Math.round(snap.cdm_entry_abruptness * 100)}%` : '—', color: (snap.cdm_entry_abruptness || 0) > 0.5 ? '#f87171' : '#d1d5db' },
               ].map(({ label, val, color }) => (
-                <div key={label} style={{ padding: '6px 8px', borderRadius: 7, background: 'rgba(0,0,0,0.03)' }}>
-                  <div style={{ fontSize: '0.54rem', color: '#374151', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
+                <div key={label} style={{ padding: '6px 8px', borderRadius: 7, background: 'rgba(var(--ig-ink-rgb),0.03)' }}>
+                  <div style={{ fontSize: '0.54rem', color: 'var(--text-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.06em' }}>{label}</div>
                   <div style={{ fontSize: '0.74rem', fontWeight: 700, color, marginTop: 3 }}>{val}</div>
                 </div>
               ))}
@@ -339,8 +339,8 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
                     <span style={{ fontSize: '0.68rem', color: '#9ca3b0', fontWeight: 600 }}>{label}</span>
                     <span style={{ fontSize: '0.66rem', fontWeight: 700, color: `rgb(${color})` }}>{displayVal}</span>
                   </div>
-                  <div style={{ position: 'relative', height: 5, borderRadius: 3, background: 'rgba(0,0,0,0.05)', overflow: 'hidden' }}>
-                    {bipolar && <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(0,0,0,0.15)' }} />}
+                  <div style={{ position: 'relative', height: 5, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.05)', overflow: 'hidden' }}>
+                    {bipolar && <div style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: 1, background: 'rgba(var(--ig-ink-rgb),0.20)' }} />}
                     <div style={{
                       position: 'absolute',
                       height: '100%', borderRadius: 3,
@@ -354,8 +354,8 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
                     }} />
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
-                    <span style={{ fontSize: '0.50rem', color: '#374151' }}>{lo}</span>
-                    <span style={{ fontSize: '0.50rem', color: '#374151' }}>{hi}</span>
+                    <span style={{ fontSize: '0.50rem', color: 'var(--text-primary)' }}>{lo}</span>
+                    <span style={{ fontSize: '0.50rem', color: 'var(--text-primary)' }}>{hi}</span>
                   </div>
                 </div>
               );
@@ -370,8 +370,8 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
           <div style={SECT}>Model Contributions</div>
           {Object.entries(logicMap).map(([model, v]) => (
             <div key={model} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <span style={{ fontSize: '0.64rem', color: '#9B958F', width: 68, flexShrink: 0 }}>{model}</span>
-              <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.05)', overflow: 'hidden' }}>
+              <span style={{ fontSize: '0.64rem', color: 'var(--text-muted, #9B958F)', width: 68, flexShrink: 0 }}>{model}</span>
+              <div style={{ flex: 1, height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.05)', overflow: 'hidden' }}>
                 <div style={{
                   height: '100%', width: `${Math.min(Math.abs(v) * 100, 100)}%`,
                   background: v >= 0 ? 'linear-gradient(90deg,#3b82f6,#8b5cf6)' : '#ef4444',
@@ -385,7 +385,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
           ))}
           {Array.isArray(gateWeights) && gateWeights.length >= 3 && (
             <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 8, background: 'rgba(91,138,106,0.06)', border: '1px solid rgba(91,138,106,0.14)' }}>
-              <div style={{ fontSize: '0.54rem', color: '#374151', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 6 }}>
+              <div style={{ fontSize: '0.54rem', color: 'var(--text-primary)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.08em', marginBottom: 6 }}>
                 Gate α · GoEmotions ≤50% enforced
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
@@ -397,8 +397,8 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
                     : '96,165,250';
                   return (
                     <div key={lbl} style={{ flex: 1 }}>
-                      <div style={{ fontSize: '0.52rem', color: '#9B958F', textAlign: 'center', marginBottom: 3 }}>{lbl}</div>
-                      <div style={{ height: 28, borderRadius: 4, background: 'rgba(0,0,0,0.04)', position: 'relative', overflow: 'hidden' }}>
+                      <div style={{ fontSize: '0.52rem', color: 'var(--text-muted, #9B958F)', textAlign: 'center', marginBottom: 3 }}>{lbl}</div>
+                      <div style={{ height: 28, borderRadius: 4, background: 'rgba(var(--ig-ink-rgb),0.04)', position: 'relative', overflow: 'hidden' }}>
                         <div style={{
                           position: 'absolute', bottom: 0, left: 0, right: 0,
                           height: `${Math.round(w * 100)}%`,
@@ -428,7 +428,7 @@ export default function EmotionIntelligencePanel({ lastAnalysis, processing, par
             return (
               <div key={s.key} style={{
                 padding: '2px 9px', borderRadius: 99, fontSize: '0.60rem', fontWeight: 700,
-                background: active ? `rgba(${rgb},0.12)` : 'rgba(0,0,0,0.04)',
+                background: active ? `rgba(${rgb},0.12)` : 'rgba(var(--ig-ink-rgb),0.04)',
                 color: active ? `rgb(${rgb})` : '#4b5563',
                 border: `1px solid ${active ? `rgba(${rgb},0.26)` : 'transparent'}`,
                 transition: 'all 0.35s ease',

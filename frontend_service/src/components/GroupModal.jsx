@@ -1,13 +1,5 @@
 import React, { useState } from 'react';
 
-/**
- * GroupModal — Create a new group conversation.
- * Props:
- *   globalUsers       — list of { user_id, display_name }
- *   currentUserId     — exclude self from picker
- *   onConfirm(name, memberIds) — called when the user submits
- *   onClose           — called to dismiss
- */
 const GroupModal = ({ globalUsers, currentUserId, onConfirm, onClose }) => {
     const [groupName,    setGroupName]    = useState('');
     const [selectedIds,  setSelectedIds]  = useState([]);
@@ -65,7 +57,7 @@ const GroupModal = ({ globalUsers, currentUserId, onConfirm, onClose }) => {
                         <label>Add Members ({selectedIds.length} selected)</label>
                         <div className="member-picker">
                             {eligibleUsers.length === 0 ? (
-                                <p style={{ color: '#64748b', padding: '8px 0' }}>No other users available.</p>
+                                <p className="text-slate-500 py-2">No other users available.</p>
                             ) : (
                                 eligibleUsers.map(u => (
                                     <label key={u.user_id} className="member-row">

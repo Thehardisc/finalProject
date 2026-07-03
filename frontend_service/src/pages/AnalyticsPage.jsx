@@ -24,6 +24,16 @@ export default function AnalyticsPage({
   const [range, setRange] = useState('30d');
   const [showAdmin, setShowAdmin] = useState(false);
 
+  // Theme (shared with the chat via ig_settings). chart.js draws to <canvas>,
+  // where CSS variables don't apply — so chart colors are computed in JS here.
+  const igTheme = (() => {
+    try { return JSON.parse(localStorage.getItem('ig_settings') || '{}').theme === 'dark' ? 'dark' : 'light'; }
+    catch { return 'light'; }
+  })();
+  const chartTxt  = igTheme === 'dark' ? '#e9ebf2' : 'var(--ig-txt)';
+  const chartTick = igTheme === 'dark' ? 'rgba(230,232,240,0.55)' : 'var(--ig-txt3)';
+  const chartGrid = igTheme === 'dark' ? 'rgba(230,232,240,0.10)' : 'rgba(0,0,0,0.04)';
+
   // Build doughnut from current conversation emotion breakdown
   const emotionBreakdown = analyticsData?.emotion_breakdown || {};
   const topEmotions = Object.entries(emotionBreakdown)
@@ -42,7 +52,7 @@ export default function AnalyticsPage({
 
   const doughnutOpts = {
     responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { position: 'right', labels: { color: '#374151', font: { size: 11 } } } },
+    plugins: { legend: { position: 'right', labels: { color: chartTxt, font: { size: 11 } } } },
     cutout: '62%',
   };
 
@@ -70,8 +80,8 @@ export default function AnalyticsPage({
   const lineOpts = {
     responsive: true, maintainAspectRatio: false,
     scales: {
-      y: { min: 0, max: 1, grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { color: '#9ca3af', font: { size: 10 } } },
-      x: { grid: { display: false }, ticks: { color: '#9ca3af', font: { size: 10 } } },
+      y: { min: 0, max: 1, grid: { color: chartGrid }, ticks: { color: chartTick, font: { size: 10 } } },
+      x: { grid: { display: false }, ticks: { color: chartTick, font: { size: 10 } } },
     },
     plugins: { legend: { display: false } },
   };
@@ -80,30 +90,30 @@ export default function AnalyticsPage({
   const totalSamples = analyticsData?.total_verified_samples || 0;
 
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div data-ig-theme={igTheme} style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--ig-bg)', color: 'var(--ig-txt)' }}>
       {/* ── Top Bar ──────────────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '18px 32px',
         position: 'sticky', top: 0, zIndex: 10,
-        background: 'rgba(255,255,255,0.78)',
+        background: 'rgba(var(--ig-surf-rgb),0.80)',
         backdropFilter: 'blur(24px) saturate(180%)',
         WebkitBackdropFilter: 'blur(24px) saturate(180%)',
-        borderBottom: '1px solid rgba(255,255,255,0.92)',
+        borderBottom: '1px solid rgba(var(--ig-ink-rgb),0.10)',
         boxShadow: '0 2px 16px rgba(0,0,0,0.05)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           <button onClick={onBack} style={{
-            background: 'rgba(0,0,0,0.05)', border: 'none', borderRadius: 10,
+            background: 'rgba(var(--ig-ink-rgb),0.06)', border: 'none', borderRadius: 10,
             width: 36, height: 36, cursor: 'pointer',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontSize: '1rem', color: '#374151',
+            fontSize: '1rem', color: 'var(--ig-txt)',
           }}>←</button>
           <div>
-            <h1 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#1c1c2e' }}>
+            <h1 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: 'var(--ig-txt)' }}>
               Ethereal Insights
             </h1>
-            <p style={{ margin: 0, fontSize: '0.78rem', color: '#9ca3af' }}>
+            <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--ig-txt3)' }}>
               {totalSamples} verified samples
             </p>
           </div>
@@ -113,7 +123,7 @@ export default function AnalyticsPage({
           {/* Filter Range sunken tabs */}
           <div style={{
             display: 'flex', gap: 4, padding: '4px',
-            background: 'rgba(0,0,0,0.04)', borderRadius: 12,
+            background: 'rgba(var(--ig-ink-rgb),0.05)', borderRadius: 12,
           }}>
             {ALL_RANGES.map(r => (
               <button key={r} className={`btn-tab ${range === r ? 'active' : ''}`}
@@ -154,18 +164,18 @@ export default function AnalyticsPage({
         <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 3, animationDelay: '0s' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
             <div>
-              <h3 style={{ margin: '0 0 4px', fontSize: '0.78rem', fontWeight: 700, color: '#9ca3af', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
+              <h3 style={{ margin: '0 0 4px', fontSize: '0.78rem', fontWeight: 700, color: 'var(--ig-txt3)', letterSpacing: '0.08em', textTransform: 'uppercase' }}>
                 Model Calibration
               </h3>
               {accuracy != null ? (
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                  <span style={{ fontSize: '3rem', fontWeight: 800, color: '#1c1c2e', lineHeight: 1 }}>
+                  <span style={{ fontSize: '3rem', fontWeight: 800, color: 'var(--ig-txt)', lineHeight: 1 }}>
                     {Math.round(accuracy * 100)}%
                   </span>
-                  <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Composite Accuracy</span>
+                  <span style={{ fontSize: '0.85rem', color: 'var(--ig-txt2)' }}>Composite Accuracy</span>
                 </div>
               ) : (
-                <p style={{ color: '#9ca3af', margin: 0, fontSize: '0.9rem' }}>
+                <p style={{ color: 'var(--ig-txt3)', margin: 0, fontSize: '0.9rem' }}>
                   {analyticsData?.status === 'no_data'
                     ? 'Awaiting feedback data — use the thumbs in Chat to calibrate.'
                     : 'Loading...'}
@@ -190,7 +200,7 @@ export default function AnalyticsPage({
                       boxShadow: `0 2px 8px rgba(${rgb}, 0.35)`,
                       transition: 'height 0.6s cubic-bezier(0.34,1.2,0.64,1)',
                     }} />
-                    <span style={{ fontSize: '0.65rem', color: '#9ca3af', textTransform: 'capitalize', textAlign: 'center' }}>
+                    <span style={{ fontSize: '0.65rem', color: 'var(--ig-txt3)', textTransform: 'capitalize', textAlign: 'center' }}>
                       {emo}
                     </span>
                   </div>
@@ -205,25 +215,25 @@ export default function AnalyticsPage({
 
           {/* Doughnut */}
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 2, animationDelay: '0.06s' }}>
-            <h4 style={{ margin: '0 0 16px', fontSize: '0.82rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+            <h4 style={{ margin: '0 0 16px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--ig-txt)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               Emotion Distribution
             </h4>
             <div style={{ height: 220 }}>
               {topEmotions.length > 0
                 ? <Doughnut data={doughnutData} options={doughnutOpts} />
-                : <p style={{ color: '#9ca3af', margin: 0, fontSize: '0.85rem' }}>No data yet.</p>}
+                : <p style={{ color: 'var(--ig-txt3)', margin: 0, fontSize: '0.85rem' }}>No data yet.</p>}
             </div>
           </div>
 
           {/* Line chart */}
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 2, animationDelay: '0.10s' }}>
-            <h4 style={{ margin: '0 0 16px', fontSize: '0.82rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+            <h4 style={{ margin: '0 0 16px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--ig-txt)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               Emotional Intensity — Conversation Arc
             </h4>
             <div style={{ height: 220 }}>
               {analyzed.length > 1
                 ? <Line data={lineData} options={lineOpts} />
-                : <p style={{ color: '#9ca3af', margin: 0, fontSize: '0.85rem' }}>Send more messages to see the arc.</p>}
+                : <p style={{ color: 'var(--ig-txt3)', margin: 0, fontSize: '0.85rem' }}>Send more messages to see the arc.</p>}
             </div>
           </div>
         </div>
@@ -231,7 +241,7 @@ export default function AnalyticsPage({
         {/* Layer 3: Per-emotion breakdown cards */}
         {topEmotions.length > 0 && (
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 1, animationDelay: '0.16s' }}>
-            <h4 style={{ margin: '0 0 18px', fontSize: '0.82rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
+            <h4 style={{ margin: '0 0 18px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--ig-txt)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               Per-Emotion Precision & Recall
             </h4>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 14 }}>
@@ -243,7 +253,7 @@ export default function AnalyticsPage({
                     background: `rgba(${rgb}, 0.06)`,
                     border: `1px solid rgba(${rgb}, 0.18)`,
                     borderRadius: 14,
-                    boxShadow: `inset 0 1px 0 rgba(255,255,255,0.9)`,
+                    boxShadow: `inset 0 1px 0 rgba(var(--ig-surf-rgb),0.9)`,
                   }}>
                     <div style={{
                       fontSize: '0.8rem', fontWeight: 700, marginBottom: 10,
@@ -258,7 +268,7 @@ export default function AnalyticsPage({
 
                     {/* Precision */}
                     <div style={{ marginBottom: 8 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#6b7280', marginBottom: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--ig-txt2)', marginBottom: 4 }}>
                         <span>Precision</span>
                         <span style={{ fontWeight: 600 }}>{Math.round((stats.precision || 0) * 100)}%</span>
                       </div>
@@ -269,7 +279,7 @@ export default function AnalyticsPage({
 
                     {/* Recall */}
                     <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: '#6b7280', marginBottom: 4 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--ig-txt2)', marginBottom: 4 }}>
                         <span>Recall</span>
                         <span style={{ fontWeight: 600 }}>{Math.round((stats.recall || 0) * 100)}%</span>
                       </div>
@@ -287,7 +297,7 @@ export default function AnalyticsPage({
         {/* Empty state */}
         {topEmotions.length === 0 && !analyticsData && (
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, textAlign: 'center', padding: '48px 24px' }}>
-            <p style={{ color: '#9ca3af', margin: 0 }}>
+            <p style={{ color: 'var(--ig-txt3)', margin: 0 }}>
               Click <strong>Generate Insights</strong> to load analytics data.
             </p>
           </div>

@@ -97,7 +97,7 @@ export default function CDMStateGraph({ snapshot }) {
 
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#374151' }}>
+        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>
           Conversation Intent
         </span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -113,8 +113,8 @@ export default function CDMStateGraph({ snapshot }) {
           )}
           <span style={{
             fontSize: '0.60rem', padding: '1px 6px', borderRadius: 20,
-            background: available ? 'rgba(20,184,166,.12)' : 'rgba(0,0,0,.06)',
-            color: available ? 'rgb(20,184,166)' : '#9ca3af',
+            background: available ? 'rgba(20,184,166,.12)' : 'rgba(var(--ig-ink-rgb),.10)',
+            color: available ? 'rgb(20,184,166)' : 'var(--text-muted)',
             fontWeight: 600,
           }}>
             {available ? 'LIVE' : 'NO DATA'}
@@ -136,7 +136,7 @@ export default function CDMStateGraph({ snapshot }) {
             <line
               key={i}
               x1={pa.x} y1={pa.y} x2={pb.x} y2={pb.y}
-              stroke={active ? `rgba(${CDM_STATES[a]?.color ?? '107,114,128'},.40)` : 'rgba(0,0,0,.06)'}
+              stroke={active ? `rgba(${CDM_STATES[a]?.color ?? '107,114,128'},.40)` : 'rgba(var(--ig-ink-rgb),.10)'}
               strokeWidth={active ? 1.5 : 0.8}
             />
           );
@@ -169,7 +169,7 @@ export default function CDMStateGraph({ snapshot }) {
                 x={x} y={y + r + 8}
                 textAnchor="middle"
                 fontSize="5.5"
-                fill={isCurrent ? `rgb(${color})` : '#9ca3af'}
+                fill={isCurrent ? `rgb(${color})` : 'var(--text-muted)'}
                 fontWeight={isCurrent ? '700' : '400'}
               >
                 {short}
@@ -179,7 +179,7 @@ export default function CDMStateGraph({ snapshot }) {
                   x={x} y={y + 2}
                   textAnchor="middle"
                   fontSize="5.5"
-                  fill={isCurrent ? `rgb(${color})` : '#9ca3af'}
+                  fill={isCurrent ? `rgb(${color})` : 'var(--text-muted)'}
                   fontWeight="600"
                 >
                   {(prob * 100).toFixed(0)}%
@@ -200,11 +200,11 @@ export default function CDMStateGraph({ snapshot }) {
             }}>
               {CDM_STATES[current]?.label.replace('\n', ' ') ?? '—'}
             </span>
-            <span style={{ fontSize: '0.60rem', color: '#9ca3af' }}>
+            <span style={{ fontSize: '0.60rem', color: 'var(--text-muted)' }}>
               residency {(residency * 100).toFixed(0)}%
             </span>
           </div>
-          <div style={{ height: 3, borderRadius: 2, background: 'rgba(0,0,0,.07)' }}>
+          <div style={{ height: 3, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),.10)' }}>
             <div style={{
               height: '100%',
               width: `${Math.min(residency * 100, 100)}%`,
@@ -217,7 +217,7 @@ export default function CDMStateGraph({ snapshot }) {
       )}
 
       {!available && (
-        <div style={{ textAlign: 'center', fontSize: '0.68rem', color: '#9ca3af', padding: '4px 0' }}>
+        <div style={{ textAlign: 'center', fontSize: '0.68rem', color: 'var(--text-muted)', padding: '4px 0' }}>
           CDM activates after first message
         </div>
       )}

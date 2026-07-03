@@ -266,6 +266,7 @@ export default function App() {
                 text:       payload.data.raw_text,
                 senderName: isSelf ? currentUser.display_name : payload.data.sender_id?.substring(0, 8),
                 analysis:   payload,
+                timestamp:  Date.now(),
               };
 
               if (prev.some(m => m.id === payload.data.id)) {
@@ -278,7 +279,7 @@ export default function App() {
 
               if (optimisticIdx >= 0) {
                 const next = [...prev];
-                next[optimisticIdx] = { ...next[optimisticIdx], ...newMsg };
+                next[optimisticIdx] = { ...next[optimisticIdx], ...newMsg, timestamp: next[optimisticIdx].timestamp ?? newMsg.timestamp };
                 return next;
               }
               return [...prev, newMsg];
@@ -351,7 +352,8 @@ export default function App() {
                 conversations.find(c => c.other_user_id === m.sender_id)?.other_display_name
                 || m.sender_id.substring(0, 8)
               ),
-              analysis: parseAnalysis(m),
+              analysis:  parseAnalysis(m),
+              timestamp: m.timestamp,
             };
           });
           setMessages(msgs);
@@ -449,6 +451,7 @@ export default function App() {
         text,
         senderName: currentUser.display_name,
         analysis:   null,
+        timestamp:  Date.now(),
       };
       setMessages(prev => [...prev, optimistic]);
       setMlProcessing(true);
