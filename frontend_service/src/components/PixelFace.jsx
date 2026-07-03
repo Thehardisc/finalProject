@@ -1,6 +1,5 @@
 import React from 'react';
 
-// GoEmotions / BERT label → Ekman 7
 const TO_EKMAN = {
   anger: 'anger', annoyance: 'anger', disapproval: 'anger',
   disgust: 'disgust', contempt: 'disgust',
@@ -14,7 +13,6 @@ const TO_EKMAN = {
   neutral: 'neutral', realization: 'neutral',
 };
 
-// 12×12 logical grid — each entry is [col, row]
 const OUTLINE = [
   [3,0],[4,0],[5,0],[6,0],[7,0],[8,0],
   [2,1],[9,1],
@@ -71,12 +69,12 @@ const EMO_COLOR = {
 };
 
 function buildBoxShadow(ekman) {
-  const face  = EMO_COLOR[ekman] || '#94a3b8';
-  const dark  = '#0f172a';
+  const face = EMO_COLOR[ekman] || '#94a3b8';
+  const dark = '#0f172a';
   return [
     ...OUTLINE.map(([x, y]) => `${x}px ${y}px 0 0 ${face}`),
     ...FEATURES.brows[ekman].map(([x, y]) => `${x}px ${y}px 0 0 ${dark}`),
-    ...FEATURES.eyes[ekman].map(([x, y])  => `${x}px ${y}px 0 0 ${dark}`),
+    ...FEATURES.eyes[ekman].map(([x, y]) => `${x}px ${y}px 0 0 ${dark}`),
     ...FEATURES.mouth[ekman].map(([x, y]) => `${x}px ${y}px 0 0 ${dark}`),
   ].join(', ');
 }
@@ -86,40 +84,27 @@ export function toEkman(emotion) {
 }
 
 export default function PixelFace({ emotion, scale = 5, showLabel = true }) {
-  const ekman     = toEkman(emotion);
+  const ekman = toEkman(emotion);
   const boxShadow = buildBoxShadow(ekman);
-  const sizePx    = 12 * scale;
+  const sizePx = 12 * scale;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5 }}>
-      <div style={{ width: sizePx, height: sizePx, position: 'relative', flexShrink: 0 }}>
+    <div className="flex flex-col items-center gap-[5px]">
+      <div className="relative shrink-0" style={{ width: sizePx, height: sizePx }}>
         <div
           key={ekman}
-          style={{
-            width: 1,
-            height: 1,
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            transform: `scale(${scale})`,
-            transformOrigin: 'top left',
-            boxShadow,
-            animation: 'pfIn 0.24s steps(4, end)',
-          }}
+          className="absolute top-0 left-0 w-px h-px origin-top-left"
+          style={{ transform: `scale(${scale})`, boxShadow }}
         />
       </div>
       {showLabel && (
-        <span style={{
-          fontSize: '0.65rem',
-          fontWeight: 700,
-          letterSpacing: '0.07em',
-          textTransform: 'uppercase',
-          color: EMO_COLOR[ekman],
-        }}>
+        <span
+          className="text-[0.65rem] font-bold tracking-[0.07em] uppercase"
+          style={{ color: EMO_COLOR[ekman] }}
+        >
           {ekman}
         </span>
       )}
-      <style>{`@keyframes pfIn { from { opacity: 0; } to { opacity: 1; } }`}</style>
     </div>
   );
 }

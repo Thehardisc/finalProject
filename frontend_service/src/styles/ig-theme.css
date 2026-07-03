@@ -1,0 +1,72 @@
+/* ig-theme.css — light/dark token set for the chat (IGDashboard).
+   Scoped to the chat root via [data-ig-theme]; variables cascade to all
+   nested surfaces + modals so inline styles can use var(--ig-*). */
+
+[data-ig-theme="light"] {
+  --ig-bg:      #ffffff;   /* page background */
+  --ig-surf:    #ffffff;   /* sidebar / header / chat / modal surfaces */
+  --ig-surf2:   #f3f4f6;   /* secondary surface (search, pills, hover-active) */
+  --ig-surf3:   #f9fafb;   /* subtle surface (cards, row hover) */
+  --ig-bord:    #efefef;   /* default border / divider */
+  --ig-bord2:   #e5e7eb;   /* stronger border / toggle-off track */
+  --ig-txt:     #1c1c2e;   /* primary text */
+  --ig-txt2:    #6b7280;   /* secondary text */
+  --ig-txt3:    #9ca3af;   /* muted text */
+  --ig-bub-in:  #f0f0f0;   /* incoming message bubble */
+  --ig-knob:    #ffffff;   /* toggle knob */
+
+  /* Emotional Signal rail — "ink" rgb (text/borders) flips per theme */
+  --ig-ink-rgb: 28, 28, 46;
+  --ig-rail-bg: #f7f8fa;   /* analysis rail surface */
+  --ig-surf-rgb: 255, 255, 255;  /* surface rgb for frosted/glass alpha */
+}
+
+[data-ig-theme="dark"] {
+  --ig-bg:      #0a0c12;
+  --ig-surf:    #14171f;
+  --ig-surf2:   #1c2029;
+  --ig-surf3:   #181b23;
+  --ig-bord:    #262b36;
+  --ig-bord2:   #313845;
+  --ig-txt:     #e9ebf2;
+  --ig-txt2:    #9aa3b5;
+  --ig-txt3:    #6a7383;
+  --ig-bub-in:  #20242f;
+  --ig-knob:    #e9ebf2;
+
+  --ig-ink-rgb: 230, 232, 240;   /* near-white ink in dark */
+  --ig-rail-bg: #0e0b20;         /* signature deep-purple rail */
+  --ig-surf-rgb: 20, 23, 31;     /* surface rgb for frosted/glass alpha */
+}
+
+/* Dark rail also re-points the shared design-system tokens so token-based
+   panels (EmotionIntelligencePanel, etc.) follow the chat theme. Scoped to the
+   chat subtree only — other views (no data-ig-theme) are unaffected. */
+[data-ig-theme="dark"] {
+  --text-primary:   #e9ebf2;
+  --text-secondary: #9aa3b5;
+  --text-muted:     #6a7383;
+  --surface-base:   #14171f;
+  --surface-raised: #1c2029;
+  --surface-hover:  #1c2029;
+  --surface-border:     rgba(255, 255, 255, 0.08);
+  --surface-border-mid: rgba(255, 255, 255, 0.14);
+  --bg-void:      #0a0c12;
+  --bg-base:      #14171f;
+  --bg-surface:   #1c2029;
+  --bg-surface-2: #181b23;
+  --bg-overlay:   rgba(10, 12, 18, 0.92);
+}
+
+/* Glass cards / tabs (CrystalGlass-v2) follow the dark chat theme when an
+   ancestor sets data-ig-theme="dark" (e.g. the Analytics page). */
+[data-ig-theme="dark"] .analytics-layer,
+[data-ig-theme="dark"] .crystal-card,
+[data-ig-theme="dark"] .crystal-panel {
+  background: var(--ig-surf) !important;
+  border-color: var(--ig-bord) !important;
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45) !important;
+}
+[data-ig-theme="dark"] .btn-tab            { background: rgba(var(--ig-ink-rgb), 0.07); color: var(--ig-txt2); }
+[data-ig-theme="dark"] .btn-tab.active     { color: var(--ig-txt); }
+[data-ig-theme="dark"] .stat-bar-track     { background: rgba(var(--ig-ink-rgb), 0.10) !important; }

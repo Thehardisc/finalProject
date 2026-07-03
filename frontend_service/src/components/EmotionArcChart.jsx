@@ -50,7 +50,7 @@ export default function EmotionArcChart({ values = [], color = '99,102,241', hei
         {/* Neutral axis */}
         <line
           x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2}
-          stroke="rgba(255,255,255,0.06)" strokeWidth="1" strokeDasharray="5 4"
+          stroke="rgba(var(--ig-ink-rgb),0.10)" strokeWidth="1" strokeDasharray="5 4"
         />
 
         {/* Fill area */}

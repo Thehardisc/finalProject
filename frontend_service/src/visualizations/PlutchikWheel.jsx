@@ -38,7 +38,7 @@ const PlutchikWheel = ({ dominantEmotion }) => {
                         <path
                             key={i}
                             d="M0,0 Q20,-40 0,-80 Q-20,-40 0,0"
-                            fill={petal.name === core ? 'var(--accent-primary)' : 'rgba(255,255,255,0.05)'}
+                            fill={petal.name === core ? 'var(--accent-primary)' : 'rgba(var(--ig-ink-rgb),0.06)'}
                             stroke="var(--glass-border)"
                             transform={`rotate(${petal.rotate})`}
                         />

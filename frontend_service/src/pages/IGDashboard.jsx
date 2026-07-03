@@ -12,6 +12,7 @@ import AmbientOrb            from '../components/AmbientOrb';
 import TelemetryPanel        from '../components/TelemetryPanel';
 import PlutchikWheel         from '../visualizations/PlutchikWheel';
 import EmotionIntelligencePanel from '../components/EmotionIntelligencePanel';
+import '../styles/ig-theme.css';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
 
@@ -259,21 +260,26 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
 
 // ── MsgBubble ──────────────────────────────────────────────────────────────────
 
-function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
+function formatMsgTime(ts) {
+  if (ts == null) return null;
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return null;
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, showTimestamp = false, showConfidence = true }) {
   const [hovered, setHovered] = useState(false);
-  const bert = msg.analysis?.data?.bert_emotions;
-  let emotionDict = {};
-  if (bert?.length) bert.forEach(({ label, score }) => { emotionDict[label] = score; });
-  const hasAnalysis  = Object.keys(emotionDict).length > 0;
   const dom          = msg.analysis?.data?.final_dominant_emotion;
   const domRgb       = dom ? emotionRgb(dom) : null;
   const sarcasmScore = msg.analysis?.data?.sarcasm_score ?? 0;
   const isAnalyzing  = !msg.analysis && msg.sender === 'user' && !isRegenerating;
+  const confidence   = msg.analysis?.data?.meta_confidence;
+  const timeLabel    = showTimestamp ? formatMsgTime(msg.timestamp) : null;
 
-  const ownBg    = hasAnalysis ? (bubbleGradient(emotionDict) || 'rgba(0,119,255,0.10)') : 'rgba(0,119,255,0.10)';
-  const borderClr = isOwn
-    ? (domRgb ? `rgba(${domRgb},.35)` : 'rgba(0,119,255,.25)')
-    : 'rgba(0,0,0,.07)';
+  // Flat bubbles: a slightly-elevated neutral surface (var(--ig-bub-in) — visible
+  // against both the dark and light chat backgrounds) with a thin emotion-coloured
+  // outline on BOTH members' bubbles. No gradient fill.
+  const lineColor = domRgb ? `rgb(${domRgb})` : 'var(--ig-bord2)';
 
   return (
     <motion.div
@@ -286,6 +292,7 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
       style={{
         display: 'flex', flexDirection: 'column',
         alignItems: isOwn ? 'flex-end' : 'flex-start',
+        minWidth: 0, maxWidth: '100%',
         marginBottom: 3, cursor: msg.analysis ? 'pointer' : 'default',
       }}
     >
@@ -293,37 +300,28 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
         whileTap={{ scale: 0.97 }}
         transition={{ type: 'spring', stiffness: 500, damping: 30 }}
         style={{
-          maxWidth: '70%',
+          maxWidth: '100%', width: 'fit-content',
           padding: '10px 14px',
           borderRadius: isOwn ? '22px 22px 6px 22px' : '22px 22px 22px 6px',
-          background: isAnalyzing ? 'rgba(0,119,255,0.06)' : isOwn ? ownBg : '#f0f0f0',
-          border: `1.5px solid ${isAnalyzing ? 'rgba(0,119,255,.18)' : borderClr}`,
+          background: 'var(--ig-bub-in)',
+          border: `1.5px solid ${isAnalyzing ? 'var(--ig-bord2)' : lineColor}`,
           fontSize: '0.94rem', lineHeight: 1.5,
-          color: '#1c1c2e', wordBreak: 'break-word',
-          boxShadow: domRgb && isOwn
-            ? `0 2px 12px rgba(${domRgb},.14), inset 0 1px 0 rgba(255,255,255,.75)`
-            : isOwn
-              ? '0 2px 12px rgba(0,119,255,.09), inset 0 1px 0 rgba(255,255,255,.75)'
-              : '0 1px 3px rgba(0,0,0,.07)',
-          backdropFilter: isOwn ? 'blur(20px) saturate(180%)' : 'none',
-          WebkitBackdropFilter: isOwn ? 'blur(20px) saturate(180%)' : 'none',
+          color: 'var(--ig-txt)', overflowWrap: 'break-word',
+          boxShadow: '0 1px 2px rgba(0,0,0,.10)',
           position: 'relative', overflow: 'hidden',
-          outline: hovered && msg.analysis ? `2px solid rgba(${domRgb || '0,119,255'},.28)` : 'none',
+          outline: hovered && msg.analysis ? `2px solid rgba(${domRgb || '109,40,217'},.40)` : 'none',
           outlineOffset: 1, transition: 'outline-color .15s',
           minWidth: isAnalyzing ? 120 : 0,
         }}
       >
-        {isOwn && !isAnalyzing && (
-          <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '38%', background: 'linear-gradient(180deg,rgba(255,255,255,.50) 0%,transparent 100%)', pointerEvents: 'none' }} />
-        )}
         {isAnalyzing ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
             <div style={{ height: 11, borderRadius: 6, width: '85%', background: 'linear-gradient(90deg,rgba(0,119,255,.08) 25%,rgba(0,119,255,.18) 50%,rgba(0,119,255,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite' }} />
             <div style={{ height: 11, borderRadius: 6, width: '60%', background: 'linear-gradient(90deg,rgba(0,119,255,.08) 25%,rgba(0,119,255,.18) 50%,rgba(0,119,255,.08) 75%)', backgroundSize: '200% 100%', animation: 'shimmer 1.8s ease-in-out infinite .3s' }} />
-            <div style={{ marginTop: 2, fontSize: '0.72rem', color: '#9ca3af', fontStyle: 'italic' }}>Analyzing…</div>
+            <div style={{ marginTop: 2, fontSize: '0.72rem', color: 'var(--ig-txt3)', fontStyle: 'italic' }}>Analyzing…</div>
           </div>
         ) : isRegenerating ? (
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#9ca3af', fontStyle: 'italic', fontSize: '0.87rem' }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--ig-txt3)', fontStyle: 'italic', fontSize: '0.87rem' }}>
             <span style={{ width: 12, height: 12, border: '2px solid rgba(0,0,0,.10)', borderTopColor: '#6b7280', borderRadius: '50%', display: 'inline-block', animation: 'regen-spin .7s linear infinite' }} />
             Re-analyzing…
           </span>
@@ -337,11 +335,16 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
         {dom && dom.toLowerCase() !== 'neutral' && !isAnalyzing && (
           <div style={{ fontSize: '0.66rem', color: domRgb ? `rgb(${domRgb})` : '#9ca3af', fontWeight: 600, letterSpacing: '.04em', opacity: .75, textTransform: 'capitalize' }}>
-            {dom}
+            {dom}{showConfidence && confidence != null && (
+              <span style={{ opacity: .8, fontWeight: 500 }}> · {Math.round(confidence * 100)}%</span>
+            )}
           </div>
         )}
+        {timeLabel && !isAnalyzing && (
+          <div style={{ fontSize: '0.62rem', color: 'var(--ig-txt3)' }}>{timeLabel}</div>
+        )}
         {msg.analysis && hovered && (
-          <div style={{ fontSize: '0.62rem', color: '#9ca3af' }}>click to inspect ↗</div>
+          <div style={{ fontSize: '0.62rem', color: 'var(--ig-txt3)' }}>click to inspect ↗</div>
         )}
         {isOwn && hovered && onDelete && (
           <button onClick={e => { e.stopPropagation(); onDelete(msg.id); }}
@@ -411,42 +414,42 @@ function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(0,0,0,.20)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={onClose}>
-      <div onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid #efefef', borderRadius: 20, width: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: 'var(--ig-surf)', border: '1px solid var(--ig-bord)', borderRadius: 20, width: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden', animation: 'igModalIn .22s cubic-bezier(.34,1.2,.64,1) both' }}>
         <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#9ca3af' }}>✕</button>
-          <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>New Group</span>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ig-txt3)' }}>✕</button>
+          <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--ig-txt)' }}>New Group</span>
           <div style={{ width: 24 }} />
         </div>
         <div style={{ padding: '14px 20px 0' }}>
           <input autoFocus placeholder="Group name…" value={groupName} onChange={e => setGroupName(e.target.value)}
-            style={{ width: '100%', boxSizing: 'border-box', background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 12, padding: '10px 14px', fontSize: '0.93rem', color: '#1c1c2e', outline: 'none' }} />
+            style={{ width: '100%', boxSizing: 'border-box', background: 'var(--ig-surf2)', border: '1px solid var(--ig-bord2)', borderRadius: 12, padding: '10px 14px', fontSize: '0.93rem', color: 'var(--ig-txt)', outline: 'none' }} />
         </div>
         <div style={{ padding: '10px 20px 4px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--ig-surf2)', borderRadius: 12, padding: '10px 14px' }}>
             <svg width="14" height="14" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input placeholder="Search people…" value={search} onChange={e => setSearch(e.target.value)}
-              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.90rem', color: '#1c1c2e', flex: 1 }} />
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.90rem', color: 'var(--ig-txt)', flex: 1 }} />
           </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '6px 0 8px' }}>
           {eligible.map(u => (
             <button key={u.user_id} onClick={() => toggle(u.user_id)}
               style={{ width: '100%', background: selected.includes(u.user_id) ? 'rgba(109,40,217,0.07)' : 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left' }}
-              onMouseOver={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = '#f9fafb'; }}
+              onMouseOver={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = 'var(--ig-surf3)'; }}
               onMouseOut={e => { if (!selected.includes(u.user_id)) e.currentTarget.style.background = 'none'; }}
             >
               <Avatar name={u.display_name} size={36} rgb="91,138,106" />
-              <span style={{ flex: 1, fontWeight: 500, fontSize: '0.90rem', color: '#1c1c2e' }}>{u.display_name}</span>
+              <span style={{ flex: 1, fontWeight: 500, fontSize: '0.90rem', color: 'var(--ig-txt)' }}>{u.display_name}</span>
               <div style={{ width: 20, height: 20, borderRadius: '50%', border: `2px solid ${selected.includes(u.user_id) ? '#7c3aed' : '#d1d5db'}`, background: selected.includes(u.user_id) ? '#7c3aed' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.65rem', color: '#fff' }}>
                 {selected.includes(u.user_id) ? '✓' : ''}
               </div>
             </button>
           ))}
-          {eligible.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.85rem' }}>No users found.</div>}
+          {eligible.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: 'var(--ig-txt3)', fontSize: '0.85rem' }}>No users found.</div>}
         </div>
         {error && <div style={{ padding: '0 20px 8px', fontSize: '0.80rem', color: '#dc2626' }}>{error}</div>}
-        <div style={{ padding: '12px 20px 20px', borderTop: '1px solid #efefef', display: 'flex', gap: 10 }}>
-          <button onClick={onClose} style={{ flex: 1, background: '#f3f4f6', color: '#6b7280', border: 'none', borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>Cancel</button>
+        <div style={{ padding: '12px 20px 20px', borderTop: '1px solid var(--ig-bord)', display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, background: 'var(--ig-surf2)', color: 'var(--ig-txt2)', border: 'none', borderRadius: 12, padding: '11px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem' }}>Cancel</button>
           <button onClick={handleSubmit} disabled={submitting}
             style={{ flex: 1, background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 12, padding: '11px', cursor: submitting ? 'wait' : 'pointer', fontWeight: 700, fontSize: '0.88rem', opacity: submitting ? 0.7 : 1 }}>
             {submitting ? 'Creating…' : `Create (${selected.length})`}
@@ -512,8 +515,8 @@ function EmotionalArcStrip({ messages, onSelectMsg }) {
       style={{
         height: 52, flexShrink: 0,
         overflowX: 'auto', overflowY: 'hidden',
-        borderTop: '1px solid rgba(255,255,255,0.08)',
-        background: 'rgba(255,255,255,0.06)',
+        borderTop: '1px solid rgba(var(--ig-ink-rgb),0.08)',
+        background: 'rgba(var(--ig-ink-rgb),0.06)',
         display: 'flex', alignItems: 'center',
         padding: '0 8px',
         scrollbarWidth: 'none',
@@ -521,7 +524,7 @@ function EmotionalArcStrip({ messages, onSelectMsg }) {
     >
       <svg width={W} height={H} style={{ minWidth: W, overflow: 'visible' }}>
         <line x1={0} y1={H / 2} x2={W} y2={H / 2}
-          stroke="rgba(255,255,255,0.10)" strokeWidth="1" strokeDasharray="3 4" />
+          stroke="rgba(var(--ig-ink-rgb),0.10)" strokeWidth="1" strokeDasharray="3 4" />
         <path d={pathD} fill="none" stroke="rgba(109,40,217,0.40)" strokeWidth="1.5" strokeLinecap="round" />
         {analyzed.map((m, i) => {
           const rgb = EmotionPalette[m.analysis.data.final_dominant_emotion?.toLowerCase()] ?? EmotionPalette.neutral;
@@ -549,7 +552,7 @@ function EmotionalArcStrip({ messages, onSelectMsg }) {
 // ── LiveAnalysisPanel ──────────────────────────────────────────────────────────
 
 const SECT = {
-  fontSize: '0.58rem', fontWeight: 700, color: 'rgba(255,255,255,0.38)',
+  fontSize: '0.58rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.38)',
   textTransform: 'uppercase', letterSpacing: '.10em',
   marginBottom: 8,
 };
@@ -558,11 +561,11 @@ function Bar({ value, max = 1, color = '99,102,241', label, right }) {
   const pct = Math.min(1, Math.max(0, value / max)) * 100;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
-      {label && <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.30)', width: 68, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>}
-      <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.09)', position: 'relative', overflow: 'hidden' }}>
+      {label && <span style={{ fontSize: '0.72rem', color: 'rgba(var(--ig-ink-rgb),0.30)', width: 68, flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>}
+      <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.09)', position: 'relative', overflow: 'hidden' }}>
         <div style={{ position: 'absolute', left: 0, top: 0, height: '100%', width: `${pct}%`, background: `rgba(${color},0.80)`, borderRadius: 3, transition: 'width .4s ease' }} />
       </div>
-      {right && <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.38)', width: 30, textAlign: 'right', flexShrink: 0 }}>{right}</span>}
+      {right && <span style={{ fontSize: '0.68rem', color: 'rgba(var(--ig-ink-rgb),0.38)', width: 30, textAlign: 'right', flexShrink: 0 }}>{right}</span>}
     </div>
   );
 }
@@ -573,9 +576,9 @@ function BipolarBar({ value, label }) {
   const color = clamped >= 0 ? '52,211,153' : '239,68,68';
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-      <span style={{ fontSize: '0.72rem', color: 'rgba(255,255,255,0.30)', width: 68, flexShrink: 0 }}>{label}</span>
-      <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.09)', position: 'relative' }}>
-        <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(255,255,255,0.18)' }} />
+      <span style={{ fontSize: '0.72rem', color: 'rgba(var(--ig-ink-rgb),0.30)', width: 68, flexShrink: 0 }}>{label}</span>
+      <div style={{ flex: 1, height: 4, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.09)', position: 'relative' }}>
+        <div style={{ position: 'absolute', left: '50%', top: 0, width: 1, height: '100%', background: 'rgba(var(--ig-ink-rgb),0.18)' }} />
         <div style={{
           position: 'absolute',
           left: clamped >= 0 ? '50%' : `${pct}%`,
@@ -586,7 +589,7 @@ function BipolarBar({ value, label }) {
           transition: 'left .4s ease, width .4s ease',
         }} />
       </div>
-      <span style={{ fontSize: '0.68rem', color: 'rgba(255,255,255,0.38)', width: 36, textAlign: 'right', flexShrink: 0 }}>
+      <span style={{ fontSize: '0.68rem', color: 'rgba(var(--ig-ink-rgb),0.38)', width: 36, textAlign: 'right', flexShrink: 0 }}>
         {clamped >= 0 ? '+' : ''}{clamped.toFixed(2)}
       </span>
     </div>
@@ -605,22 +608,22 @@ function AnalysisWaiting() {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px 14px', boxSizing: 'border-box' }}>
       {/* PlutchikWheel instead of emoji orb */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 18 }}>
-        <div style={{ width: 88, height: 88, opacity: 0.40, '--accent-primary': 'rgba(139,92,246,0.75)', '--glass-border': 'rgba(255,255,255,0.14)' }}>
+        <div style={{ width: 88, height: 88, opacity: 0.40, '--accent-primary': 'rgba(139,92,246,0.75)', '--glass-border': 'rgba(var(--ig-ink-rgb),0.14)' }}>
           <PlutchikWheel dominantEmotion="neutral" />
         </div>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'rgba(255,255,255,0.70)', marginBottom: 3 }}>Waiting for signal</div>
-          <div style={{ fontSize: '0.66rem', color: 'rgba(255,255,255,0.28)', lineHeight: 1.5 }}>Send a message to activate<br />the emotion pipeline</div>
+          <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.70)', marginBottom: 3 }}>Waiting for signal</div>
+          <div style={{ fontSize: '0.66rem', color: 'rgba(var(--ig-ink-rgb),0.28)', lineHeight: 1.5 }}>Send a message to activate<br />the emotion pipeline</div>
         </div>
       </div>
-      <div style={{ fontSize: '0.55rem', fontWeight: 700, color: 'rgba(255,255,255,0.22)', letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 8 }}>What you'll see</div>
+      <div style={{ fontSize: '0.55rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.22)', letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 8 }}>What you'll see</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {PREVIEW.map((p, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', borderRadius: 9, padding: '8px 11px' }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(var(--ig-ink-rgb),0.03)', border: '1px solid rgba(var(--ig-ink-rgb),0.06)', borderRadius: 9, padding: '8px 11px' }}>
             <div style={{ width: 7, height: 7, borderRadius: '50%', background: `rgba(${p.dot},0.70)`, flexShrink: 0 }} />
             <div>
               <div style={{ fontSize: '0.71rem', fontWeight: 700, color: `rgba(${p.dot},0.78)` }}>{p.label}</div>
-              <div style={{ fontSize: '0.61rem', color: 'rgba(255,255,255,0.26)', marginTop: 1 }}>{p.sub}</div>
+              <div style={{ fontSize: '0.61rem', color: 'rgba(var(--ig-ink-rgb),0.26)', marginTop: 1 }}>{p.sub}</div>
             </div>
           </div>
         ))}
@@ -630,15 +633,18 @@ function AnalysisWaiting() {
 }
 
 // Processing state — TelemetryPanel from git (dark mode)
-function AnalysisProcessing({ partialModels = new Set(), lastAnalysis }) {
+function AnalysisProcessing({ partialModels = new Set(), lastAnalysis, dark = false }) {
   return (
     <div style={{ padding: '12px 10px' }}>
-      <TelemetryPanel processing={true} lastAnalysis={lastAnalysis} partialModels={partialModels} dark={true} />
+      <TelemetryPanel processing={true} lastAnalysis={lastAnalysis} partialModels={partialModels} dark={dark} />
     </div>
   );
 }
 
-function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Set(), messages = [] }) {
+function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Set(), messages = [], dark = false, settings = {} }) {
+  const showTrajectory  = settings.showTrajectory ?? true;
+  const pipelineVerbose = settings.pipelineVerbose ?? false;
+  const showOrb         = settings.ambientOrb ?? true;
   const data      = currentAnalysis?.data;
   const dom       = data?.final_dominant_emotion?.toLowerCase() || 'neutral';
   const rgb       = EmotionPalette[dom] || EmotionPalette.neutral;
@@ -681,15 +687,18 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
   const GATE_LABELS   = ['VADER', 'BERT', 'GoE', 'VAD', 'Ctx'];
   const GATE_COLORS   = ['250,204,21', '96,165,250', '167,139,250', '74,222,128', '251,113,133'];
 
-  const DIVIDER = { borderTop: '1px solid rgba(255,255,255,0.07)', margin: '12px 0' };
+  const DIVIDER = { borderTop: '1px solid rgba(var(--ig-ink-rgb),0.07)', margin: '12px 0' };
 
   if (!data && !processing) return <AnalysisWaiting />;
-  if (processing && !data)  return <AnalysisProcessing partialModels={partialModels} lastAnalysis={currentAnalysis} />;
+  if (processing && !data)  return <AnalysisProcessing partialModels={partialModels} lastAnalysis={currentAnalysis} dark={dark} />;
 
   const confPct = Math.round(confidence * 100);
 
   return (
     <div style={{ padding: '14px 14px 20px', overflowY: 'auto', flex: 1, minHeight: 0, boxSizing: 'border-box' }}>
+
+      {/* Ambient orb — emotion-reactive glow behind the rail (fixed, bottom-right) */}
+      {showOrb && <AmbientOrb valence={valence} volatility={snap?.volatility ?? 0} />}
 
       {/* ── Emotion Card ─────────────────────────────────────────────────── */}
       <div style={{
@@ -708,23 +717,23 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
           </div>
           <div>
             <div style={{ fontSize: '1.0rem', fontWeight: 800, color: `rgb(${rgb})`, textTransform: 'capitalize', letterSpacing: '.01em' }}>{dom}</div>
-            <div style={{ fontSize: '0.62rem', color: 'rgba(255,255,255,0.35)', marginTop: 1 }}>dominant emotion</div>
+            <div style={{ fontSize: '0.62rem', color: 'rgba(var(--ig-ink-rgb),0.35)', marginTop: 1 }}>dominant emotion</div>
           </div>
           <div style={{ marginLeft: 'auto', textAlign: 'right' }}>
             <div style={{ fontSize: '1.1rem', fontWeight: 800, color: `rgba(${rgb},0.90)` }}>{confPct}%</div>
-            <div style={{ fontSize: '0.58rem', color: 'rgba(255,255,255,0.28)' }}>confidence</div>
+            <div style={{ fontSize: '0.58rem', color: 'rgba(var(--ig-ink-rgb),0.28)' }}>confidence</div>
           </div>
         </div>
 
         {/* Confidence bar */}
-        <div style={{ height: 4, borderRadius: 3, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+        <div style={{ height: 4, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.08)', overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${confPct}%`, background: `rgba(${rgb},0.75)`, borderRadius: 3, transition: 'width .5s ease', boxShadow: `0 0 8px rgba(${rgb},0.40)` }} />
         </div>
 
         {/* Badges row */}
         <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
           {data?.ekman_group && (
-            <span style={{ fontSize: '0.60rem', fontWeight: 600, background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.50)', borderRadius: 5, padding: '2px 7px' }}>
+            <span style={{ fontSize: '0.60rem', fontWeight: 600, background: 'rgba(var(--ig-ink-rgb),0.07)', color: 'rgba(var(--ig-ink-rgb),0.50)', borderRadius: 5, padding: '2px 7px' }}>
               {data.ekman_group}
             </span>
           )}
@@ -754,7 +763,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
           {/* EmotionArcChart — valence trajectory across conversation */}
           {valenceHistory.length >= 2 && (
             <div style={{ marginBottom: 10 }}>
-              <div style={{ fontSize: '0.55rem', fontWeight: 700, color: 'rgba(255,255,255,0.28)', letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 5 }}>
+              <div style={{ fontSize: '0.55rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.28)', letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 5 }}>
                 Valence arc · {valenceHistory.length} msgs
               </div>
               <EmotionArcChart values={valenceHistory} color={rgb} height={54} />
@@ -765,7 +774,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
       )}
 
       {/* ── Trajectory ───────────────────────────────────────────────────── */}
-      {traj?.model_available && topPredicted && (
+      {showTrajectory && traj?.model_available && topPredicted && (
         <>
           <div style={SECT}>Trajectory prediction</div>
           <div style={{
@@ -775,10 +784,10 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
               <span style={{ fontSize: '0.88rem', color: 'rgba(167,139,250,0.55)' }}>→</span>
-              <span style={{ fontSize: '0.90rem', fontWeight: 700, color: 'rgba(255,255,255,0.88)', textTransform: 'capitalize' }}>{topPredicted}</span>
+              <span style={{ fontSize: '0.90rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.88)', textTransform: 'capitalize' }}>{topPredicted}</span>
               <div style={{ marginLeft: 'auto', display: 'flex', gap: 5, alignItems: 'center' }}>
                 {trajPhase && (
-                  <span style={{ fontSize: '0.58rem', fontWeight: 600, background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.40)', borderRadius: 5, padding: '2px 6px', textTransform: 'capitalize' }}>{trajPhase.replace(/_/g,' ')}</span>
+                  <span style={{ fontSize: '0.58rem', fontWeight: 600, background: 'rgba(var(--ig-ink-rgb),0.07)', color: 'rgba(var(--ig-ink-rgb),0.40)', borderRadius: 5, padding: '2px 6px', textTransform: 'capitalize' }}>{trajPhase.replace(/_/g,' ')}</span>
                 )}
                 <span style={{ fontSize: '0.68rem', fontWeight: 700, background: 'rgba(109,40,217,0.20)', color: 'rgba(167,139,250,0.88)', borderRadius: 6, padding: '2px 8px' }}>
                   {Math.round(topTrajConf * 100)}%
@@ -798,7 +807,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
       {snap && (
         <>
           {/* Override light-theme text colors for dark context */}
-          <style>{`.cdm-dark span[style*="374151"]{color:rgba(255,255,255,.55)!important}.cdm-dark div[style*="rgba(0,0,0,.07)"]{background:rgba(255,255,255,.08)!important}`}</style>
+          <style>{`.cdm-dark span[style*="374151"]{color:rgba(var(--ig-ink-rgb),.55)!important}.cdm-dark div[style*="rgba(0,0,0,.07)"]{background:rgba(var(--ig-ink-rgb),.08)!important}`}</style>
           <div className="cdm-dark" style={{ marginBottom: 10 }}>
             <CDMStateGraph snapshot={snap} />
           </div>
@@ -814,7 +823,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         <BipolarBar value={dominance} label="Dominance" />
         {(inertia !== 0 || contagion !== 0) && (
           <>
-            <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '7px 0' }} />
+            <div style={{ height: 1, background: 'rgba(var(--ig-ink-rgb),0.06)', margin: '7px 0' }} />
             <BipolarBar value={inertia}   label="Inertia" />
             <BipolarBar value={contagion} label="Contagion" />
           </>
@@ -835,7 +844,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
       )}
 
       {/* ── Gate weights ─────────────────────────────────────────────────── */}
-      {gateWeights && gateWeights.length >= 3 && (
+      {pipelineVerbose && gateWeights && gateWeights.length >= 3 && (
         <>
           <div style={DIVIDER} />
           <div style={SECT}>Model gate weights</div>
@@ -855,7 +864,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
             {gateWeights.slice(0, 5).map((w, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
                 <div style={{ width: 6, height: 6, borderRadius: 2, background: `rgba(${GATE_COLORS[i]},0.70)` }} />
-                <span style={{ fontSize: '0.58rem', color: 'rgba(255,255,255,0.35)' }}>{GATE_LABELS[i]} {((w || 0) * 100).toFixed(0)}%</span>
+                <span style={{ fontSize: '0.58rem', color: 'rgba(var(--ig-ink-rgb),0.35)' }}>{GATE_LABELS[i]} {((w || 0) * 100).toFixed(0)}%</span>
               </div>
             ))}
           </div>
@@ -863,7 +872,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
       )}
 
       {/* ── Logic map fallback ───────────────────────────────────────────── */}
-      {!gateWeights && data?.logic_map && Object.keys(data.logic_map).length > 0 && (
+      {pipelineVerbose && !gateWeights && data?.logic_map && Object.keys(data.logic_map).length > 0 && (
         <>
           <div style={DIVIDER} />
           <div style={SECT}>Pipeline weights</div>
@@ -877,24 +886,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
 }
 
 // ── Living Aura ────────────────────────────────────────────────────────────────
-
-function bubbleGradient(emotionDict) {
-  const entries = Object.entries(emotionDict)
-    .filter(([, v]) => v > 0.03)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
-  if (!entries.length) return null;
-  if (entries.length === 1) {
-    const rgb = EmotionPalette[entries[0][0]] || EmotionPalette.neutral;
-    return `rgba(${rgb}, 0.14)`;
-  }
-  const stops = entries.map(([emo], i) => {
-    const rgb = EmotionPalette[emo] || EmotionPalette.neutral;
-    const pct = Math.round((i / (entries.length - 1)) * 100);
-    return `rgba(${rgb}, 0.15) ${pct}%`;
-  });
-  return `linear-gradient(135deg, ${stops.join(', ')})`;
-}
 
 // ── Main Dashboard ─────────────────────────────────────────────────────────────
 
@@ -947,6 +938,10 @@ export default function IGDashboard({
     localStorage.setItem('ig_settings', JSON.stringify(next));
     return next;
   });
+  useEffect(() => {   // "Analysis panel" setting applies immediately (button still overrides per-session)
+    if (settings.showAnalysisPanel != null) setRightPanelOpen(settings.showAnalysisPanel);
+  }, [settings.showAnalysisPanel]);
+  const igTheme = settings.theme === 'dark' ? 'dark' : 'light';  // chat light/dark mode (default light)
 
   const messagesContainerRef = useRef(null);
   const inputRef             = useRef(null);
@@ -954,9 +949,10 @@ export default function IGDashboard({
 
   useEffect(() => {
     document.documentElement.removeAttribute('data-theme');
-    document.body.style.background = '#ffffff';
-    document.documentElement.style.background = '#ffffff';
-  }, []);
+    const pageBg = igTheme === 'dark' ? '#0a0c12' : '#ffffff';
+    document.body.style.background = pageBg;
+    document.documentElement.style.background = pageBg;
+  }, [igTheme]);
 
   useEffect(() => {
     if (!showProfileMenu) return;
@@ -1000,7 +996,7 @@ export default function IGDashboard({
   const activeRgb   = emotionRgb(activeConv?.dominant_emotion);
   const dominant    = currentAnalysis?.data?.final_dominant_emotion;
   const dominantRgb = dominant ? emotionRgb(dominant) : null;
-  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelOpen, setRightPanelOpen] = useState(() => settings.showAnalysisPanel ?? true);
 
   const convLabel  = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
   const activeLabel = activeConv ? convLabel(activeConv) : '';
@@ -1031,9 +1027,9 @@ export default function IGDashboard({
   };
 
   return (
-    <div style={{
+    <div data-ig-theme={igTheme} style={{
       display: 'flex', height: '100vh', overflow: 'hidden',
-      background: '#ffffff',
+      background: 'var(--ig-bg)', color: 'var(--ig-txt)',
       fontFamily: '-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif',
     }}>
 
@@ -1053,29 +1049,29 @@ export default function IGDashboard({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.94, y: 6 }}
             transition={{ type: 'spring', stiffness: 340, damping: 26 }}
-            onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid #efefef', borderRadius: 20, width: 400, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden' }}>
+            onClick={e => e.stopPropagation()} style={{ background: 'var(--ig-surf)', border: '1px solid var(--ig-bord)', borderRadius: 20, width: 400, maxHeight: '70vh', display: 'flex', flexDirection: 'column', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden' }}>
             <div style={{ padding: '20px 20px 0', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <button onClick={() => { setShowCompose(false); setComposeSearch(''); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: '#9ca3af' }}>✕</button>
-              <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>New Message</span>
+              <button onClick={() => { setShowCompose(false); setComposeSearch(''); }} style={{ background: 'none', border: 'none', fontSize: '1.4rem', cursor: 'pointer', color: 'var(--ig-txt3)' }}>✕</button>
+              <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--ig-txt)' }}>New Message</span>
               <div style={{ width: 24 }} />
             </div>
             <div style={{ padding: '14px 20px 0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f3f4f6', borderRadius: 12, padding: '10px 14px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--ig-surf2)', borderRadius: 12, padding: '10px 14px' }}>
                 <svg width="16" height="16" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input autoFocus placeholder="Search people…" value={composeSearch} onChange={e => setComposeSearch(e.target.value)} style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.93rem', color: '#1c1c2e', flex: 1 }} />
+                <input autoFocus placeholder="Search people…" value={composeSearch} onChange={e => setComposeSearch(e.target.value)} style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.93rem', color: 'var(--ig-txt)', flex: 1 }} />
               </div>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '10px 0 8px' }}>
-              {filteredUsers.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: '#9ca3af', fontSize: '0.88rem' }}>No users found.</div>}
+              {filteredUsers.length === 0 && <div style={{ padding: '20px', textAlign: 'center', color: 'var(--ig-txt3)', fontSize: '0.88rem' }}>No users found.</div>}
               {filteredUsers.map(u => (
                 <button key={u.user_id} onClick={() => { onCreateChat(u.user_id); setShowCompose(false); setComposeSearch(''); }}
                   style={{ width: '100%', background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: '10px 20px', cursor: 'pointer', textAlign: 'left' }}
-                  onMouseOver={e => e.currentTarget.style.background = '#f3f4f6'}
+                  onMouseOver={e => e.currentTarget.style.background = 'var(--ig-surf2)'}
                   onMouseOut={e => e.currentTarget.style.background = 'none'}
                 >
                   <Avatar name={u.display_name} size={44} rgb="91,138,106" online={onlineUsers.has(u.user_id)} />
                   <div>
-                    <div style={{ fontWeight: 600, fontSize: '0.93rem', color: '#1c1c2e' }}>{u.display_name}</div>
+                    <div style={{ fontWeight: 600, fontSize: '0.93rem', color: 'var(--ig-txt)' }}>{u.display_name}</div>
                     <div style={{ fontSize: '0.78rem', color: onlineUsers.has(u.user_id) ? '#16a34a' : '#9ca3af' }}>
                       {onlineUsers.has(u.user_id) ? 'Active now' : 'Offline'}
                     </div>
@@ -1113,24 +1109,46 @@ export default function IGDashboard({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.94, y: 6 }}
             transition={{ type: 'spring', stiffness: 340, damping: 26 }}
-            onClick={e => e.stopPropagation()} style={{ background: '#fff', border: '1px solid #efefef', borderRadius: 20, width: 420, maxWidth: '90vw', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden' }}>
+            onClick={e => e.stopPropagation()} style={{ background: 'var(--ig-surf)', border: '1px solid var(--ig-bord)', borderRadius: 20, width: 420, maxWidth: '90vw', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden' }}>
             {/* Header */}
-            <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid #efefef', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid var(--ig-bord)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 9, background: 'rgba(109,40,217,0.08)', border: '1px solid rgba(109,40,217,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7c3aed' }}>
                   <svg width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                 </div>
-                <span style={{ fontWeight: 700, fontSize: '1rem', color: '#1c1c2e' }}>Settings</span>
+                <span style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--ig-txt)' }}>Settings</span>
               </div>
-              <button onClick={() => setShowSettings(false)} style={{ background: '#f3f4f6', border: '1px solid #efefef', borderRadius: '50%', width: 30, height: 30, color: '#6b7280', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
+              <button onClick={() => setShowSettings(false)} style={{ background: 'var(--ig-surf2)', border: '1px solid var(--ig-bord)', borderRadius: '50%', width: 30, height: 30, color: 'var(--ig-txt2)', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
             </div>
 
             {/* Settings rows */}
             <div style={{ padding: '8px 0 16px' }}>
+              {/* Appearance — force light / dark theme */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px' }}>
+                <div>
+                  <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ig-txt)' }}>Appearance</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--ig-txt2)', marginTop: 2 }}>Force light or dark mode for the chat</div>
+                </div>
+                <div style={{ display: 'flex', gap: 4, background: 'var(--ig-surf2)', border: '1px solid var(--ig-bord)', borderRadius: 10, padding: 3 }}>
+                  {['light', 'dark'].map(opt => {
+                    const active = igTheme === opt;
+                    return (
+                      <button key={opt} onClick={() => updateSetting('theme', opt)}
+                        style={{ display: 'flex', alignItems: 'center', gap: 5, border: 'none', cursor: 'pointer',
+                          background: active ? 'var(--ig-surf)' : 'transparent',
+                          color: active ? 'var(--ig-txt)' : 'var(--ig-txt3)',
+                          fontWeight: 600, fontSize: '0.78rem', borderRadius: 8, padding: '5px 12px',
+                          boxShadow: active ? '0 1px 4px rgba(0,0,0,.12)' : 'none', transition: 'all .15s' }}>
+                        <span style={{ fontSize: '0.85rem' }}>{opt === 'light' ? '☀' : '☾'}</span>{opt === 'light' ? 'Light' : 'Dark'}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+              <div style={{ margin: '4px 24px 8px', borderTop: '1px solid var(--ig-bord)' }} />
               {[
                 { key: 'showAnalysisPanel', label: 'Analysis panel', sub: 'Show emotion signal rail when a conversation is open', default: true },
                 { key: 'showTimestamps',    label: 'Message timestamps', sub: 'Display send time below each message', default: false },
-                { key: 'compactMessages',   label: 'Compact messages', sub: 'Reduce vertical spacing between messages', default: false },
                 { key: 'showConfidence',    label: 'Confidence scores', sub: 'Show meta-learner confidence % on each message', default: true },
                 { key: 'ambientOrb',        label: 'Ambient orb', sub: 'Emotion-reactive background color in the analysis panel', default: true },
               ].map(row => {
@@ -1138,23 +1156,23 @@ export default function IGDashboard({
                 return (
                   <div key={row.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px', cursor: 'pointer' }}
                     onClick={() => updateSetting(row.key, !val)}
-                    onMouseOver={e => e.currentTarget.style.background = '#f9fafb'}
+                    onMouseOver={e => e.currentTarget.style.background = 'var(--ig-surf3)'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
                   >
                     <div>
-                      <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1c1c2e' }}>{row.label}</div>
-                      <div style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: 2 }}>{row.sub}</div>
+                      <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ig-txt)' }}>{row.label}</div>
+                      <div style={{ fontSize: '0.72rem', color: 'var(--ig-txt2)', marginTop: 2 }}>{row.sub}</div>
                     </div>
                     {/* Toggle pill */}
-                    <div style={{ width: 40, height: 22, borderRadius: 11, background: val ? '#6d28d9' : '#e5e7eb', border: `1px solid ${val ? 'rgba(109,40,217,0.60)' : '#d1d5db'}`, position: 'relative', flexShrink: 0, transition: 'all .18s', marginLeft: 16 }}>
-                      <div style={{ position: 'absolute', top: 2, left: val ? 20 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .18s', boxShadow: '0 1px 4px rgba(0,0,0,.20)' }} />
+                    <div style={{ width: 40, height: 22, borderRadius: 11, background: val ? '#6d28d9' : 'var(--ig-bord2)', border: `1px solid ${val ? 'rgba(109,40,217,0.60)' : '#d1d5db'}`, position: 'relative', flexShrink: 0, transition: 'all .18s', marginLeft: 16 }}>
+                      <div style={{ position: 'absolute', top: 2, left: val ? 20 : 2, width: 16, height: 16, borderRadius: '50%', background: 'var(--ig-knob)', transition: 'left .18s', boxShadow: '0 1px 4px rgba(0,0,0,.20)' }} />
                     </div>
                   </div>
                 );
               })}
 
-              <div style={{ margin: '8px 24px 0', padding: '12px 0 0', borderTop: '1px solid #efefef' }}>
-                <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#9ca3af', letterSpacing: '.08em', marginBottom: 8 }}>PIPELINE</div>
+              <div style={{ margin: '8px 24px 0', padding: '12px 0 0', borderTop: '1px solid var(--ig-bord)' }}>
+                <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--ig-txt3)', letterSpacing: '.08em', marginBottom: 8 }}>PIPELINE</div>
                 {[
                   { key: 'pipelineVerbose', label: 'Verbose model labels', sub: 'Show VADER / BERT / GoE labels in the analysis panel', default: false },
                   { key: 'showTrajectory',  label: 'Trajectory prediction', sub: 'Display LSTM next-emotion forecast in the analysis panel', default: true },
@@ -1163,15 +1181,15 @@ export default function IGDashboard({
                   return (
                     <div key={row.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 0', cursor: 'pointer' }}
                       onClick={() => updateSetting(row.key, !val)}
-                      onMouseOver={e => e.currentTarget.style.background = '#f9fafb'}
+                      onMouseOver={e => e.currentTarget.style.background = 'var(--ig-surf3)'}
                       onMouseOut={e => e.currentTarget.style.background = 'none'}
                     >
                       <div>
-                        <div style={{ fontSize: '0.88rem', fontWeight: 600, color: '#1c1c2e' }}>{row.label}</div>
-                        <div style={{ fontSize: '0.72rem', color: '#6b7280', marginTop: 2 }}>{row.sub}</div>
+                        <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ig-txt)' }}>{row.label}</div>
+                        <div style={{ fontSize: '0.72rem', color: 'var(--ig-txt2)', marginTop: 2 }}>{row.sub}</div>
                       </div>
-                      <div style={{ width: 40, height: 22, borderRadius: 11, background: val ? '#6d28d9' : '#e5e7eb', border: `1px solid ${val ? 'rgba(109,40,217,0.60)' : '#d1d5db'}`, position: 'relative', flexShrink: 0, transition: 'all .18s', marginLeft: 16 }}>
-                        <div style={{ position: 'absolute', top: 2, left: val ? 20 : 2, width: 16, height: 16, borderRadius: '50%', background: '#fff', transition: 'left .18s', boxShadow: '0 1px 4px rgba(0,0,0,.20)' }} />
+                      <div style={{ width: 40, height: 22, borderRadius: 11, background: val ? '#6d28d9' : 'var(--ig-bord2)', border: `1px solid ${val ? 'rgba(109,40,217,0.60)' : '#d1d5db'}`, position: 'relative', flexShrink: 0, transition: 'all .18s', marginLeft: 16 }}>
+                        <div style={{ position: 'absolute', top: 2, left: val ? 20 : 2, width: 16, height: 16, borderRadius: '50%', background: 'var(--ig-knob)', transition: 'left .18s', boxShadow: '0 1px 4px rgba(0,0,0,.20)' }} />
                       </div>
                     </div>
                   );
@@ -1184,7 +1202,7 @@ export default function IGDashboard({
       </AnimatePresence>
 
       {/* ── Left Sidebar ─────────────────────────────────────────────────── */}
-      <div style={{ width: 320, borderRight: '1px solid #efefef', display: 'flex', flexDirection: 'column', background: '#ffffff', flexShrink: 0 }}>
+      <div style={{ width: 320, borderRight: '1px solid var(--ig-bord)', display: 'flex', flexDirection: 'column', background: 'var(--ig-surf)', flexShrink: 0 }}>
 
         {/* Header */}
         <div style={{ padding: '18px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -1192,7 +1210,7 @@ export default function IGDashboard({
             onClick={() => setShowProfileMenu(p => !p)}
           >
             <Avatar name={currentUser?.display_name} size={32} rgb="91,138,106" />
-            <span style={{ fontWeight: 800, fontSize: '0.95rem', color: '#1c1c2e' }}>{currentUser?.display_name}</span>
+            <span style={{ fontWeight: 800, fontSize: '0.95rem', color: 'var(--ig-txt)' }}>{currentUser?.display_name}</span>
             <svg width="12" height="12" fill="none" stroke="#6b7280" strokeWidth="2.5" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg>
 
             <AnimatePresence>
@@ -1204,11 +1222,11 @@ export default function IGDashboard({
                 exit={{ opacity: 0, y: -4, scale: 0.97 }}
                 transition={{ type: 'spring', stiffness: 420, damping: 28 }}
                 onClick={e => e.stopPropagation()}
-                style={{ position: 'absolute', top: '110%', left: 0, zIndex: 100, background: '#fff', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.14)', border: '1px solid rgba(0,0,0,.07)', overflow: 'hidden' }}
+                style={{ position: 'absolute', top: '110%', left: 0, zIndex: 100, background: 'var(--ig-surf)', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.14)', border: '1px solid rgba(0,0,0,.07)', overflow: 'hidden' }}
               >
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.07)' }}>
-                  <div style={{ fontWeight: 600, fontSize: '0.88rem', color: '#1c1c2e' }}>{currentUser?.display_name}</div>
-                  <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{currentUser?.email}</div>
+                  <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--ig-txt)' }}>{currentUser?.display_name}</div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--ig-txt2)', marginTop: 2 }}>{currentUser?.email}</div>
                   {currentUser?.role === 'admin' && (
                     <span style={{ display: 'inline-block', marginTop: 4, background: 'linear-gradient(135deg,#f59e0b,#d97706)', color: '#fff', fontSize: '0.60rem', fontWeight: 700, padding: '2px 7px', borderRadius: 5, letterSpacing: '.06em' }}>ADMIN</span>
                   )}
@@ -1220,7 +1238,7 @@ export default function IGDashboard({
                 ].filter(Boolean).map(item => (
                   <button key={item.label} onClick={item.action}
                     style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', textAlign: 'left', fontSize: '0.88rem', color: item.color || '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
-                    onMouseOver={e => e.currentTarget.style.background = '#f3f4f6'}
+                    onMouseOver={e => e.currentTarget.style.background = 'var(--ig-surf2)'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
                   >{item.icon} {item.label}</button>
                 ))}
@@ -1238,22 +1256,22 @@ export default function IGDashboard({
 
           <div style={{ display: 'flex', gap: 4 }}>
             <button onClick={() => setShowCompose(true)} title="New Message"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: '#6b7280', transition: 'all .12s' }}
-              onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
+              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
               onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
             >
               <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
             <button onClick={() => setShowGroupModal(true)} title="New Group"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: '#6b7280', transition: 'all .12s' }}
-              onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
+              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
               onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
             >
               <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </button>
             <button onClick={() => setShowSettings(true)} title="Settings"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: '#6b7280', transition: 'all .12s' }}
-              onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
+              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
               onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
             >
               <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -1263,16 +1281,16 @@ export default function IGDashboard({
 
         {/* Search */}
         <div style={{ padding: '0 12px 10px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: '#f3f4f6', borderRadius: 10, padding: '8px 12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--ig-surf2)', borderRadius: 10, padding: '8px 12px' }}>
             <svg width="14" height="14" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input placeholder="Search…" value={search} onChange={e => setSearch(e.target.value)}
-              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.88rem', color: '#1c1c2e', flex: 1 }} />
+              style={{ background: 'none', border: 'none', outline: 'none', fontSize: '0.88rem', color: 'var(--ig-txt)', flex: 1 }} />
           </div>
         </div>
 
         {/* Status */}
         <div style={{ padding: '0 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 700, fontSize: '0.75rem', color: '#9ca3af', textTransform: 'uppercase', letterSpacing: '.08em' }}>Conversations</span>
+          <span style={{ fontWeight: 700, fontSize: '0.75rem', color: 'var(--ig-txt3)', textTransform: 'uppercase', letterSpacing: '.08em' }}>Conversations</span>
           <span style={{ fontSize: '0.72rem', color: status === 'Live' ? '#16a34a' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: status === 'Live' ? '#16a34a' : '#9ca3af', display: 'inline-block' }} />
             {status}
@@ -1282,7 +1300,7 @@ export default function IGDashboard({
         {/* Conversation list */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {filteredConvs.length === 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', gap: 10, color: '#9ca3af' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', gap: 10, color: 'var(--ig-txt3)' }}>
               <div style={{ fontSize: '1.8rem', opacity: 0.4 }}>💬</div>
               <p style={{ margin: 0, fontSize: '0.85rem', textAlign: 'center' }}>No conversations yet.</p>
               <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 18px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
@@ -1309,27 +1327,27 @@ export default function IGDashboard({
                   padding: '9px 12px', textAlign: 'left',
                   borderLeft: `3px solid ${isActive ? '#7c3aed' : 'transparent'}`,
                 }}
-                onMouseOver={e => { if (!isActive) e.currentTarget.style.background = '#f9fafb'; }}
+                onMouseOver={e => { if (!isActive) e.currentTarget.style.background = 'var(--ig-surf3)'; }}
                 onMouseOut={e => { if (!isActive) e.currentTarget.style.background = 'none'; }}
               >
                 <Avatar name={label} size={44} rgb={rgb} online={conv.type !== 'group' && onlineUsers.has(conv.other_user_id)} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.90rem', color: '#1c1c2e' }}>{label}</span>
+                      <span style={{ fontWeight: isActive ? 700 : 600, fontSize: '0.90rem', color: 'var(--ig-txt)' }}>{label}</span>
                       {conv.type === 'group' && (
                         <span style={{ fontSize: '0.60rem', background: 'rgba(109,40,217,0.08)', color: '#7c3aed', fontWeight: 700, padding: '1px 5px', borderRadius: 5 }}>
                           {conv.member_count || 0}
                         </span>
                       )}
                     </div>
-                    <span style={{ fontSize: '0.68rem', color: '#9ca3af', flexShrink: 0 }}>{timeAgo(conv.last_message_time || conv.conversation_id)}</span>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--ig-txt3)', flexShrink: 0 }}>{timeAgo(conv.last_message_time || conv.conversation_id)}</span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
                     {conv.dominant_emotion && (
                       <span style={{ width: 5, height: 5, borderRadius: '50%', background: `rgb(${rgb})`, flexShrink: 0, display: 'inline-block' }} />
                     )}
-                    <div style={{ fontSize: '0.78rem', color: '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--ig-txt3)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
                       {typeof lastMsg === 'string' ? lastMsg : '…'}
                     </div>
                   </div>
@@ -1340,7 +1358,7 @@ export default function IGDashboard({
         </div>
 
         {/* Footer */}
-        <div style={{ padding: '10px 12px', borderTop: '1px solid #efefef' }}>
+        <div style={{ padding: '10px 12px', borderTop: '1px solid var(--ig-bord)' }}>
           <button onClick={() => setShowCompose(true)} style={{
             width: '100%', background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none',
             borderRadius: 10, padding: '10px', cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem',
@@ -1365,8 +1383,8 @@ export default function IGDashboard({
                 <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16a34a', animation: 'pulse 2s ease infinite' }} />
                 <span style={{ fontSize: '0.68rem', fontWeight: 700, color: '#7c3aed', letterSpacing: '.08em', textTransform: 'uppercase' }}>Pipeline Active</span>
               </div>
-              <h2 style={{ margin: '0 0 10px', fontSize: '1.6rem', fontWeight: 800, color: '#1c1c2e', letterSpacing: '-0.02em' }}>Emotion intelligence, live.</h2>
-              <p style={{ margin: '0 0 24px', fontSize: '0.90rem', color: '#6b7280', maxWidth: 400, lineHeight: 1.6 }}>
+              <h2 style={{ margin: '0 0 10px', fontSize: '1.6rem', fontWeight: 800, color: 'var(--ig-txt)', letterSpacing: '-0.02em' }}>Emotion intelligence, live.</h2>
+              <p style={{ margin: '0 0 24px', fontSize: '0.90rem', color: 'var(--ig-txt2)', maxWidth: 400, lineHeight: 1.6 }}>
                 Select a conversation or start a new one. Every message flows through 4 parallel ML models in under a second.
               </p>
               <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 12, padding: '12px 32px', cursor: 'pointer', fontWeight: 700, fontSize: '0.92rem', boxShadow: '0 4px 20px rgba(109,40,217,0.30)', transition: 'all .2s', fontFamily: 'inherit' }}>
@@ -1381,10 +1399,10 @@ export default function IGDashboard({
                 { svg: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/><line x1="12" y1="7" x2="5" y2="17"/><line x1="12" y1="7" x2="19" y2="17"/></svg>, label: 'CDM · 15 States', desc: 'Tension, Empathy, Conflict, Humor — Hidden Markov Machine tracks it all', color: '22,163,74' },
                 { svg: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" viewBox="0 0 24 24"><rect x="2" y="7" width="6" height="10" rx="1"/><rect x="9" y="9" width="6" height="6" rx="1"/><rect x="16" y="5" width="6" height="14" rx="1"/></svg>, label: 'VAD + Sarcasm', desc: 'Valence/Arousal/Dominance + real-time sarcasm classifier per message', color: '217,119,6' },
               ].map((f, i) => (
-                <div key={i} style={{ background: '#f9fafb', border: '1px solid #efefef', borderRadius: 16, padding: '18px 16px', transition: 'all .25s', cursor: 'default' }}>
+                <div key={i} style={{ background: 'var(--ig-surf3)', border: '1px solid var(--ig-bord)', borderRadius: 16, padding: '18px 16px', transition: 'all .25s', cursor: 'default' }}>
                   <div style={{ width: 34, height: 34, borderRadius: 10, background: `rgba(${f.color},0.08)`, border: `1px solid rgba(${f.color},0.14)`, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 10, color: `rgb(${f.color})` }}>{f.svg}</div>
                   <div style={{ fontSize: '0.78rem', fontWeight: 700, color: `rgb(${f.color})`, marginBottom: 4 }}>{f.label}</div>
-                  <div style={{ fontSize: '0.72rem', color: '#6b7280', lineHeight: 1.55 }}>{f.desc}</div>
+                  <div style={{ fontSize: '0.72rem', color: 'var(--ig-txt2)', lineHeight: 1.55 }}>{f.desc}</div>
                 </div>
               ))}
             </div>
@@ -1393,18 +1411,18 @@ export default function IGDashboard({
               {['VADER', '→', 'BERT', '→', 'GoE', '→', 'Context', '→', 'Meta'].map((n, i) => (
                 <span key={i} style={{ fontSize: '0.65rem', fontWeight: n === '→' ? 400 : 700, color: n === '→' ? '#d1d5db' : '#6b7280', padding: n === '→' ? '0 4px' : '3px 8px', background: n === '→' ? 'none' : '#f3f4f6', borderRadius: 6, letterSpacing: '.04em' }}>{n}</span>
               ))}
-              <span style={{ marginLeft: 8, fontSize: '0.60rem', color: '#9ca3af' }}>· 116 features · &lt; 1s</span>
+              <span style={{ marginLeft: 8, fontSize: '0.60rem', color: 'var(--ig-txt3)' }}>· 116 features · &lt; 1s</span>
             </div>
           </div>
         ) : (
           <>
             {/* Chat header */}
-            <div style={{ position: 'relative', borderBottom: '1px solid #efefef', flexShrink: 0, background: '#ffffff' }}>
+            <div style={{ position: 'relative', borderBottom: '1px solid var(--ig-bord)', flexShrink: 0, background: 'var(--ig-surf)' }}>
             <div style={{ padding: '11px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <Avatar name={activeLabel} size={38} rgb={activeRgb} online={!isGroup && onlineUsers.has(activeConv?.other_user_id)} />
                 <div>
-                  <div style={{ fontWeight: 700, fontSize: '0.92rem', color: '#1c1c2e', display: 'flex', alignItems: 'center', gap: 5 }}>
+                  <div style={{ fontWeight: 700, fontSize: '0.92rem', color: 'var(--ig-txt)', display: 'flex', alignItems: 'center', gap: 5 }}>
                     {activeLabel}
                     {isGroup && <span style={{ fontSize: '0.60rem', background: 'rgba(109,40,217,0.08)', color: '#7c3aed', fontWeight: 700, padding: '1px 6px', borderRadius: 5 }}>GROUP · {activeConv?.member_count || 0}</span>}
                   </div>
@@ -1417,7 +1435,7 @@ export default function IGDashboard({
               <div style={{ display: 'flex', gap: 5, alignItems: 'center' }}>
                 {isGroup && (
                   <button onClick={() => setMemberPanelOpen(p => !p)} title="Manage members"
-                    style={{ background: memberPanelOpen ? 'rgba(109,40,217,0.08)' : 'none', border: `1px solid ${memberPanelOpen ? 'rgba(109,40,217,.30)' : '#efefef'}`, borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.72rem', color: memberPanelOpen ? '#7c3aed' : '#6b7280', fontWeight: 500, transition: 'all .15s' }}>
+                    style={{ background: memberPanelOpen ? 'rgba(109,40,217,0.08)' : 'none', border: `1px solid ${memberPanelOpen ? 'rgba(109,40,217,.30)' : 'var(--ig-bord)'}`, borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.72rem', color: memberPanelOpen ? '#7c3aed' : '#6b7280', fontWeight: 500, transition: 'all .15s' }}>
                     👥 Members
                   </button>
                 )}
@@ -1428,14 +1446,14 @@ export default function IGDashboard({
                   <button
                     onClick={() => onInjectDemo(buildDemoMessages(currentUser.display_name, activeLabel || 'Other'))}
                     title="Inject demo conversation"
-                    style={{ background: 'none', border: '1px solid #efefef', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.70rem', color: '#6b7280', fontWeight: 500, transition: 'all .12s' }}
-                    onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+                    style={{ background: 'none', border: '1px solid var(--ig-bord)', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.70rem', color: 'var(--ig-txt2)', fontWeight: 500, transition: 'all .12s' }}
+                    onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
                     onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
                   >⚗ Demo</button>
                 )}
                 <button onClick={onGoToAnalytics} title="Analytics"
-                  style={{ background: 'none', border: 'none', borderRadius: 8, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280', transition: 'all .12s' }}
-                  onMouseOver={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.color = '#1c1c2e'; }}
+                  style={{ background: 'none', border: 'none', borderRadius: 8, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ig-txt2)', transition: 'all .12s' }}
+                  onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
                   onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
                 >
                   <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -1455,7 +1473,7 @@ export default function IGDashboard({
               const eRgb = EmotionPalette[d.final_dominant_emotion?.toLowerCase()] || EmotionPalette.neutral;
               const conf = d.meta_confidence ?? 0;
               return (
-                <div style={{ height: 2, background: 'rgba(255,255,255,0.04)', overflow: 'hidden' }}>
+                <div style={{ height: 2, background: 'rgba(var(--ig-ink-rgb),0.04)', overflow: 'hidden' }}>
                   <div style={{ height: '100%', width: `${conf * 100}%`, background: `rgba(${eRgb},0.70)`, transition: 'width .8s ease, background .6s ease', boxShadow: `0 0 8px rgba(${eRgb},0.60)` }} />
                 </div>
               );
@@ -1464,15 +1482,15 @@ export default function IGDashboard({
 
             {/* Member panel */}
             {isGroup && memberPanelOpen && (
-              <div style={{ borderBottom: '1px solid #efefef', padding: '12px 18px', background: '#f9fafb', maxHeight: 200, overflowY: 'auto', flexShrink: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: '0.72rem', color: '#9ca3af', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>Members ({activeConv?.member_count || 0})</div>
+              <div style={{ borderBottom: '1px solid var(--ig-bord)', padding: '12px 18px', background: 'var(--ig-surf3)', maxHeight: 200, overflowY: 'auto', flexShrink: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: '0.72rem', color: 'var(--ig-txt3)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>Members ({activeConv?.member_count || 0})</div>
                 {(activeConv?.members || []).map(m => {
                   const isMe    = m.user_id === currentUser?.user_id;
                   const isOwner = m.user_id === activeConv?.creator_user_id;
                   return (
                     <div key={m.user_id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
                       <Avatar name={m.display_name} size={26} rgb="91,138,106" online={onlineUsers.has(m.user_id)} />
-                      <span style={{ flex: 1, fontSize: '0.85rem', color: '#1c1c2e' }}>{m.display_name}{isMe ? ' (you)' : ''}</span>
+                      <span style={{ flex: 1, fontSize: '0.85rem', color: 'var(--ig-txt)' }}>{m.display_name}{isMe ? ' (you)' : ''}</span>
                       {isOwner && <span style={{ fontSize: '0.60rem', color: '#d97706', fontWeight: 700 }}>★</span>}
                       {isCreator && !isMe && (
                         <button onClick={() => handleRemoveMember(m.user_id)}
@@ -1487,7 +1505,7 @@ export default function IGDashboard({
                     style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', padding: '4px 0', cursor: 'pointer', textAlign: 'left' }}
                   >
                     <Avatar name={u.display_name} size={22} rgb="91,138,106" />
-                    <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>{u.display_name}</span>
+                    <span style={{ fontSize: '0.82rem', color: 'var(--ig-txt2)' }}>{u.display_name}</span>
                     <span style={{ fontSize: '0.70rem', color: '#7c3aed', marginLeft: 'auto', fontWeight: 600 }}>+ Add</span>
                   </button>
                 ))}
@@ -1507,8 +1525,8 @@ export default function IGDashboard({
                     <Avatar name={activeLabel} size={72} rgb={activeRgb} />
                   </div>
                   <div style={{ textAlign: 'center' }}>
-                    <div style={{ fontWeight: 800, fontSize: '1.0rem', color: '#1c1c2e', marginBottom: 5 }}>{activeLabel}</div>
-                    <div style={{ fontSize: '0.78rem', color: '#6b7280', lineHeight: 1.6 }}>
+                    <div style={{ fontWeight: 800, fontSize: '1.0rem', color: 'var(--ig-txt)', marginBottom: 5 }}>{activeLabel}</div>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--ig-txt2)', lineHeight: 1.6 }}>
                       Say hello and start the conversation.<br />
                       <span style={{ color: '#7c3aed' }}>Every message gets full emotion analysis.</span>
                     </div>
@@ -1516,9 +1534,9 @@ export default function IGDashboard({
                   <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
                     {['👋', '😊', '❤️'].map((em, i) => (
                       <button key={i} onClick={() => { if (onSend && inputValue === em) onSend(); else { setInputValue(em); setTimeout(() => onSend && onSend(), 50); } }}
-                        style={{ background: '#f3f4f6', border: '1px solid #e5e7eb', borderRadius: 12, padding: '8px 14px', cursor: 'pointer', fontSize: '1.1rem', transition: 'all .2s' }}
+                        style={{ background: 'var(--ig-surf2)', border: '1px solid var(--ig-bord2)', borderRadius: 12, padding: '8px 14px', cursor: 'pointer', fontSize: '1.1rem', transition: 'all .2s' }}
                         onMouseOver={e => { e.currentTarget.style.background = 'rgba(109,40,217,0.06)'; e.currentTarget.style.borderColor = 'rgba(109,40,217,0.20)'; }}
-                        onMouseOut={e => { e.currentTarget.style.background = '#f3f4f6'; e.currentTarget.style.borderColor = '#e5e7eb'; }}
+                        onMouseOut={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.borderColor = 'var(--ig-bord2)'; }}
                       >{em}</button>
                     ))}
                   </div>
@@ -1535,12 +1553,14 @@ export default function IGDashboard({
                       {showName && (
                         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, marginBottom: 2 }}>
                           <Avatar name={msg.senderName || activeLabel} size={24} rgb={activeRgb} />
-                          <span style={{ fontSize: '0.68rem', color: '#9ca3af', marginBottom: 2 }}>{msg.senderName}</span>
+                          <span style={{ fontSize: '0.68rem', color: 'var(--ig-txt3)', marginBottom: 2 }}>{msg.senderName}</span>
                         </div>
                       )}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6, paddingLeft: !isOwn && !showName ? 30 : 0 }}>
                         <MsgBubble
                           msg={msg} isOwn={isOwn} isRegenerating={isRegen}
+                          showTimestamp={settings.showTimestamps ?? false}
+                          showConfidence={settings.showConfidence ?? true}
                           onClick={(m) => setSelectedMsg(m)}
                           onDelete={onDeleteMessage}
                           partialModels={!msg.analysis && msg.sender === 'user' ? partialModels : null}
@@ -1548,7 +1568,7 @@ export default function IGDashboard({
                         />
                         {msg.analysis && !isRegen && onRegenerateAnalysis && (
                           <button onClick={() => onRegenerateAnalysis(msg.id)} title="Re-run pipeline"
-                            style={{ background: 'none', border: '1px solid #e5e7eb', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.70rem', color: '#9ca3af', flexShrink: 0, opacity: 0, transition: 'opacity .15s' }}
+                            style={{ background: 'none', border: '1px solid var(--ig-bord2)', borderRadius: '50%', width: 22, height: 22, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.70rem', color: 'var(--ig-txt3)', flexShrink: 0, opacity: 0, transition: 'opacity .15s' }}
                             className="regen-btn"
                           >↺</button>
                         )}
@@ -1590,10 +1610,10 @@ export default function IGDashboard({
             />
 
             {/* Input */}
-            <div style={{ padding: '8px 18px 12px', borderTop: '1px solid #efefef', background: '#ffffff', flexShrink: 0 }}>
+            <div style={{ padding: '8px 18px 12px', borderTop: '1px solid var(--ig-bord)', background: 'var(--ig-surf)', flexShrink: 0 }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8,
-                border: `1px solid ${dominantRgb ? `rgba(${dominantRgb},.30)` : '#e5e7eb'}`,
+                border: `1px solid ${dominantRgb ? `rgba(${dominantRgb},.30)` : 'var(--ig-bord2)'}`,
                 borderRadius: 26, padding: '4px 6px 4px 14px',
                 transition: 'border-color .4s, background .4s',
                 background: dominantRgb ? `rgba(${dominantRgb},0.04)` : '#f9fafb',
@@ -1604,7 +1624,7 @@ export default function IGDashboard({
                   value={inputValue}
                   onChange={e => setInputValue(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
-                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.93rem', color: '#1c1c2e', fontFamily: 'inherit', padding: '8px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
+                  style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.93rem', color: 'var(--ig-txt)', fontFamily: 'inherit', padding: '8px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
                 />
                 {inputValue.trim() ? (
                   <motion.button
@@ -1641,22 +1661,22 @@ export default function IGDashboard({
           transition={{ type: 'spring', stiffness: 340, damping: 32 }}
           style={{
             flexShrink: 0, position: 'relative',
-            borderLeft: '1px solid rgba(255,255,255,0.07)',
+            borderLeft: '1px solid rgba(var(--ig-ink-rgb),0.07)',
             display: 'flex', flexDirection: 'column',
-            background: 'rgb(14,11,32)',
+            background: 'var(--ig-rail-bg)',
             overflow: 'hidden',
           }}
         >
           {/* Rail header */}
-          <div style={{ padding: '12px 16px 10px', borderBottom: '1px solid rgba(255,255,255,0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'rgba(255,255,255,0.38)', textTransform: 'uppercase', letterSpacing: '.10em' }}>
+          <div style={{ padding: '12px 16px 10px', borderBottom: '1px solid rgba(var(--ig-ink-rgb),0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.38)', textTransform: 'uppercase', letterSpacing: '.10em' }}>
               {selectedMsg ? 'Message X-Ray' : 'Emotional Signal'}
             </span>
             {selectedMsg && (
               <button onClick={() => setSelectedMsg(null)}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', color: 'rgba(255,255,255,0.38)', padding: '2px 6px', borderRadius: 5, transition: 'all .12s' }}
-                onMouseOver={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#fff'; }}
-                onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'rgba(255,255,255,0.38)'; }}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.72rem', color: 'rgba(var(--ig-ink-rgb),0.38)', padding: '2px 6px', borderRadius: 5, transition: 'all .12s' }}
+                onMouseOver={e => { e.currentTarget.style.background = 'rgba(var(--ig-ink-rgb),0.06)'; e.currentTarget.style.color = 'var(--ig-txt)'; }}
+                onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'rgba(var(--ig-ink-rgb),0.38)'; }}
               >← Live</button>
             )}
           </div>
@@ -1675,6 +1695,8 @@ export default function IGDashboard({
                 processing={processing}
                 partialModels={partialModels}
                 messages={messages}
+                dark={igTheme === 'dark'}
+                settings={settings}
               />
             )}
           </div>

@@ -19,7 +19,6 @@ const MOCK_MESSAGES = [
     { id: 'm15', text: "I got you. Get some rest.", isOwn: true, emotion: "optimism", conf: 0.85 }
 ];
 
-// Duplicate to create an endless scroll effect
 const SCROLL_MESSAGES = [...MOCK_MESSAGES, ...MOCK_MESSAGES.map(m => ({...m, id: m.id + '_2'})), ...MOCK_MESSAGES.map(m => ({...m, id: m.id + '_3'}))];
 
 const INJECTED_CSS = `
@@ -134,16 +133,11 @@ function DemoBubble({ msg, delay }) {
     const [isAnalyzed, setIsAnalyzed] = useState(false);
 
     useEffect(() => {
-        // Stagger the analysis based on delay, simulating a live stream being processed
-        const timer = setTimeout(() => {
-            setIsAnalyzed(true);
-        }, delay);
+        const timer = setTimeout(() => setIsAnalyzed(true), delay);
         return () => clearTimeout(timer);
     }, [delay]);
 
     const rgb = EmotionPalette[msg.emotion] || '148,163,184';
-    
-    // Set up CSS custom properties for the minimalist Ultraplan V2 styling
     const style = {
         '--emo-bg': `rgba(${rgb}, 0.04)`,
         '--emo-border': `rgba(${rgb}, 0.15)`,
@@ -152,13 +146,9 @@ function DemoBubble({ msg, delay }) {
     };
 
     return (
-        <div 
-            className={`demo-bubble ${msg.isOwn ? 'own' : 'other'} ${isAnalyzed ? 'analyzed' : ''}`}
-            style={style}
-        >
+        <div className={`demo-bubble ${msg.isOwn ? 'own' : 'other'} ${isAnalyzed ? 'analyzed' : ''}`} style={style}>
             <div className="demo-bubble-accent" />
             <div>{msg.text}</div>
-            
             {!isAnalyzed && <div className="demo-analyzing-indicator">Analyzing...</div>}
             <div className="demo-analyzed-tag">{msg.emotion} · {(msg.conf * 100).toFixed(0)}%</div>
         </div>
@@ -167,48 +157,36 @@ function DemoBubble({ msg, delay }) {
 
 export default function LiveDemoBackground() {
     return (
-        <div style={{
-            position: 'absolute',
-            inset: 0,
-            overflow: 'hidden',
-            pointerEvents: 'none', // Allow clicks to pass through to the login form
-            zIndex: 0, // Behind the login card
-            opacity: 0.65, // Slightly muted so it doesn't distract completely
-            maskImage: 'linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)',
-            WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)'
-        }}>
+        <div
+            className="absolute inset-0 overflow-hidden pointer-events-none z-0 opacity-65"
+            style={{
+                maskImage: 'linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)',
+                WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 15%, black 85%, transparent)',
+            }}
+        >
             <style>{INJECTED_CSS}</style>
-            
-            {/* We render three columns for a dense, matrix-like feel. We stagger their start positions. */}
-            <div style={{ display: 'flex', width: '100%', height: '100%' }}>
-                
-                {/* Column 1 */}
-                <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
+            <div className="flex w-full h-full">
+                <div className="flex-1 overflow-hidden relative">
                     <div className="demo-scroll-container" style={{ transform: 'translateY(-10%)' }}>
                         {SCROLL_MESSAGES.map((msg, i) => (
                             <DemoBubble key={`c1-${msg.id}-${i}`} msg={msg} delay={2000 + i * 800} />
                         ))}
                     </div>
                 </div>
-
-                {/* Column 2 (Offset and slower) */}
-                <div style={{ flex: 1, overflow: 'hidden', position: 'relative', marginTop: '120px' }}>
+                <div className="flex-1 overflow-hidden relative mt-[120px]">
                     <div className="demo-scroll-container" style={{ animationDuration: '55s' }}>
                         {SCROLL_MESSAGES.map((msg, i) => (
                             <DemoBubble key={`c2-${msg.id}-${i}`} msg={msg} delay={4000 + i * 900} />
                         ))}
                     </div>
                 </div>
-
-                {/* Column 3 (Offset) */}
-                <div style={{ flex: 1, overflow: 'hidden', position: 'relative', marginTop: '-80px' }}>
+                <div className="flex-1 overflow-hidden relative -mt-[80px]">
                     <div className="demo-scroll-container" style={{ animationDuration: '50s' }}>
                         {SCROLL_MESSAGES.map((msg, i) => (
                             <DemoBubble key={`c3-${msg.id}-${i}`} msg={msg} delay={1000 + i * 750} />
                         ))}
                     </div>
                 </div>
-                
             </div>
         </div>
     );
