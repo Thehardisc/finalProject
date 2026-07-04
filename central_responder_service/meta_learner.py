@@ -3,19 +3,28 @@ import os
 import pickle
 import json
 import numpy as np
-from typing import Optional, Tuple, List
+
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.preprocessing import StandardScaler
+
 
 from shared.utils.logger import get_logger
 from shared.constants import (
-    EMOTION_LABELS, VADER_KEYS, BERT_LABELS,
-    FEATURE_DIM, CONTEXT_DIM, CDM_CTX_DIM, PRIOR_DIM, ML_DIM,
-    SARCASM_DIM, VAD_DIM, DYNAMICS_DIM, APPRAISAL_DIM,
-    CTX_HMM_CONF, CTX_MSG_LENGTH, CTX_LATENCY_MS, CTX_HMM_EMISSION, CTX_CURR_VALENCE,
+    EMOTION_LABELS,
+    VADER_KEYS,
+    BERT_LABELS,
+    FEATURE_DIM,
+    CONTEXT_DIM,
+    CDM_CTX_DIM,
+    PRIOR_DIM,
+    ML_DIM,
+    CTX_HMM_CONF,
+    CTX_MSG_LENGTH,
+    CTX_LATENCY_MS,
+    CTX_HMM_EMISSION,
+    CTX_CURR_VALENCE,
 )
 
 logger = get_logger("meta_learner")
@@ -112,9 +121,6 @@ class GatingEnsembleNet(nn.Module):
             nn.Dropout(dropout), nn.Linear(d * 2, n_classes),
         )
         self.ctx_residual = nn.Linear(d, d)
-        # ctx_weight = sigmoid(ctx_alpha * hmm_conf - ctx_bias).clamp(max=0.50)
-        # Defaults: hmm_conf=0 → ~0.08, hmm_conf=1 → ~0.38. Previous (3.0/2.0)
-        # gave ~0.73 at full confidence — context overrode clear NLP signals.
         self.ctx_alpha = nn.Parameter(torch.tensor(2.0))
         self.ctx_bias  = nn.Parameter(torch.tensor(2.5))
         self.nlp_temp  = nn.Parameter(torch.tensor(1.5))
@@ -275,20 +281,32 @@ def build_feature_vector(
     else:
         novelty         = _compute_novelty(goe_vec, prior_vec)
         goal_congruence = float(np.clip(valence, -1.0, 1.0))
-        # compound[-1,1] → [0,1]; 0.0 → 0.5 (Scherer 2001 neutral coping default)
         coping          = float(np.clip((compound + 1.0) / 2.0, 0.0, 1.0))
 
     vec += cdm + prior_list + [sarc, inertia, contagion, novelty, goal_congruence, coping]
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
 
-def predict_with_meta_learner(model, feature_vector):
+# Appends a decision-path event when a trace list is supplied (Pipeline Inspector).
+def _t(trace, step, status, detail, label=None, confidence=None):
+    if trace is not None:
+        trace.append({
+            "step": step, "status": status, "detail": detail,
+            "label": label, "confidence": round(float(confidence), 4) if confidence is not None else None,
+        })
+
+
+def predict_with_meta_learner(model, feature_vector, trace=None):
     if model is None:
         goe = feature_vector[0, 11:39]
         if goe.max() > 0:
             idx    = int(goe.argmax())
             scores = {e: float(goe[i]) for i, e in enumerate(EMOTION_LABELS)}
+            _t(trace, "Rule-based fallback", "applied",
+               "No meta-learner loaded — raw GoEmotions argmax used",
+               EMOTION_LABELS[idx], goe[idx])
             return EMOTION_LABELS[idx], float(goe[idx]), scores, 0.0, None, None
+        _t(trace, "Rule-based fallback", "applied", "No meta-learner and no GoE signal — neutral", "neutral", 1.0)
         return "neutral", 1.0, {"neutral": 1.0}, 0.0, None, None
 
     try:
@@ -298,27 +316,53 @@ def predict_with_meta_learner(model, feature_vector):
         all_scores = {str(k): float(v) for k, v in zip(classes, proba)}
         confidence = float(proba[list(classes).index(pred_label)])
 
-        gate_alpha = None
-        if isinstance(model, GatingNetworkWrapper):
-            alpha      = model.get_gate_weights(feature_vector)[0]
-            gate_alpha = [round(float(a), 4) for a in alpha]
-            vad_str    = f"  vad:{alpha[3]:.3f}" if len(alpha) > 4 else ""
-            logger.debug(f"[Gate] vader:{alpha[0]:.3f} bert:{alpha[1]:.3f} goe:{alpha[2]:.3f}{vad_str} ctx:{alpha[-1]:.3f}")
-
         goe_raw  = feature_vector[0, 11:39]
         goe_max  = float(goe_raw.max())
         goe_top  = EMOTION_LABELS[int(goe_raw.argmax())]
         bert_raw = feature_vector[0, 4:11]
         bert_max = float(bert_raw.max())
         bert_top = BERT_LABELS[int(bert_raw.argmax())]
+        _compound     = float(feature_vector[0, 3])
+        _sarcasm_slot = float(feature_vector[0, 110])
+
+        def _top3(sc):
+            return " · ".join(f"{k} {v:.2f}" for k, v in
+                              sorted(((k, v) for k, v in sc.items() if k != "ekman_group"),
+                                     key=lambda x: -x[1])[:3])
+
+        _t(trace, "Model inputs", "info",
+           f"VADER compound {_compound:+.2f} · BERT top {bert_top} {bert_max:.2f} · "
+           f"GoE top {goe_top} {goe_max:.2f} · sarcasm-classifier {_sarcasm_slot:.2f}")
+
+        gate_alpha = None
+        if isinstance(model, GatingNetworkWrapper):
+            alpha      = model.get_gate_weights(feature_vector)[0]
+            gate_alpha = [round(float(a), 4) for a in alpha]
+            vad_str    = f"  vad:{alpha[3]:.3f}" if len(alpha) > 4 else ""
+            logger.debug(f"[Gate] vader:{alpha[0]:.3f} bert:{alpha[1]:.3f} goe:{alpha[2]:.3f}{vad_str} ctx:{alpha[-1]:.3f}")
+            _names = ["VADER", "BERT", "GoE", "VAD", "Context"][:len(gate_alpha)]
+            _dom_gate = _names[int(max(range(len(gate_alpha)), key=lambda i: gate_alpha[i]))]
+            _t(trace, "Ensemble gates", "info",
+               " · ".join(f"{n} {a:.2f}" for n, a in zip(_names, gate_alpha))
+               + f" — {_dom_gate} weighted highest (ctx capped at 0.50, GoE gate capped at 0.50)")
+
+        _flat = " — ⚠ near-flat distribution, verdict is low-signal" if confidence < 0.30 else ""
+        _t(trace, "Meta-learner (GatingEnsembleNet)", "info",
+           f"top: {_top3(all_scores)}{_flat}", pred_label, confidence)
+
+        guard_conflict = None
 
         if goe_max >= 0.75 and pred_label != goe_top:
             blend   = min(goe_max * 0.80, 0.65)
             target  = {e: float(goe_raw[i]) for i, e in enumerate(EMOTION_LABELS)}
             blended = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target[e] for e in EMOTION_LABELS}
+            _prev = pred_label
             pred_label = max(blended, key=blended.get)
             confidence, all_scores = blended[pred_label], blended
             logger.warning(f"[NLP-guard/GoE] {goe_top}({goe_max:.2f}) → {pred_label}({confidence:.2f})")
+            _t(trace, "NLP-guard / GoEmotions", "applied",
+               f"Raw GoE {goe_top} ({goe_max:.2f}) ≥ 0.75 contradicted meta '{_prev}' — blended {blend:.0%} toward GoE",
+               pred_label, confidence)
 
         elif (bert_top in EMOTION_LABELS) and bert_max >= 0.80 and pred_label != bert_top:
             _bert_subtypes = {
@@ -330,15 +374,41 @@ def predict_with_meta_learner(model, feature_vector):
                 "surprise":{"surprise","realization","confusion"},
                 "disgust": {"disgust","disapproval"},
             }
-            if pred_label not in _bert_subtypes.get(bert_top, {bert_top}):
+            # The guard stands down when the other experts contradict BERT — a lone
+            # high-confidence BERT must not veto a meta+GoE consensus (hyperbole idioms).
+            vader_compound = float(feature_vector[0, 3])
+            consensus      = pred_label == goe_top and goe_max >= 0.50
+            cross_conflict = goe_max >= 0.60 and _GOE_TO_EKMAN.get(goe_top, "neutral") != bert_top
+            valence_veto   = bert_top in {"fear", "anger", "sadness", "disgust"} and vader_compound >= 0.30
+            if consensus or cross_conflict or valence_veto:
+                if cross_conflict:
+                    guard_conflict = "Expert conflict: BERT contradicts GoEmotions (possible hyperbole)"
+                _reasons = [r for r, on in (("meta+GoE consensus", consensus),
+                                            ("cross-expert conflict", cross_conflict),
+                                            ("positive-valence veto", valence_veto)) if on]
+                _t(trace, "NLP-guard / BERT", "suppressed",
+                   f"BERT {bert_top} ({bert_max:.2f}) wanted to override, stood down: {', '.join(_reasons)}",
+                   pred_label, confidence)
+                logger.debug(
+                    f"[NLP-guard/BERT] suppressed (consensus={consensus} cross={cross_conflict} "
+                    f"valence={valence_veto}) bert={bert_top}({bert_max:.2f}) goe={goe_top}({goe_max:.2f})")
+            elif pred_label not in _bert_subtypes.get(bert_top, {bert_top}):
                 blend   = min(bert_max * 0.70, 0.55)
                 target  = {e: (1.0 if e == bert_top else 0.0) for e in EMOTION_LABELS}
                 blended = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target[e] for e in EMOTION_LABELS}
+                _prev = pred_label
                 pred_label = max(blended, key=blended.get)
                 confidence, all_scores = blended[pred_label], blended
                 logger.warning(f"[NLP-guard/BERT] {bert_top}({bert_max:.2f}) → {pred_label}({confidence:.2f})")
+                _t(trace, "NLP-guard / BERT", "applied",
+                   f"Raw BERT {bert_top} ({bert_max:.2f}) ≥ 0.80 outside meta '{_prev}' family — blended {blend:.0%} toward BERT",
+                   pred_label, confidence)
 
         sarcasm_score, conflict_desc = detect_emotional_conflicts(feature_vector)
+        if conflict_desc is None and guard_conflict:
+            conflict_desc = guard_conflict
+        if conflict_desc:
+            _t(trace, "Conflict detector", "info", conflict_desc)
 
         if sarcasm_score > 0.5:
             _POS = [EMOTION_LABELS.index(e) for e in ("joy","amusement","admiration","approval","excitement","love","optimism","pride","caring","gratitude") if e in EMOTION_LABELS]
@@ -353,8 +423,12 @@ def predict_with_meta_learner(model, feature_vector):
             if s > 1e-6:
                 probs /= s
             all_scores = {e: float(probs[i]) for i, e in enumerate(EMOTION_LABELS)}
+            _prev = pred_label
             pred_label = max(all_scores, key=all_scores.get)
             confidence = all_scores[pred_label]
+            _t(trace, "Sarcasm inversion", "applied",
+               f"Sarcasm score {sarcasm_score:.2f} > 0.5 — shifted {inv:.0%} of positive mass onto paired negatives ('{_prev}' → '{pred_label}')",
+               pred_label, confidence)
 
         all_scores["ekman_group"] = _GOE_TO_EKMAN.get(pred_label, "neutral")
         return pred_label, confidence, all_scores, sarcasm_score, conflict_desc, gate_alpha
@@ -370,7 +444,7 @@ def detect_emotional_conflicts(vec):
         v_pos, v_cmp     = float(v[2]), float(v[3])
         bert_joy         = float(v[7])
         bert_neutral     = float(v[8])
-        neg_emo = max(float(v[11 + 3]), float(v[11 + 10]), float(v[11 + 11]))  # annoyance, disapproval, disgust
+        neg_emo = max(float(v[11 + 3]), float(v[11 + 10]), float(v[11 + 11]))
         pos_text = (v_pos + bert_joy) / 2.0
         if pos_text > 0.6 and neg_emo > 0.4:
             return min(pos_text, neg_emo) * 1.2, "Cognitive Dissonance: positive text with dismissive cues."
@@ -378,6 +452,13 @@ def detect_emotional_conflicts(vec):
             return 0.5 + neg_emo, "Sarcasm detected: semantic praise contradicts frustration."
         if bert_neutral > 0.7 and neg_emo > 0.1:
             return 0.4, "Passive-aggression: formal neutral text with underlying tension."
+        # Hyperbole (inverse sarcasm): negative wording, positive intent. Score stays
+        # below 0.5 — the >=0.5 path flips positive→negative, the wrong direction here.
+        bert_negative = max(float(v[4]), float(v[5]), float(v[6]), float(v[9]))
+        goe_raw       = v[11:39]
+        goe_top       = EMOTION_LABELS[int(goe_raw.argmax())]
+        if bert_negative > 0.5 and v_cmp > 0.3 and _GOE_TO_EKMAN.get(goe_top) == "joy":
+            return 0.3, "Hyperbole: negative wording with positive intent."
         return 0.0, None
     except Exception:
         return 0.0, None
@@ -403,7 +484,6 @@ def calculate_feature_impacts(model, feature_vector, predicted_emotion):
 
 
 def apply_context_correction(scores, context_vector, prev_emotion="neutral"):
-    # Superseded by native gating in GatingEnsembleNet — stub kept for API compat.
     return scores, 0.0
 
 

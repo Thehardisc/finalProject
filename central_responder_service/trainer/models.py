@@ -58,10 +58,6 @@ def train_gating_network(
     X_tr_s  = scaler.fit_transform(X_tr)
     X_v_s   = scaler.transform(X_v)
 
-    # Re-zero CDM block after scaling — StandardScaler shifts zero entries to
-    # -mean/std, which breaks the ctx_available = (x_c.abs().sum() > 0.01) check
-    # in GatingEnsembleNet.forward(), causing non-CDM samples to appear as if
-    # they have context when they don't.
     if has_cdm is not None:
         if no_cdm.any():
             X_tr_s[no_cdm, CDM_SLICE] = 0.0
@@ -77,7 +73,7 @@ def train_gating_network(
     cw_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
 
     use_gpu   = device in ("cuda", "mps") or (isinstance(device, int) and device >= 0)
-    pin_mem   = device == "cuda"          # pin_memory only helps CUDA, not MPS/CPU
+    pin_mem   = device == "cuda"
     n_workers = 2 if len(X_tr_s) > 5000 else 0
     ds     = TensorDataset(
         torch.tensor(X_tr_s, dtype=torch.float32),
@@ -103,8 +99,6 @@ def train_gating_network(
         epochs=n_epochs,
         pct_start=0.1,
     )
-    # Reduce label smoothing for GoEmotions-dominant datasets — the GoEmotions
-    # direct samples carry clean, single-label gold labels, so heavy smoothing hurts.
     n_train = len(y_tr_idx)
     label_smoothing = 0.05 if n_train > 5000 else 0.10
     criterion = nn.CrossEntropyLoss(weight=cw_tensor, label_smoothing=label_smoothing)
@@ -113,10 +107,8 @@ def train_gating_network(
     goe_to_class_idx = torch.tensor(
         [class_to_idx.get(lbl, -1) for lbl in EMOTION_LABELS],
         dtype=torch.long, device=device,
-    )  # [28]  — -1 for labels absent from training classes
+    )
 
-    # nlp_anchor removed — it biased the gate toward GoEmotions (>77%).
-    # The hard cap in GatingEnsembleNet.forward() now enforces GoE ≤ 50%.
     nlp_anchor_coeff  = 0.0
     nlp_anchor_thresh = 0.65
 
@@ -126,7 +118,6 @@ def train_gating_network(
     best_state    = None
     no_improve    = 0
 
-    # AMP scaler — active only on CUDA (MPS has native float16 issues; CPU skips it)
     use_amp    = device == "cuda"
     scaler_amp = torch.cuda.amp.GradScaler() if use_amp else None
     amp_ctx    = torch.cuda.amp.autocast if use_amp else nullcontext
@@ -135,7 +126,7 @@ def train_gating_network(
     import time as _time
     train_start = _time.time()
     n_train_samples = len(y_tr_idx)
-    epoch_times = []   # wall-clock seconds per completed epoch
+    epoch_times = []
 
     for epoch in range(n_epochs):
         epoch_start = _time.time()
@@ -150,15 +141,12 @@ def train_gating_network(
                 logits, alpha = model(xb)
                 ce_loss    = criterion(logits, yb)
 
-                # Load-balance: penalise deviation of mean gate weights from uniform.
-                alpha_mean   = alpha.mean(dim=0)                         # [5]
+                alpha_mean   = alpha.mean(dim=0)
                 balance_loss = ((alpha_mean - uniform_gate) ** 2).sum()
 
-                # NLP anchor: when GoEmotions is highly confident, steer logits toward
-                # its top prediction.
-                goe_raw            = xb[:, 11:39]                                # [B, 28] — fixed slice
-                goe_conf, goe_ridx = goe_raw.max(dim=1)                          # [B]
-                goe_cidx           = goe_to_class_idx[goe_ridx]                  # [B] class indices
+                goe_raw            = xb[:, 11:39]
+                goe_conf, goe_ridx = goe_raw.max(dim=1)
+                goe_cidx           = goe_to_class_idx[goe_ridx]
                 anchor_mask        = (goe_conf > nlp_anchor_thresh) & (goe_cidx >= 0)
                 anchor_loss = (
                     F.cross_entropy(logits[anchor_mask], goe_cidx[anchor_mask])

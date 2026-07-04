@@ -1,7 +1,7 @@
-import random                                                  # seeded RNG for deterministic generation
-import unicodedata                                             # NFC normalisation for accent fuzzing
+import random
+import unicodedata
 
-FAMILY = {                                                     # emotion -> set of labels counted as a family hit
+FAMILY = {
     "joy":     {"joy", "amusement", "excitement", "admiration", "approval", "optimism",
                 "love", "gratitude", "pride", "relief", "caring", "desire"},
     "anger":   {"anger", "annoyance", "disapproval", "disgust"},
@@ -10,7 +10,7 @@ FAMILY = {                                                     # emotion -> set 
     "surprise":{"surprise", "realization", "confusion", "curiosity"},
     "neutral": {"neutral", "realization"},
 }
-LABEL_FAMILY = {                                               # each of the 28 labels -> its family key
+LABEL_FAMILY = {
     "admiration": "joy", "amusement": "joy", "approval": "joy", "caring": "joy",
     "desire": "joy", "excitement": "joy", "gratitude": "joy", "joy": "joy",
     "love": "joy", "optimism": "joy", "pride": "joy", "relief": "joy",
@@ -23,7 +23,7 @@ LABEL_FAMILY = {                                               # each of the 28 
     "neutral": "neutral",
 }
 
-EMOTION_TRIGGERS = {                                           # ~8 strongly-cued sentences per label (~224 cases)
+EMOTION_TRIGGERS = {
     "admiration": ["I really admire how you handled that", "You're incredibly talented at this",
                    "What an impressive piece of work", "I look up to her so much",
                    "That was a brilliant performance", "He is such a remarkable leader",
@@ -139,16 +139,16 @@ EMOTION_TRIGGERS = {                                           # ~8 strongly-cue
 }
 
 
-def labeled_cases():                                           # flatten the per-emotion corpus
-    out = []                                                   # accumulator
-    for label, texts in EMOTION_TRIGGERS.items():              # each emotion and its sentences
-        fam = FAMILY[LABEL_FAMILY[label]]                      # acceptable family set for that label
-        for t in texts:                                        # each sentence
-            out.append((t, label, fam))                        # (text, target label, family set)
-    return out                                                 # list of labeled tuples
+def labeled_cases():
+    out = []
+    for label, texts in EMOTION_TRIGGERS.items():
+        fam = FAMILY[LABEL_FAMILY[label]]
+        for t in texts:
+            out.append((t, label, fam))
+    return out
 
 
-_BASE = [                                                      # clean seed sentences the fuzzers mutate
+_BASE = [
     "I'm so happy about this", "This makes me really angry", "I feel sad and tired",
     "Thank you so much for everything", "I'm terrified of the storm", "What a hilarious joke",
     "I can't believe you did that", "Please send the report tomorrow", "I love this so much",
@@ -162,107 +162,107 @@ _BASE = [                                                      # clean seed sent
     "Wow that is shocking news", "I'm curious how it works", "He always cracks me up",
     "I'm fed up with the delays", "Everything will be okay", "I really want that job",
 ]
-_EMOJI = list("😀😂😍🥰😢😭😠😡😱😨🙏🔥💔🎉👍👎😅😬🤔💯✨😤😩🥳😏")  # emoji pool for emoji-spam fuzzing
-_SLANG = {"you": "u", "are": "r", "your": "ur", "for": "4", "to": "2", "be": "b",  # word -> slang substitutions
+_EMOJI = list("😀😂😍🥰😢😭😠😡😱😨🙏🔥💔🎉👍👎😅😬🤔💯✨😤😩🥳😏")
+_SLANG = {"you": "u", "are": "r", "your": "ur", "for": "4", "to": "2", "be": "b",
           "great": "gr8", "later": "l8r", "please": "plz", "thanks": "thx",
           "really": "rlly", "tomorrow": "tmrw", "because": "bc", "people": "ppl"}
 
 
-def _typo(s, rng):                                             # inject character-level typos
-    if len(s) < 2:                                             # too short to mutate
+def _typo(s, rng):
+    if len(s) < 2:
         return s
-    chars = list(s)                                            # mutable char list
-    for _ in range(max(1, len(chars) // 12)):                  # a few edits proportional to length
-        i = rng.randrange(len(chars))                          # random position
-        op = rng.choice(("swap", "drop", "dup", "sub"))        # pick an edit op
-        if op == "swap" and i + 1 < len(chars):                # swap adjacent chars
+    chars = list(s)
+    for _ in range(max(1, len(chars) // 12)):
+        i = rng.randrange(len(chars))
+        op = rng.choice(("swap", "drop", "dup", "sub"))
+        if op == "swap" and i + 1 < len(chars):
             chars[i], chars[i + 1] = chars[i + 1], chars[i]
-        elif op == "drop":                                     # delete a char
+        elif op == "drop":
             chars[i] = ""
-        elif op == "dup":                                      # repeat a char 2-4x
+        elif op == "dup":
             chars[i] = chars[i] * rng.randint(2, 4)
-        else:                                                  # substitute a random letter
+        else:
             chars[i] = rng.choice("abcdefghijklmnopqrstuvwxyz")
-    return "".join(chars)                                      # reassemble
+    return "".join(chars)
 
 
-def _leet(s, rng):                                             # leetspeak substitution
-    table = str.maketrans({"a": "4", "e": "3", "i": "1", "o": "0", "s": "5", "t": "7"})  # letter->digit map
-    return s.translate(table)                                  # apply map
+def _leet(s, rng):
+    table = str.maketrans({"a": "4", "e": "3", "i": "1", "o": "0", "s": "5", "t": "7"})
+    return s.translate(table)
 
 
-def _case_scramble(s, rng):                                    # randomise letter case
-    return "".join(c.upper() if rng.random() < 0.5 else c.lower() for c in s)  # per-char coin flip
+def _case_scramble(s, rng):
+    return "".join(c.upper() if rng.random() < 0.5 else c.lower() for c in s)
 
 
-def _emoji_spam(s, rng):                                       # surround text with emoji bursts
-    burst = "".join(rng.choice(_EMOJI) for _ in range(rng.randint(1, 6)))  # 1-6 random emoji
-    return f"{burst} {s} {burst}" if rng.random() < 0.5 else f"{s} {burst}"  # wrap or append
+def _emoji_spam(s, rng):
+    burst = "".join(rng.choice(_EMOJI) for _ in range(rng.randint(1, 6)))
+    return f"{burst} {s} {burst}" if rng.random() < 0.5 else f"{s} {burst}"
 
 
-def _punct_spam(s, rng):                                       # append punctuation noise
-    return s + "".join(rng.choice("!?.,;~*") for _ in range(rng.randint(2, 10)))  # 2-10 marks
+def _punct_spam(s, rng):
+    return s + "".join(rng.choice("!?.,;~*") for _ in range(rng.randint(2, 10)))
 
 
-def _repeat_chars(s, rng):                                     # elongate random letters
-    out = []                                                   # accumulator
-    for c in s:                                                # each char
-        out.append(c * rng.randint(2, 5) if c.isalpha() and rng.random() < 0.18 else c)  # sometimes repeat
-    return "".join(out)                                        # reassemble
+def _repeat_chars(s, rng):
+    out = []
+    for c in s:
+        out.append(c * rng.randint(2, 5) if c.isalpha() and rng.random() < 0.18 else c)
+    return "".join(out)
 
 
-def _spacing(s, rng):                                          # mangle whitespace
-    if rng.random() < 0.5:                                     # widen spaces
+def _spacing(s, rng):
+    if rng.random() < 0.5:
         return s.replace(" ", "   ")
-    return "  ".join(s.split())                                # or double-space tokens
+    return "  ".join(s.split())
 
 
-def _slangify(s, rng):                                         # apply slang substitutions
-    for k, v in _SLANG.items():                                # each word/slang pair
-        if rng.random() < 0.6:                                 # apply most of the time
+def _slangify(s, rng):
+    for k, v in _SLANG.items():
+        if rng.random() < 0.6:
             s = s.replace(k, v)
-    return s                                                   # slangified text
+    return s
 
 
-def _accentify(s, rng):                                        # add combining accent marks
-    marks = ["́", "̀", "̈"]                                       # combining accent code points
-    out = []                                                   # accumulator
-    for c in s:                                                # each char
-        out.append(c + rng.choice(marks) if c.isalpha() and rng.random() < 0.15 else c)  # sometimes accent
-    return unicodedata.normalize("NFC", "".join(out))          # normalise to composed form
+def _accentify(s, rng):
+    marks = ["́", "̀", "̈"]
+    out = []
+    for c in s:
+        out.append(c + rng.choice(marks) if c.isalpha() and rng.random() < 0.15 else c)
+    return unicodedata.normalize("NFC", "".join(out))
 
 
-def _truncate(s, rng):                                         # cut the string short
-    if len(s) < 4:                                             # too short to cut
+def _truncate(s, rng):
+    if len(s) < 4:
         return s
-    return s[: rng.randint(1, len(s) - 1)]                     # random prefix
+    return s[: rng.randint(1, len(s) - 1)]
 
 
-def _concat(s, rng):                                           # glue on another base sentence
+def _concat(s, rng):
     return s + " " + rng.choice(_BASE)
 
 
-_MUTATORS = [_typo, _leet, _case_scramble, _emoji_spam, _punct_spam,  # all mutators chained at random
+_MUTATORS = [_typo, _leet, _case_scramble, _emoji_spam, _punct_spam,
              _repeat_chars, _spacing, _slangify, _accentify, _truncate, _concat]
 
 
-def generate_fuzz(n=950, seed=1234):                           # n deterministic noisy strings
-    rng = random.Random(seed)                                  # seeded RNG
-    out = set()                                                # unique results
-    guard = 0                                                  # loop safety counter
-    while len(out) < n and guard < n * 80:                     # until we have n (bounded)
-        guard += 1                                             # tick guard
-        s = rng.choice(_BASE)                                  # pick a clean base
-        for _ in range(rng.randint(1, 3)):                     # apply 1-3 mutators
+def generate_fuzz(n=950, seed=1234):
+    rng = random.Random(seed)
+    out = set()
+    guard = 0
+    while len(out) < n and guard < n * 80:
+        guard += 1
+        s = rng.choice(_BASE)
+        for _ in range(rng.randint(1, 3)):
             s = rng.choice(_MUTATORS)(s, rng)
-        s = s[:600].strip()                                    # cap length, trim
-        if s:                                                  # skip empties
+        s = s[:600].strip()
+        if s:
             out.add(s)
-    out.update({"a", "?", "!!!", "🔥🔥🔥", "ok", "...", "x" * 500})  # explicit hard edge cases
-    return sorted(out)                                         # stable ordering
+    out.update({"a", "?", "!!!", "🔥🔥🔥", "ok", "...", "x" * 500})
+    return sorted(out)
 
 
-ARC_TEMPLATES = {                                              # arc -> (per-turn emotions, expected valence_trend)
+ARC_TEMPLATES = {
     "escalation":     (["neutral", "neutral", "annoyance", "annoyance", "anger"],        "down"),
     "argument":       (["neutral", "annoyance", "anger", "sadness", "sadness"],          "down"),
     "meltdown":       (["neutral", "disappointment", "anger", "grief"],                  "down"),
@@ -276,19 +276,19 @@ ARC_TEMPLATES = {                                              # arc -> (per-tur
     "disgust":        (["neutral", "disgust", "disgust"],                                "negative"),
     "logistics":      (["neutral", "neutral", "neutral", "neutral"],                     "flat"),
 }
-_ARCS = sorted(ARC_TEMPLATES)                                  # arc names, stable order for cycling
+_ARCS = sorted(ARC_TEMPLATES)
 
 
-def generate_conversations(n=3000, seed=99):                   # n deterministic full conversations
-    rng = random.Random(seed)                                  # seeded RNG for sentence picks
-    convs = []                                                 # accumulator
-    for i in range(n):                                         # build n conversations
-        arc = _ARCS[i % len(_ARCS)]                            # cycle through arcs evenly
-        emotions, trend = ARC_TEMPLATES[arc]                   # emotion sequence + expected trend
-        turns = [{"speaker": "A" if t % 2 == 0 else "B",       # alternate speakers
-                  "text": rng.choice(EMOTION_TRIGGERS[emo]),   # a sentence cueing that emotion
-                  "emotion": emo}                              # the per-turn target emotion
-                 for t, emo in enumerate(emotions)]            # one turn per emotion slot
-        convs.append({"id": f"{arc}_{i:04d}", "arc": arc,      # unique id + arc
-                      "valence_trend": trend, "turns": turns}) # + expected trend + turns
-    return convs                                               # list of conversation dicts
+def generate_conversations(n=3000, seed=99):
+    rng = random.Random(seed)
+    convs = []
+    for i in range(n):
+        arc = _ARCS[i % len(_ARCS)]
+        emotions, trend = ARC_TEMPLATES[arc]
+        turns = [{"speaker": "A" if t % 2 == 0 else "B",
+                  "text": rng.choice(EMOTION_TRIGGERS[emo]),
+                  "emotion": emo}
+                 for t, emo in enumerate(emotions)]
+        convs.append({"id": f"{arc}_{i:04d}", "arc": arc,
+                      "valence_trend": trend, "turns": turns})
+    return convs

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
   Chart as ChartJS,
@@ -6,7 +6,7 @@ import {
   CategoryScale, LinearScale,
   BarElement, PointElement, LineElement, Filler,
 } from 'chart.js';
-import { Bar, Line, Doughnut } from 'react-chartjs-2';
+import { Line, Doughnut } from 'react-chartjs-2';
 import { EmotionPalette } from '../components/EmotionPalette';
 
 ChartJS.register(
@@ -104,12 +104,10 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
     return () => clearInterval(timer);
   }, [fetchData]);
 
-  // ── Derived stats ─────────────────────────────────────────────────────────
 
   const withEmotion = analyses.filter(a => a.dominant && a.dominant !== '—');
   const withConf    = analyses.filter(a => a.confidence != null);
 
-  // Emotion distribution
   const emotionCounts = {};
   withEmotion.forEach(a => {
     emotionCounts[a.dominant] = (emotionCounts[a.dominant] || 0) + 1;
@@ -117,18 +115,14 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
   const sortedEmotions = Object.entries(emotionCounts)
     .sort((a, b) => b[1] - a[1]);
 
-  // Avg confidence
   const avgConf = withConf.length
     ? withConf.reduce((s, a) => s + a.confidence, 0) / withConf.length
     : null;
 
-  // Top emotion
   const topEmotion = sortedEmotions[0]?.[0] || '—';
 
-  // Unique conversations
   const uniqueConvs = new Set(analyses.map(a => a.conversation_id)).size;
 
-  // Timeline: last 20 messages in chronological order
   const timeline = [...withEmotion]
     .sort((a, b) => a.timestamp - b.timestamp)
     .slice(-40);
@@ -158,7 +152,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
     }},
   };
 
-  // Doughnut top-8
   const top8 = sortedEmotions.slice(0, 8);
   const doughnutData = {
     labels: top8.map(([e]) => e),
@@ -175,13 +168,11 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
     cutout: '60%',
   };
 
-  // Filtered feed
   const feed = [...analyses]
     .filter(a => !filterEmo || a.dominant === filterEmo)
     .sort((a, b) => b.timestamp - a.timestamp)
     .slice(0, 60);
 
-  // ── Render ────────────────────────────────────────────────────────────────
 
   const layer = {
     background: 'rgba(255,255,255,0.70)',
@@ -200,7 +191,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
       fontFamily: "'Inter', -apple-system, sans-serif",
     }}>
 
-      {/* ── Top bar ────────────────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '16px 32px',
@@ -255,7 +245,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
       ) : (
         <main style={{ padding: '24px 32px 48px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-          {/* ── KPIs ───────────────────────────────────────────────────────── */}
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
             <KpiCard label="Messages Analyzed" value={withEmotion.length.toLocaleString()} sub={`${analyses.length} total in pipeline`} color="0,119,255" />
             <KpiCard label="Avg Confidence" value={avgConf != null ? `${avgConf.toFixed(1)}%` : '—'} sub="meta-learner output" color="112,0,255" />
@@ -264,10 +253,8 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
             <KpiCard label="Distinct Emotions" value={sortedEmotions.length} sub={`out of 28 GoEmotions`} color="255,140,0" />
           </div>
 
-          {/* ── Charts row ─────────────────────────────────────────────────── */}
           <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 20 }}>
 
-            {/* Confidence timeline */}
             <div style={layer}>
               <h4 style={{ margin: '0 0 16px', fontSize: '0.78rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
                 Confidence Over Time — Last {timeline.length} Messages
@@ -279,7 +266,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
               </div>
             </div>
 
-            {/* Doughnut */}
             <div style={layer}>
               <h4 style={{ margin: '0 0 16px', fontSize: '0.78rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
                 Emotion Distribution
@@ -292,7 +278,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
             </div>
           </div>
 
-          {/* ── Full emotion breakdown ─────────────────────────────────────── */}
           <div style={layer}>
             <h4 style={{ margin: '0 0 16px', fontSize: '0.78rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               All Emotions — Click to Filter Feed
@@ -312,7 +297,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
             </div>
           </div>
 
-          {/* ── Recent messages feed ───────────────────────────────────────── */}
           <div style={layer}>
             <h4 style={{ margin: '0 0 16px', fontSize: '0.78rem', fontWeight: 700, color: '#374151', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               Recent Analyses {filterEmo && <span style={{ color: `rgb(${emotionRgb(filterEmo)})` }}>· {filterEmo}</span>}
@@ -336,7 +320,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
                     onMouseOver={e => e.currentTarget.style.background = `rgba(${rgb},0.09)`}
                     onMouseOut={e => e.currentTarget.style.background = `rgba(${rgb},0.04)`}
                   >
-                    {/* Emotion pill */}
                     <div style={{
                       padding: '3px 9px', borderRadius: 99,
                       background: `rgba(${rgb},0.15)`,
@@ -347,12 +330,10 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
                       {item.dominant || '—'}
                     </div>
 
-                    {/* Text */}
                     <div style={{ flex: 1, fontSize: '0.82rem', color: '#374151', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {item.text || '(no text)'}
                     </div>
 
-                    {/* Meta */}
                     <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexShrink: 0 }}>
                       {item.confidence != null && (
                         <div style={{ fontSize: '0.74rem', fontWeight: 700, color: item.confidence >= 70 ? '#16a34a' : item.confidence >= 45 ? '#d97706' : '#dc2626' }}>

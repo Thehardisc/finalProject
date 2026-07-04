@@ -2,8 +2,8 @@ import os
 import time
 import bcrypt
 from jose import JWTError, jwt
-from fastapi import HTTPException, Header, status
-from typing import Optional
+from fastapi import HTTPException, status
+
 
 JWT_SECRET = os.environ.get("JWT_SECRET")
 if not JWT_SECRET:

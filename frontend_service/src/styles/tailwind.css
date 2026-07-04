@@ -1,18 +1,10 @@
-/* Tailwind v4 entry — design-system tokens exposed as utilities.
-   Preflight (the global reset) is intentionally NOT imported yet: the app is
-   still heavily inline-styled, so we add utilities + theme without resetting
-   existing elements. Enable preflight at the end of the migration by switching
-   to `@import "tailwindcss";`. */
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
-/* `dark:` variant keys off the existing data-ig-theme attribute (set by the
-   chat / analytics pages), so Tailwind dark utilities share one source of truth. */
 @custom-variant dark (&:where([data-ig-theme="dark"], [data-ig-theme="dark"] *));
 
 @theme {
-  /* Surfaces / text — mirror the --ig-* chat tokens (fallback = light). */
   --color-surface:   var(--ig-surf, #ffffff);
   --color-surface-2: var(--ig-surf2, #f3f4f6);
   --color-surface-3: var(--ig-surf3, #f9fafb);
@@ -23,12 +15,10 @@
   --color-bord:      var(--ig-bord, #efefef);
   --color-bord-2:    var(--ig-bord2, #e5e7eb);
 
-  /* Design-system text/bg (light/dark via the data-ig-theme overrides). */
   --color-fg:        var(--text-primary, #1C1B1A);
   --color-fg-muted:  var(--text-muted, #9B958F);
   --color-bg:        var(--bg-base, #FAF9F6);
 
-  /* Emotion palette — from tokens.css HSL component vars. */
   --color-admiration:    hsl(var(--emo-admiration));
   --color-amusement:     hsl(var(--emo-amusement));
   --color-anger:         hsl(var(--emo-anger));

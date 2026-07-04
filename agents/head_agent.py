@@ -1,12 +1,4 @@
-"""
-Head Agent — orchestrates all InnerLink sub-agents.
-
-Flow:
-  1. Route task → decide which sub-agents to activate.
-  2. Run primary agents, collect structured results.
-  3. Resolve cross-agent requests (NEEDS_HELP).
-  4. Synthesise final answer.
-"""
+"""Head Agent — orchestrates all InnerLink sub-agents."""
 
 import json
 import re
@@ -26,8 +18,6 @@ class HeadAgent:
         self.client = anthropic.Anthropic()
         self.agents = {name: cls() for name, cls in ALL_AGENTS.items()}
 
-    # ------------------------------------------------------------------
-    # Public entry point
     # ------------------------------------------------------------------
 
     def run(self, task: str, force_agents: Optional[list] = None) -> str:
@@ -49,10 +39,8 @@ class HeadAgent:
             _status = results[name].get("findings", "")[:80].replace("\n", " ")
             print(f"  ◀ {name}_agent: {_status}...")
 
-        # Resolve cross-agent requests
         results = self._resolve_cross(task, results, active)
 
-        # Synthesise
         summary = self._synthesise(task, results)
         print(f"\n{'='*60}\n[HEAD] Done.\n{'='*60}\n")
         return summary
@@ -65,8 +53,6 @@ class HeadAgent:
             lines.append(f"\n{'─'*50}\n## {name.upper()}\n{kb[:600]}")
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------
-    # Internal
     # ------------------------------------------------------------------
 
     def _route(self, task: str) -> list[str]:
@@ -98,7 +84,6 @@ class HeadAgent:
                     return chosen
             except json.JSONDecodeError:
                 pass
-        # Fallback: all agents
         return list(self.agents.keys())
 
     def _resolve_cross(
@@ -127,7 +112,6 @@ class HeadAgent:
                 print(f"  ▶ {target}_agent (cross-request)...")
                 results[target] = self.agents[target].run(task, cross_context=cross_ctx)
             else:
-                # Agent already ran; append cross-context info to its result
                 results[target]["cross_notes"] = results[target].get("cross_notes", "") + "\n" + cross_ctx
 
         return results

@@ -1,24 +1,4 @@
-"""
-collect.py — Main data collection CLI for the conversation state learner.
-
-Phases:
-  1. generate  — Use Claude API to write raw conversations per trajectory
-  2. run       — Send raw conversations through the live emotion pipeline
-  3. full      — Both phases in sequence (default)
-
-Output files:
-  raw_conversations/<trajectory_type>_<n>.json     — raw generated text
-  training_data/conversations.jsonl                — enriched with pipeline results
-
-Usage examples:
-  python collect.py --phase generate --api-key sk-ant-... --count 5
-  python collect.py --phase run --input raw_conversations/
-  python collect.py --phase full --api-key sk-ant-... --count 15
-  python collect.py --phase full --api-key sk-ant-... --trajectories escalating_conflict,celebration
-
-Environment:
-  ANTHROPIC_API_KEY — used if --api-key is not provided
-"""
+"""collect.py — Main data collection CLI for the conversation state learner."""
 
 import argparse
 import json
@@ -28,7 +8,6 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-# Allow running from the project root or from this directory.
 _HERE         = Path(__file__).parent
 _PROJECT_ROOT = _HERE.parent
 sys.path.insert(0, str(_HERE))
@@ -101,7 +80,6 @@ def phase_generate(
         n = count_override or trajectory["count"]
         logger.info(f"\n[{trajectory['type']}] — {n} conversations")
 
-        # Figure out starting index (don't overwrite existing files)
         existing = sorted(RAW_DIR.glob(f"{trajectory['type']}_*.json"))
         start_idx = len(existing)
 
@@ -121,8 +99,8 @@ def phase_run(
     trajectories_filter: Optional[List[str]],
     resume: bool = True,
 ):
-    import concurrent.futures
-    import threading
+
+
     logger.info("=== PHASE 2: RUN PIPELINE ===")
     runner = PipelineRunner(base_url=base_url)
 
@@ -229,7 +207,6 @@ def main():
         print()
         sys.exit(0)
 
-    # Parse trajectory filter
     trajectories_filter = None
     if args.trajectories:
         trajectories_filter = [s.strip() for s in args.trajectories.split(",")]
@@ -239,7 +216,6 @@ def main():
             logger.error(f"Valid types: {TRAJECTORY_TYPES}")
             sys.exit(1)
 
-    # Execute requested phase(s)
     if args.phase in ("generate", "full"):
         if not args.api_key:
             logger.error("--api-key or ANTHROPIC_API_KEY required for generation phase.")

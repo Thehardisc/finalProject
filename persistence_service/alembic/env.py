@@ -7,27 +7,18 @@ from sqlalchemy import pool
 
 from alembic import context
 
-# Add current directory to path so we can import db_models
 sys.path.append(os.getcwd())
 from db_models import Base
 
-# this is the Alembic Config object, which provides
-# access to the values within the .ini file in use.
 config = context.config
 
-# Interpret the config file for Python logging.
-# This line sets up loggers basically.
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Overwrite sqlalchemy.url with environment variable if present
-# This ensures it works in Docker easily
 db_url = os.environ.get("DATABASE_URL")
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url.replace("postgresql+asyncpg", "postgresql+psycopg2"))
 
-# add your model's MetaData object here
-# for 'autogenerate' support
 target_metadata = Base.metadata
 
 def run_migrations_offline() -> None:

@@ -6,7 +6,7 @@ def run(playwright):
     page = browser.new_page()
     page.set_viewport_size({"width": 1440, "height": 900})
     page.goto('http://localhost:5173')
-    time.sleep(3) # Wait for animations/load
+    time.sleep(3)
     page.screenshot(path='frontend_screenshot.png', full_page=True)
     browser.close()
     print("Screenshot saved.")

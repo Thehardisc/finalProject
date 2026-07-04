@@ -1,4 +1,4 @@
-import React, { useState, useId } from 'react';
+import { useState, useId } from 'react';
 
 export default function EmotionArcChart({ values = [], color = '99,102,241', height = 72 }) {
   const id = useId().replace(/:/g, '');
@@ -12,7 +12,6 @@ export default function EmotionArcChart({ values = [], color = '99,102,241', hei
   const toY = v => (H / 2) - (v * (H / 2 - PAD) * 0.85);
   const pts = values.map((v, i) => [toX(i), toY(v)]);
 
-  // Cubic bezier smooth path
   let pathD = `M${pts[0][0].toFixed(1)},${pts[0][1].toFixed(1)}`;
   for (let i = 1; i < pts.length; i++) {
     const [px, py] = pts[i - 1];
@@ -47,16 +46,13 @@ export default function EmotionArcChart({ values = [], color = '99,102,241', hei
           </filter>
         </defs>
 
-        {/* Neutral axis */}
         <line
           x1={PAD} y1={H / 2} x2={W - PAD} y2={H / 2}
           stroke="rgba(var(--ig-ink-rgb),0.10)" strokeWidth="1" strokeDasharray="5 4"
         />
 
-        {/* Fill area */}
         <path d={areaD} fill={`url(#arc-fill-${id})`} />
 
-        {/* Main curve */}
         <path
           d={pathD} fill="none"
           stroke={`rgb(${color})`} strokeWidth="1.8"
@@ -64,7 +60,6 @@ export default function EmotionArcChart({ values = [], color = '99,102,241', hei
           filter={`url(#arc-glow-${id})`}
         />
 
-        {/* Hover dots */}
         {pts.map(([x, y], i) => (
           <circle
             key={i}
@@ -75,18 +70,15 @@ export default function EmotionArcChart({ values = [], color = '99,102,241', hei
           />
         ))}
 
-        {/* Live dot at end */}
         <circle cx={lastPt[0]} cy={lastPt[1]} r="3.5" fill={`rgb(${dotColor})`}
           style={{ filter: `drop-shadow(0 0 5px rgb(${dotColor}))` }}
         />
-        {/* Pulse ring */}
         <circle cx={lastPt[0]} cy={lastPt[1]} r="7" fill="none"
           stroke={`rgba(${dotColor},0.35)`} strokeWidth="1.5"
           style={{ animation: 'glowPulse 2s ease-in-out infinite' }}
         />
       </svg>
 
-      {/* Tooltip */}
       {hovered !== null && (
         <div style={{
           position: 'absolute',

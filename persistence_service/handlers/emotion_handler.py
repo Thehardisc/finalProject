@@ -1,6 +1,4 @@
-"""
-persistence_service/handlers/emotion_handler.py — Persist emotion analysis results.
-"""
+"""persistence_service/handlers/emotion_handler.py — Persist emotion analysis results."""
 from persistence_service.db_models import EmotionAnalysis
 
 

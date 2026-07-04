@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { feedbackAPI } from '../api/client.js';
 import { EmotionPalette } from './EmotionPalette';
 
@@ -10,7 +10,6 @@ const EMOTION_LABELS = [
   'relief','remorse','sadness','surprise','neutral',
 ];
 
-// Russell circumplex approximations
 const AROUSAL = {
   anger:.88, excitement:.95, joy:.76, surprise:.86, fear:.80,
   annoyance:.65, admiration:.58, amusement:.55, confusion:.48,
@@ -143,7 +142,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', background: BG }}>
 
-      {/* ── Header (sticky) ── */}
       <div style={{
         padding: '14px 14px 10px', borderBottom: `1px solid ${BORDER}`,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -165,7 +163,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 
       <div style={{ padding: '14px' }}>
 
-        {/* ── Dominant + confidence ── */}
         <div style={{
           background: `radial-gradient(ellipse at top, rgba(${domRgb},.16) 0%, rgba(${domRgb},.04) 80%)`,
           border: `1px solid rgba(${domRgb},.22)`,
@@ -214,7 +211,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           )}
         </div>
 
-        {/* ── Sarcasm ── */}
         {sarcasmScore > 0.05 && (
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Sarcasm Detector</div>
@@ -251,7 +247,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         )}
 
-        {/* ── Emotion breakdown ── */}
         <div style={{ marginBottom: 16 }}>
           <div style={sectionTitle}>Emotion Weights</div>
           {topEmos.map(({ label, score }) => {
@@ -277,7 +272,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           })}
         </div>
 
-        {/* ── VAD Gauges ── */}
         <div style={{ marginBottom: 16 }}>
           <div style={sectionTitle}>VAD Dimensions</div>
           <Gauge label="Valence"   value={vad.v} lo="Negative"   hi="Positive"  color="52,199,89"  />
@@ -285,7 +279,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           <Gauge label="Dominance" value={vad.d} lo="Submissive" hi="Dominant"  color="162,67,220" />
         </div>
 
-        {/* ── Model contributions ── */}
         {Object.keys(logicMap).length > 0 && (
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Model Contributions</div>
@@ -310,7 +303,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         )}
 
-        {/* ── Context Engine snapshot ── */}
         {data.context_snapshot && (
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Context Engine</div>
@@ -319,7 +311,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
               border: '1px solid rgba(6,182,212,0.13)',
               borderRadius: 12, padding: '12px 14px',
             }}>
-              {/* Emotion transition */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{
                   padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
@@ -336,7 +327,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 </div>
               </div>
 
-              {/* Stats grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 }}>
                 {[
                   { label: 'Valence', value: data.context_snapshot.cur_valence?.toFixed(3), color: (data.context_snapshot.cur_valence ?? 0) >= 0 ? '#4ade80' : '#f87171' },
@@ -351,7 +341,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 ))}
               </div>
 
-              {/* CDM state + abruptness */}
               {data.context_snapshot.cdm_current_state && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                   <div style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(139,92,246,0.14)', border: '1px solid rgba(139,92,246,0.22)', fontSize: '0.68rem', fontWeight: 700, color: '#a78bfa' }}>
@@ -368,7 +357,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         )}
 
-        {/* ── LSTM Trajectory / State Machine ── */}
         {data.lstm_trajectory?.model_available && (
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Trajectory — Next Predicted</div>
@@ -413,7 +401,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         )}
 
-        {/* ── Human-in-the-loop ── */}
         <div style={{
           background: 'rgba(var(--ig-ink-rgb),0.03)', borderRadius: 12, padding: '13px',
           border: '1px solid rgba(var(--ig-ink-rgb),0.07)',

@@ -9,19 +9,15 @@ logger = logging.getLogger("train_cdm_hmm")
 N_STATES = 15
 N_ACTS   = 4
 N_EMOT   = 7
-N_OBS    = N_ACTS * N_EMOT  # 28
+N_OBS    = N_ACTS * N_EMOT
 
 _DEFAULT_MODEL_PATH = Path(os.environ.get("MODEL_DIR", "/app/models")) / "cdm_hmm.pkl"
 
-# DailyDialog emotion: 0=neutral 1=anger 2=disgust 3=fear 4=happiness 5=sadness 6=surprise
-# DailyDialog act (0-indexed): 0=inform 1=question 2=directive 3=commissive
-#
-#            neutral  anger  disgust  fear  happy  sadness  surprise
 _HEURISTIC_MAP = [
-    [0,       5,     5,      0,    2,     0,      4   ],  # act=inform
-    [10,      7,    13,      3,   10,    10,     10   ],  # act=question
-    [11,      6,     6,      3,   11,    11,     11   ],  # act=directive
-    [14,      9,     9,      8,    1,    12,      1   ],  # act=commissive
+    [0,       5,     5,      0,    2,     0,      4   ],
+    [10,      7,    13,      3,   10,    10,     10   ],
+    [11,      6,     6,      3,   11,    11,     11   ],
+    [14,      9,     9,      8,    1,    12,      1   ],
 ]
 
 
@@ -80,7 +76,6 @@ def _label_sequence(acts_raw: list, emotions: list) -> list:
     for act_raw, emot_raw in zip(acts_raw, emotions):
         act  = max(0, int(act_raw) - 1) % N_ACTS
         emot = int(emot_raw) % N_EMOT
-        # Promote commissive-after-anger to RECONCILIATION(9) if there was a conflict run
         if act == 3 and emot in (1, 2) and neg_run >= 2:
             state = 9
         else:
@@ -106,7 +101,6 @@ def _train_on_dailydialog(model_path: Path) -> bool:
 
     try:
         logger.info("Downloading DailyDialog from HuggingFace…")
-        # Try canonical name first, then org-scoped. trust_remote_code intentionally omitted.
         dd = None
         for ds_name in ("daily_dialog", "li2017dailydialog/daily_dialog"):
             try:

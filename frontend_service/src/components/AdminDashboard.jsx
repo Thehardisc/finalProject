@@ -1,17 +1,11 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../api/client';
 
-/**
- * AdminDashboard
- * Props:
- *   token        — JWT token for Authorization header
- *   currentUser  — { user_id, display_name, email, role }
- */
 export default function AdminDashboard({ currentUser }) {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [actionError, setActionError] = useState('');
-    const [confirmModal, setConfirmModal] = useState(null); // { type, user }
+    const [confirmModal, setConfirmModal] = useState(null);
     const [actionLoading, setActionLoading] = useState('');
 
 
@@ -76,7 +70,6 @@ export default function AdminDashboard({ currentUser }) {
                 </button>
             </div>
 
-            {/* Stats cards */}
             <div style={styles.statsRow}>
                 <StatCard label="Total Users" value={totalUsers} icon="👥" color="#00b4ff" />
                 <StatCard label="Active" value={activeUsers} icon="✅" color="#00e676" />
@@ -87,7 +80,6 @@ export default function AdminDashboard({ currentUser }) {
                 <div style={styles.errorBox}>⚠ {actionError}</div>
             )}
 
-            {/* Users table */}
             <div style={styles.tableWrapper}>
                 <table style={styles.table}>
                     <thead>
@@ -140,7 +132,6 @@ export default function AdminDashboard({ currentUser }) {
                                             <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.78rem' }}>— (you)</span>
                                         ) : (
                                             <div style={styles.actionBtns}>
-                                                {/* Toggle role */}
                                                 <button
                                                     id={`admin-role-btn-${user.user_id}`}
                                                     style={{ ...styles.actionBtn, ...styles.roleBtn }}
@@ -151,7 +142,6 @@ export default function AdminDashboard({ currentUser }) {
                                                     {user.role === 'admin' ? '↓ Demote' : '↑ Promote'}
                                                 </button>
 
-                                                {/* Toggle active */}
                                                 <button
                                                     id={`admin-active-btn-${user.user_id}`}
                                                     style={{ ...styles.actionBtn, ...styles.toggleBtn }}
@@ -161,7 +151,6 @@ export default function AdminDashboard({ currentUser }) {
                                                     {user.is_active ? '🔒 Deactivate' : '🔓 Activate'}
                                                 </button>
 
-                                                {/* Delete */}
                                                 <button
                                                     id={`admin-delete-btn-${user.user_id}`}
                                                     style={{ ...styles.actionBtn, ...styles.deleteBtn }}
@@ -183,7 +172,6 @@ export default function AdminDashboard({ currentUser }) {
                 )}
             </div>
 
-            {/* Confirm modal */}
             {confirmModal && (
                 <div style={styles.confirmOverlay}>
                     <div style={styles.confirmCard}>

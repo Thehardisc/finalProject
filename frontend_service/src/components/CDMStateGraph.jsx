@@ -1,7 +1,4 @@
-import React from 'react';
 
-// CDM v4.0 — 15 intent-based conversational states
-// Color palette: collaborative=teal/green, exploratory=blue/indigo, conflictual=red/orange, repair=violet, neutral=gray
 const CDM_STATES = [
   { id:  0, label: 'Neutral',         short: 'NEUTRAL',    color: '107,114,128' },
   { id:  1, label: 'Warmth',          short: 'WARMTH',     color: '20,184,166'  },
@@ -20,55 +17,39 @@ const CDM_STATES = [
   { id: 14, label: 'Agreement',       short: 'AGREE',      color: '52,211,153'  },
 ];
 
-// SVG canvas: 320 × 230
-// Semantic layout:
-//   Top-left  (collaborative): WARMTH(1) PRAISE(2) EMPATHY(12)
-//   Top-right (exploratory):   CURIOSITY(10) HELP_REQUEST(3) HUMOR(4)
-//   Top-center:                ASSERTIVENESS(11)
-//   Center:                    NEUTRAL(0)
-//   Mid-center:                RECONCILIATION(9) AGREEMENT(14)
-//   Bottom-left (disengaging): WITHDRAWAL(8) FRUSTRATION(13)
-//   Bottom-right (conflictual):TENSION(5) CONFLICT(6) ARGUMENT(7)
 const POS = [
-  { x: 160, y: 112 }, //  0 NEUTRAL           center
-  { x:  42, y:  40 }, //  1 WARMTH             top-left
-  { x:  95, y:  25 }, //  2 PRAISE             top-left
-  { x: 288, y:  68 }, //  3 HELP_REQUEST       top-right
-  { x: 228, y:  26 }, //  4 HUMOR              top-right
-  { x: 255, y: 168 }, //  5 TENSION            bottom-right
-  { x: 293, y: 138 }, //  6 CONFLICT           bottom-right
-  { x: 293, y: 195 }, //  7 ARGUMENT           bottom-right bottom
-  { x:  38, y: 190 }, //  8 WITHDRAWAL         bottom-left
-  { x:  95, y: 162 }, //  9 RECONCILIATION     bottom-left area
-  { x: 248, y:  38 }, // 10 CURIOSITY          top-right
-  { x: 160, y:  42 }, // 11 ASSERTIVENESS      top-center
-  { x:  35, y:  88 }, // 12 EMPATHY            left-mid
-  { x: 105, y: 185 }, // 13 FRUSTRATION        bottom-left area
-  { x: 222, y: 162 }, // 14 AGREEMENT          bottom-center-right
+  { x: 160, y: 112 },
+  { x:  42, y:  40 },
+  { x:  95, y:  25 },
+  { x: 288, y:  68 },
+  { x: 228, y:  26 },
+  { x: 255, y: 168 },
+  { x: 293, y: 138 },
+  { x: 293, y: 195 },
+  { x:  38, y: 190 },
+  { x:  95, y: 162 },
+  { x: 248, y:  38 },
+  { x: 160, y:  42 },
+  { x:  35, y:  88 },
+  { x: 105, y: 185 },
+  { x: 222, y: 162 },
 ];
 
-// Intent-based edges — semantically meaningful flows between states
 const EDGES = [
-  // NEUTRAL hub
   [0,1],[0,2],[0,10],[0,11],[0,5],[0,3],[0,4],
-  // Collaborative cluster
   [1,2],[1,12],[1,14],[1,9],
   [2,1],[2,14],[2,4],
   [12,1],[12,9],[12,0],
   [14,1],[14,11],[14,0],
-  // Exploratory cluster
   [10,3],[10,4],[10,11],[10,0],
   [3,10],[3,12],[3,11],
   [4,1],[4,10],[4,0],
-  // Repair path
   [9,1],[9,14],[9,0],
   [8,9],[8,0],
-  // Conflict escalation
   [5,6],[5,13],[5,0],
   [6,7],[6,9],[6,5],
   [7,6],[7,9],[7,13],
   [13,6],[13,8],[13,5],
-  // Assertiveness cross-links
   [11,6],[11,14],[11,0],[11,3],
 ];
 
@@ -78,7 +59,6 @@ const MAX_R = 20;
 export default function CDMStateGraph({ snapshot }) {
   const probs     = snapshot?.cdm_state_probs;
   const rawCurrent = snapshot?.cdm_current_state;
-  // Accept either a numeric index or a string state name
   const current   = typeof rawCurrent === 'number'
     ? rawCurrent
     : CDM_STATES.findIndex(s => s.short === rawCurrent || s.label.replace('\n',' ') === rawCurrent || s.label === rawCurrent);
@@ -95,7 +75,6 @@ export default function CDMStateGraph({ snapshot }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
 
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-primary)' }}>
           Conversation Intent
@@ -122,12 +101,10 @@ export default function CDMStateGraph({ snapshot }) {
         </div>
       </div>
 
-      {/* SVG Graph */}
       <svg
         viewBox="0 0 320 230"
         style={{ width: '100%', height: 'auto', overflow: 'visible' }}
       >
-        {/* Edges */}
         {EDGES.map(([a, b], i) => {
           const pa     = POS[a];
           const pb     = POS[b];
@@ -142,7 +119,6 @@ export default function CDMStateGraph({ snapshot }) {
           );
         })}
 
-        {/* Nodes */}
         {CDM_STATES.map(({ id, short, color }) => {
           const { x, y } = POS[id];
           const r         = radius(id);
@@ -190,7 +166,6 @@ export default function CDMStateGraph({ snapshot }) {
         })}
       </svg>
 
-      {/* Current state label + residency */}
       {available && current != null && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>

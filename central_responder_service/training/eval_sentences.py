@@ -1,25 +1,4 @@
-"""
-eval_sentences.py — Offline sentence-battery evaluation for the meta-learner.
-
-Runs a fixed set of sentences through the real NLP analyzers + the trained
-GatingNetworkWrapper pkl, printing per sentence:
-  - GoEmotions top label + confidence + normalized entropy
-  - BERT top label + confidence
-  - raw meta-learner argmax (before NLP guards)
-  - final guarded output (predict_with_meta_learner)
-  - gate α [vader, bert, goe, ctx]
-  - PASS/FAIL against an expected label set (cluster-level)
-
-Usage (from project root):
-    python central_responder_service/training/eval_sentences.py
-    python central_responder_service/training/eval_sentences.py \
-        --goe-model bhadresh-savani/bert-base-go-emotion --json baseline.json
-
-The --goe-model flag exists because production (goemotions_service) and the
-trainer historically used different GoEmotions checkpoints. Default is the
-trainer's checkpoint (SamLowe), which is also the production model after the
-2026-06 alignment fix.
-"""
+"""eval_sentences.py — Offline sentence-battery evaluation for the meta-learner."""
 import argparse
 import json
 import math
@@ -35,7 +14,7 @@ for p in (_PROJECT_ROOT, _SVC_ROOT):
 
 import numpy as np
 
-from shared.constants import EMOTION_LABELS, BERT_LABELS
+from shared.constants import EMOTION_LABELS
 from meta_learner import (
     load_meta_learner, build_feature_vector, predict_with_meta_learner,
     GatingNetworkWrapper,
@@ -45,7 +24,6 @@ DEFAULT_MODEL_PATH = os.path.join(_SVC_ROOT, "models", "meta_weights.pkl")
 DEFAULT_GOE_MODEL  = "SamLowe/roberta-base-go_emotions"
 DEFAULT_BERT_MODEL = "j-hartmann/emotion-english-distilroberta-base"
 
-# (sentence, set of acceptable final labels)
 SENTENCE_BATTERY = [
     ("I'm absolutely furious right now",     {"anger", "annoyance"}),
     ("I am completely devastated",           {"sadness", "grief", "disappointment"}),

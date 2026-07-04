@@ -29,7 +29,7 @@ LR         = 2e-5
 class GoEDataset(Dataset):
     def __init__(self, texts, labels, tokenizer):
         self.enc    = tokenizer(texts, truncation=True, padding="max_length", max_length=MAX_LEN, return_tensors="pt")
-        self.labels = labels  # list of int label indices
+        self.labels = labels
 
     def __len__(self):
         return len(self.labels)
@@ -48,9 +48,9 @@ def _class_weights(labels: list) -> torch.Tensor:
     total  = len(labels)
     n_cls  = len(EMOTION_LABELS)
     freq   = np.array([counts.get(i, 0) / max(total, 1) for i in range(n_cls)], dtype=np.float32)
-    freq   = np.where(freq > 0, freq, freq[freq > 0].min())  # replace zeros with min freq
+    freq   = np.where(freq > 0, freq, freq[freq > 0].min())
     w      = 1.0 / freq
-    w      = np.clip(w / w.mean(), 0.1, 10.0)               # normalise and cap
+    w      = np.clip(w / w.mean(), 0.1, 10.0)
     return torch.tensor(w, dtype=torch.float32)
 
 
@@ -68,7 +68,6 @@ def main():
     id2label = ds.features["labels"].feature.int2str
     label2idx = {id2label(i): i for i in range(len(EMOTION_LABELS))}
 
-    # Keep only single-label examples for a clean classification signal
     texts, labels = [], []
     for row in ds:
         if len(row["labels"]) == 1:

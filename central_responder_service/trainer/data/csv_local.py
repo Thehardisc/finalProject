@@ -9,7 +9,7 @@ import numpy as np
 from shared.constants import EMOTION_LABELS, FEATURE_DIM
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
-from trainer.utils import _run_parallel_batches, _vader
+from trainer.utils import _run_parallel_batches
 
 logger = get_logger("trainer")
 

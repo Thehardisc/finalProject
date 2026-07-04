@@ -1,6 +1,4 @@
-"""
-persistence_service/db/setup.py — Database initialisation and self-healing schema migrations.
-"""
+"""persistence_service/db/setup.py — Database initialisation and self-healing schema migrations."""
 import traceback
 
 from sqlalchemy import text
@@ -10,10 +8,7 @@ logger = get_logger("persistence_service")
 
 
 def init_db(engine):
-    """
-    Create all tables and apply safe ALTER TABLE migrations.
-    Idempotent — safe to call on every startup.
-    """
+    """Create all tables and apply safe ALTER TABLE migrations."""
     print("[persistence_service] init_db() called", flush=True)
     from persistence_service.db_models import Base
     try:
@@ -22,7 +17,6 @@ def init_db(engine):
         logger.info("Database tables ensured (SQLAlchemy create_all).")
 
         with engine.begin() as conn:
-            # Emotion analysis columns
             conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS "
                               "ground_truth_emotion VARCHAR(50);"))
             conn.execute(text("ALTER TABLE emotion_analysis ADD COLUMN IF NOT EXISTS "
@@ -30,7 +24,6 @@ def init_db(engine):
             conn.execute(text("ALTER TABLE conversation_states ADD COLUMN IF NOT EXISTS "
                               "escalation_score FLOAT DEFAULT 0.0;"))
 
-            # Auth columns
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR;"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS "
                               "role VARCHAR(20) DEFAULT 'user';"))
@@ -38,16 +31,13 @@ def init_db(engine):
                               "is_active BOOLEAN DEFAULT TRUE;"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login FLOAT;"))
 
-            # Profile columns
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS email VARCHAR UNIQUE;"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name VARCHAR;"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name VARCHAR;"))
             conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR;"))
 
-            # Legacy
             conn.execute(text("ALTER TABLE users ALTER COLUMN username DROP NOT NULL;"))
 
-            # Group chat support
             conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS name VARCHAR;"))
             conn.execute(text("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS creator_user_id VARCHAR;"))
 

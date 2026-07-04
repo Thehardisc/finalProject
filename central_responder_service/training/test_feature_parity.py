@@ -21,17 +21,17 @@ from shared.constants import (
 _VADER_S  = 0
 _BERT_S   = 4
 _GOE_S    = 11
-_VAD_S    = ML_DIM - VAD_DIM          # 39
-_VAD_E    = ML_DIM                    # 42
-_CDM_S    = ML_DIM                    # 42
-_CDM_E    = ML_DIM + CDM_CTX_DIM      # 82
-_PRIOR_S  = _CDM_E                    # 82
-_PRIOR_E  = _PRIOR_S + PRIOR_DIM      # 110
-_SARC     = _PRIOR_E                  # 110
-_DYN_S    = _SARC + SARCASM_DIM       # 111
-_DYN_E    = _DYN_S + DYNAMICS_DIM     # 113
-_APR_S    = _DYN_E                    # 113
-_APR_E    = _APR_S + APPRAISAL_DIM    # 116
+_VAD_S    = ML_DIM - VAD_DIM
+_VAD_E    = ML_DIM
+_CDM_S    = ML_DIM
+_CDM_E    = ML_DIM + CDM_CTX_DIM
+_PRIOR_S  = _CDM_E
+_PRIOR_E  = _PRIOR_S + PRIOR_DIM
+_SARC     = _PRIOR_E
+_DYN_S    = _SARC + SARCASM_DIM
+_DYN_E    = _DYN_S + DYNAMICS_DIM
+_APR_S    = _DYN_E
+_APR_E    = _APR_S + APPRAISAL_DIM
 
 
 def _mo(neg=0.0, neu=0.0, pos=0.0, compound=0.0, bert=None, goe=None):
@@ -209,12 +209,10 @@ def test_dynamics_block_clipped():
 
 
 def test_appraisal_block_coping_default_is_half():
-    # coping defaults to 0.5 (neutral coping potential per Scherer 2001) when no
-    # appraisal_scores provided — this is intentional, not a missing-data zero.
     fv = build_feature_vector(_mo()).flatten()
-    assert fv[_APR_S]     == pytest.approx(0.0, abs=1e-6)   # novelty
-    assert fv[_APR_S + 1] == pytest.approx(0.0, abs=1e-6)   # goal_congruence
-    assert fv[_APR_S + 2] == pytest.approx(0.5, abs=1e-6)   # coping
+    assert fv[_APR_S]     == pytest.approx(0.0, abs=1e-6)
+    assert fv[_APR_S + 1] == pytest.approx(0.0, abs=1e-6)
+    assert fv[_APR_S + 2] == pytest.approx(0.5, abs=1e-6)
 
 def test_appraisal_block_values_stored():
     fv = build_feature_vector(
@@ -226,16 +224,15 @@ def test_appraisal_block_clipped():
     fv = build_feature_vector(
         _mo(), appraisal_scores={"novelty": -1.0, "goal_congruence": 2.0, "coping": 5.0}
     ).flatten()
-    assert fv[_APR_S]     == pytest.approx(0.0, abs=1e-5)   # novelty clipped [0,1]
-    assert fv[_APR_S + 1] == pytest.approx(1.0, abs=1e-5)   # goal_congruence clipped [-1,1]
-    assert fv[_APR_S + 2] == pytest.approx(1.0, abs=1e-5)   # coping clipped [0,1]
+    assert fv[_APR_S]     == pytest.approx(0.0, abs=1e-5)
+    assert fv[_APR_S + 1] == pytest.approx(1.0, abs=1e-5)
+    assert fv[_APR_S + 2] == pytest.approx(1.0, abs=1e-5)
 
 
 def test_missing_model_keys_ml_block_is_zero():
-    # coping in appraisal defaults to 0.5 (intentional, not missing-data zero)
     fv = build_feature_vector({}).flatten()
     assert fv.shape == (FEATURE_DIM,)
-    np.testing.assert_array_equal(fv[0:39], [0.0] * 39)   # VADER+BERT+GoE
+    np.testing.assert_array_equal(fv[0:39], [0.0] * 39)
 
 def test_missing_model_keys_vad_is_zero():
     fv = build_feature_vector({}).flatten()
@@ -252,7 +249,7 @@ def test_partial_bert_keys_default_missing_to_zero():
 
 def test_vad_computed_from_goe():
     goe = {k: 0.0 for k in EMOTION_LABELS}
-    goe["joy"] = 1.0   # pure joy → strongly positive valence + arousal
+    goe["joy"] = 1.0
     fv = build_feature_vector(_mo(goe=goe)).flatten()
     assert fv[_VAD_S]     >  0.5, "valence should be strongly positive for joy"
     assert fv[_VAD_S + 1] >  0.0, "arousal should be positive for joy"
@@ -270,7 +267,7 @@ def test_dynamics_inertia_computed_when_prior_matches():
     goe = {k: 0.0 for k in EMOTION_LABELS}
     goe["joy"] = 1.0
     prior = [0.0] * PRIOR_DIM
-    prior[EMOTION_LABELS.index("joy")] = 1.0   # prior predicted joy
+    prior[EMOTION_LABELS.index("joy")] = 1.0
     fv = build_feature_vector(_mo(goe=goe), trajectory_prior=prior).flatten()
     assert fv[_DYN_S] > 0.8, "inertia should be high when emotion matches prior"
 
@@ -280,13 +277,13 @@ def test_dynamics_contagion_positive_when_compound_and_ctx_align():
     goe["joy"] = 1.0
     ctx = [0.0] * CDM_CTX_DIM
     from shared.constants import CTX_CURR_VALENCE
-    ctx[CTX_CURR_VALENCE] = 0.8    # conversation is positive
+    ctx[CTX_CURR_VALENCE] = 0.8
     fv = build_feature_vector(_mo(compound=0.6, goe=goe), context_vector=ctx).flatten()
     assert fv[_DYN_S + 1] > 0.0, "contagion should be positive when user matches conversation"
 
 
 def test_appraisal_novelty_nonzero_without_prior():
-    goe = {k: 1.0 / len(EMOTION_LABELS) for k in EMOTION_LABELS}  # max entropy
+    goe = {k: 1.0 / len(EMOTION_LABELS) for k in EMOTION_LABELS}
     fv = build_feature_vector(_mo(goe=goe)).flatten()
     assert fv[_APR_S] > 0.0, "flat GoE distribution is high novelty (entropy-based)"
 
@@ -338,7 +335,7 @@ def test_augment_preserves_negative_vader_compound():
 def test_augment_preserves_negative_vad_valence():
     """VAD valence at ML_DIM-3=39 is in [-1, 1] — must not be clipped to 0."""
     goe = {k: 0.0 for k in EMOTION_LABELS}
-    goe["grief"] = 1.0   # grief → strongly negative VAD valence
+    goe["grief"] = 1.0
     fv = build_feature_vector(_mo(goe=goe)).flatten().copy()
     raw_vad_val = fv[_VAD_S]
     assert raw_vad_val < 0.0, "grief should produce negative VAD valence"
@@ -367,9 +364,9 @@ def test_goe_gate_cap_never_exceeds_50pct():
     t   = torch.tensor(X)
 
     with torch.no_grad():
-        _, alpha = net(t)  # [100, 5]: vader, bert, goe, vad, ctx
+        _, alpha = net(t)
 
-    goe_weights = alpha[:, 2].numpy()  # index 2 = GoEmotions
+    goe_weights = alpha[:, 2].numpy()
     assert (goe_weights <= 0.5001).all(), (
         f"GoEmotions gate weight exceeded 50% cap in {(goe_weights > 0.5001).sum()} samples. "
         f"max={goe_weights.max():.4f}"
@@ -386,5 +383,4 @@ def test_goe_scores_no_vad_contamination():
     from shared.constants import EMOTION_LABELS as _EL
     joy_idx = _EL.index("joy")
     assert fv[11 + joy_idx] == pytest.approx(0.9, abs=1e-6), "joy should be in GoE block"
-    # The slice should sum to ≈0.9 (only joy is non-zero among the 28 labels)
     assert fv[11:39].sum() == pytest.approx(0.9, abs=1e-5), "vad_* must not bleed into GoE block"

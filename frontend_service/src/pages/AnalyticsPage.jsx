@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Chart as ChartJS, ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Filler } from 'chart.js';
 import { Doughnut, Line } from 'react-chartjs-2';
-import { EmotionPalette, blendEmotionsGradient } from '../components/EmotionPalette';
+import { EmotionPalette } from '../components/EmotionPalette';
 import AdminDashboard from '../components/AdminDashboard';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, PointElement, LineElement, Filler);
@@ -24,7 +24,6 @@ export default function AnalyticsPage({
   const [range, setRange] = useState('30d');
   const [showAdmin, setShowAdmin] = useState(false);
 
-  // Theme (shared with the chat via ig_settings). chart.js draws to <canvas>,
   // where CSS variables don't apply — so chart colors are computed in JS here.
   const igTheme = (() => {
     try { return JSON.parse(localStorage.getItem('ig_settings') || '{}').theme === 'dark' ? 'dark' : 'light'; }
@@ -34,7 +33,6 @@ export default function AnalyticsPage({
   const chartTick = igTheme === 'dark' ? 'rgba(230,232,240,0.55)' : 'var(--ig-txt3)';
   const chartGrid = igTheme === 'dark' ? 'rgba(230,232,240,0.10)' : 'rgba(0,0,0,0.04)';
 
-  // Build doughnut from current conversation emotion breakdown
   const emotionBreakdown = analyticsData?.emotion_breakdown || {};
   const topEmotions = Object.entries(emotionBreakdown)
     .sort((a, b) => b[1].samples - a[1].samples)
@@ -56,7 +54,6 @@ export default function AnalyticsPage({
     cutout: '62%',
   };
 
-  // Emotion progression line chart from conversation messages
   const analyzed = messages.filter(m => m.analysis?.data?.bert_emotions);
   const lineLabels = analyzed.map((_, i) => `#${i + 1}`);
   const lineData = {
@@ -91,7 +88,6 @@ export default function AnalyticsPage({
 
   return (
     <div data-ig-theme={igTheme} style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--ig-bg)', color: 'var(--ig-txt)' }}>
-      {/* ── Top Bar ──────────────────────────────────────────────────────── */}
       <header style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '18px 32px',
@@ -120,7 +116,6 @@ export default function AnalyticsPage({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* Filter Range sunken tabs */}
           <div style={{
             display: 'flex', gap: 4, padding: '4px',
             background: 'rgba(var(--ig-ink-rgb),0.05)', borderRadius: 12,
@@ -150,17 +145,14 @@ export default function AnalyticsPage({
         </div>
       </header>
 
-      {/* ── Stacked Glass Layers ──────────────────────────────────────────── */}
       <main style={{ flex: 1, padding: '28px 32px 48px', display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-        {/* Layer 0: Admin (if open) */}
         {showAdmin && currentUser?.role === 'admin' && (
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 4 }}>
             <AdminDashboard currentUser={currentUser} />
           </div>
         )}
 
-        {/* Layer 1: Hero Accuracy — sits highest visually */}
         <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 3, animationDelay: '0s' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 16 }}>
             <div>
@@ -183,7 +175,6 @@ export default function AnalyticsPage({
               )}
             </div>
 
-            {/* Mini emotion radar — top 4 emotions as color bars */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {topEmotions.slice(0, 4).map(([emo, stats]) => {
                 const rgb = emotionRgb(emo);
@@ -210,10 +201,8 @@ export default function AnalyticsPage({
           </div>
         </div>
 
-        {/* Layer 2: Two charts side-by-side */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
 
-          {/* Doughnut */}
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 2, animationDelay: '0.06s' }}>
             <h4 style={{ margin: '0 0 16px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--ig-txt)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               Emotion Distribution
@@ -225,7 +214,6 @@ export default function AnalyticsPage({
             </div>
           </div>
 
-          {/* Line chart */}
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 2, animationDelay: '0.10s' }}>
             <h4 style={{ margin: '0 0 16px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--ig-txt)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
               Emotional Intensity — Conversation Arc
@@ -238,7 +226,6 @@ export default function AnalyticsPage({
           </div>
         </div>
 
-        {/* Layer 3: Per-emotion breakdown cards */}
         {topEmotions.length > 0 && (
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, zIndex: 1, animationDelay: '0.16s' }}>
             <h4 style={{ margin: '0 0 18px', fontSize: '0.82rem', fontWeight: 700, color: 'var(--ig-txt)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>
@@ -266,7 +253,6 @@ export default function AnalyticsPage({
                       </span>
                     </div>
 
-                    {/* Precision */}
                     <div style={{ marginBottom: 8 }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--ig-txt2)', marginBottom: 4 }}>
                         <span>Precision</span>
@@ -277,7 +263,6 @@ export default function AnalyticsPage({
                       </div>
                     </div>
 
-                    {/* Recall */}
                     <div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--ig-txt2)', marginBottom: 4 }}>
                         <span>Recall</span>
@@ -294,7 +279,6 @@ export default function AnalyticsPage({
           </div>
         )}
 
-        {/* Empty state */}
         {topEmotions.length === 0 && !analyticsData && (
           <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT, textAlign: 'center', padding: '48px 24px' }}>
             <p style={{ color: 'var(--ig-txt3)', margin: 0 }}>

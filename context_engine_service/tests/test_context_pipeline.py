@@ -1,10 +1,10 @@
 import json
 import os
 import sys
-import asyncio
+
 import pytest
-import numpy as np
-from unittest.mock import AsyncMock, MagicMock, patch, call
+
+from unittest.mock import AsyncMock, MagicMock
 
 _HERE = os.path.dirname(__file__)
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
@@ -14,10 +14,8 @@ for p in (_ROOT, _CE):
         sys.path.insert(0, p)
 
 from shared.constants import (
-    CDM_CTX_DIM, N_CDM_STATES,
-    CTX_RESIDENCY, CTX_VELOCITY, CTX_ACCELERATION,
-    CTX_CURR_VALENCE, CTX_LATENCY_MS, CTX_VOLATILITY,
-    CTX_HMM_CONF, CTX_INTENT_STAB,
+    CDM_CTX_DIM, N_CDM_STATES, CTX_RESIDENCY, CTX_VELOCITY, CTX_ACCELERATION,
+    CTX_CURR_VALENCE, CTX_LATENCY_MS, CTX_VOLATILITY, CTX_HMM_CONF, CTX_INTENT_STAB,
 )
 
 REDIS_URL = os.environ.get("REDIS_TEST_URL", "")
@@ -74,7 +72,7 @@ def _make_service(redis_mock=None):
     cdm_cls.get_next_probs = lambda s: [0.1, 0.1, 0.1]
     cdm_stub.CDM = cdm_cls
 
-    import importlib.util, types as _t
+    import importlib.util
     spec = importlib.util.spec_from_file_location(
         "context_engine_main",
         os.path.join(_CE, "main.py"),
@@ -83,7 +81,7 @@ def _make_service(redis_mock=None):
     fastapi_stub = sys.modules["fastapi"]
     fastapi_stub.FastAPI = MagicMock(return_value=MagicMock())
 
-    from main import ContextEngineService  # noqa: relies on sys.path
+    from main import ContextEngineService
 
     svc = ContextEngineService.__new__(ContextEngineService)
     svc.decay_factor        = 0.95
@@ -239,7 +237,6 @@ class TestBuildContextVector:
 
     @pytest.mark.asyncio
     async def test_state_residency_counts_current_message(self):
-        # CDM.transition returns state=0, history is all state 0 → residency = 4 (T + 3 hist)
         r = self._mock_redis_for_build()
         r.lrange = AsyncMock(return_value=["0", "0", "0"])
         r.get = AsyncMock(side_effect=lambda k: {
@@ -268,7 +265,6 @@ class TestBuildContextVector:
         ctx = await svc.build_context_vector(
             "c1", "u1", 0.3, {"length": 5, "latency_ms": 0}, [0.0]*384, {}
         )
-        # 1 (T) + 3 (hist all matching) = 4 → 4/10 = 0.4
         assert abs(ctx[CTX_RESIDENCY] - 0.4) < 1e-5, \
             f"residency should be 0.4, got {ctx[CTX_RESIDENCY]}"
 
@@ -283,7 +279,6 @@ class TestBuildContextVector:
         })
         svc = _make_service(r)
 
-        # latency_ms is computed in redis_listener, not build_context_vector.
         import time as _t
         _now = _t.time()
         computed = (_now - last_ts) * 1000.0

@@ -57,7 +57,6 @@ _LABEL_TO_INTENT: dict = {
     'surprise':       (4,  10,  0),
 }
 
-# Labels with strong, unambiguous emotional intent — higher hmm_confidence
 _STRONG_LABELS = frozenset({
     'anger', 'joy', 'love', 'grief', 'admiration', 'fear',
     'disgust', 'gratitude', 'pride', 'remorse', 'sadness', 'excitement',
@@ -84,11 +83,10 @@ def build_synthetic_context_vector(
     if mode == "cold":
         return [0.0] * CONTEXT_DIM
 
-    rng = np.random.RandomState()  # unseeded — each call is independent
+    rng = np.random.RandomState()
 
     if label and label in _LABEL_TO_INTENT:
         primary, secondary, tertiary = _LABEL_TO_INTENT[label]
-        # 20% adversarial: random state to prevent lookup-table memorization
         if mode == "train" and rng.random() < 0.20:
             cdm_state = int(rng.randint(0, N_CDM_STATES))
         else:
@@ -110,7 +108,6 @@ def build_synthetic_context_vector(
     acceleration   = float(np.clip(rng.normal(0.0, 0.12), -1.0, 1.0))
     resonance      = float(rng.beta(2.0, 2.0))
     volatility     = float(rng.beta(1.5, 3.0))
-    # Raw char count and ms — build_feature_vector divides by 500 / 2000 respectively.
     msg_length   = float(rng.uniform(10, 450))
     latency_norm = float(rng.uniform(50, 3000))
 
@@ -142,33 +139,32 @@ def build_synthetic_context_vector(
     intent_stab = float(rng.beta(3.0, 2.0) if label else rng.beta(1.0, 4.0))
 
     ctx = (
-        cdm_one_hot            +   # [0:15]  CDM one-hot (15 intent states)
-        [residency]            +   # [15]
-        transition             +   # [16:19]
-        [abruptness,               # [19]
-         coherence,                # [20]
-         entropy,                  # [21]
-         spk_divergence,           # [22]
-         velocity,                 # [23]
-         acceleration,             # [24]
-         hist_pos,                 # [25]
-         hist_neu,                 # [26]
-         hist_neg,                 # [27]
-         resonance,                # [28]
-         volatility,               # [29]
-         cur_valence,              # [30]
-         msg_length,               # [31]
-         latency_norm,             # [32]
-         hmm_conf,                 # [33]
-         hmm_ent,                  # [34]
-         hmm_emit,                 # [35]
-        ] + top3_next +            # [36:39]
-        [intent_stab]              # [39]
-        + [0.0] * PRIOR_DIM                                          # [40:68] trajectory prior
-        + [0.0] * (SARCASM_DIM + DYNAMICS_DIM + APPRAISAL_DIM)      # [68:74] sarcasm/dynamics/appraisal
+        cdm_one_hot            +
+        [residency]            +
+        transition             +
+        [abruptness,
+         coherence,
+         entropy,
+         spk_divergence,
+         velocity,
+         acceleration,
+         hist_pos,
+         hist_neu,
+         hist_neg,
+         resonance,
+         volatility,
+         cur_valence,
+         msg_length,
+         latency_norm,
+         hmm_conf,
+         hmm_ent,
+         hmm_emit,
+        ] + top3_next +
+        [intent_stab]
+        + [0.0] * PRIOR_DIM
+        + [0.0] * (SARCASM_DIM + DYNAMICS_DIM + APPRAISAL_DIM)
     )
 
-    # Per-feature dropout: 15% of features zeroed on each training sample
     if mode == "train":
         mask = (rng.random(CONTEXT_DIM) > 0.15).astype(float)
         ctx  = [float(v) * m for v, m in zip(ctx, mask)]
@@ -185,7 +181,7 @@ _SYNTHETIC_COUNTS: dict = {
     "realization":  568,
 }
 _SYNTHETIC_CLASSES = list(_SYNTHETIC_COUNTS.keys())
-_BATCH_SIZE        = 250   # max sentences per Claude API call (fits in 4096 tokens)
+_BATCH_SIZE        = 250
 
 
 def _generate_synthetic_sentences() -> dict:
@@ -225,7 +221,6 @@ def _generate_synthetic_sentences() -> dict:
                 
                 done_all += len(filtered)
                 
-                # Calculate ETA
                 elapsed   = time.time() - start_time
                 rate      = done_all / elapsed if elapsed > 0 else 0
                 remaining = total_all - done_all
@@ -235,7 +230,7 @@ def _generate_synthetic_sentences() -> dict:
                     f"  [Synthetic]   + {len(filtered)} sentences "
                     f"(overall progress: {done_all}/{total_all} | est. time left: {time_left/60:.1f}m)"
                 )
-                time.sleep(1.5)  # rate limit safety
+                time.sleep(1.5)
             except Exception as e:
                 logger.warning(f"  [Synthetic] API error: {e}. Sleeping 15s for rate limit reset...")
                 time.sleep(15)
@@ -304,7 +299,7 @@ def load_synthetic_features(vader_analyzer, bert_analyzer, goe_analyzer, batch_s
         except Exception as e:
             logger.warning(f"[Synthetic] Cache load failed: {e} — recomputing.")
 
-    ordered_pairs: list = []  # (goemo_label, text)
+    ordered_pairs: list = []
     for goemo_label, sentences in data.items():
         if goemo_label not in EMOTION_LABELS:
             logger.warning(f"[Synthetic] Unknown label '{goemo_label}' in JSON — skipping.")
@@ -395,7 +390,6 @@ def pretrain_context_encoder(
     import torch
     import torch.nn.functional as F
 
-    # Filter to real-CDM samples when mask is available
     if has_cdm is not None and has_cdm.any():
         X_ctx   = X_ctx[has_cdm]
         y_labels = [y_labels[i] for i, v in enumerate(has_cdm) if v]

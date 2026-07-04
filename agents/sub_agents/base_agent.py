@@ -1,6 +1,6 @@
 """Base class for all InnerLink sub-agents."""
-import re
-import json
+
+
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
@@ -26,8 +26,6 @@ class BaseAgent:
         if not self.knowledge_path.exists():
             self.knowledge_path.write_text(self._initial_knowledge())
 
-    # ------------------------------------------------------------------
-    # Public API
     # ------------------------------------------------------------------
 
     def get_knowledge(self) -> str:
@@ -55,8 +53,6 @@ class BaseAgent:
 
         return result
 
-    # ------------------------------------------------------------------
-    # Internal helpers
     # ------------------------------------------------------------------
 
     def _system_prompt(self) -> str:

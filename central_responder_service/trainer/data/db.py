@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'go
 try:
     from vad_lexicon import compute_vad as _compute_vad
 except ImportError:
-    def _compute_vad(text):  # noqa: F811
+    def _compute_vad(text):
         return {"valence": 0.0, "arousal": 0.0, "dominance": 0.0}
 
 logger = get_logger("trainer")
@@ -68,8 +68,6 @@ def fetch_live_data(vader, bert, goe) -> tuple:
             return [], []
 
         _valid_labels = set(EMOTION_LABELS)
-        # Cap neutral to 3× the expected average class count to guard against
-        # contamination from pipeline periods where "neutral" was the default output.
         _avg_expected = max(len(rows) // len(EMOTION_LABELS), 10)
         _neutral_cap  = _avg_expected * 3
         _neutral_seen = 0

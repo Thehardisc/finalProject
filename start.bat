@@ -7,7 +7,6 @@ echo      [System]  Emotion Analysis System - Launcher
 echo ==============================================================
 echo.
 
-REM ── Load config from .env ─────────────────────────────────────
 set MAX_EMPATHETIC_SAMPLES_VAL=25000
 set MIN_DB_SAMPLES_VAL=50
 set RETRAIN_INTERVAL_VAL=1800
@@ -50,7 +49,6 @@ echo    ANTHROPIC_API_KEY       = !ANTHROPIC_STATUS!
 echo ----------------------------------------------------------
 echo.
 
-REM ── Feature-vector parity check ───────────────────────────────
 echo [Invariant] Checking feature-vector parity ^(inference vs trainer^)...
 where python >nul 2>&1
 if %ERRORLEVEL% equ 0 (
@@ -74,7 +72,6 @@ if %ERRORLEVEL% equ 0 (
 )
 echo.
 
-REM ── Detect hardware ───────────────────────────────────────────
 echo [Search] Detecting host environment...
 where nvidia-smi >nul 2>&1
 if %ERRORLEVEL% equ 0 (
@@ -86,10 +83,6 @@ if %ERRORLEVEL% equ 0 (
 )
 echo.
 
-REM ── Setup log directories ─────────────────────────────────────
-REM logs\live\ is bind-mounted into every Python container so services
-REM write directly to host files at write time (zero lag, no pipe).
-REM Wipe it on each run for a clean slate.
 if not exist logs\live mkdir logs\live
 for /f %%f in ('dir /b /a-d logs\live\ 2^>nul') do del /q "logs\live\%%f"
 
@@ -104,7 +97,6 @@ set LOGFILE=%LOGDIR%\all.log
 set ERRORS_LOG=%LOGDIR%\errors.log
 set IMPORTANT_LOG=%LOGDIR%\important.log
 
-REM ── Launch stack, capture startup output ──────────────────────
 echo [Launch] !COMPOSE_CMD!
 echo.
 %COMPOSE_CMD% > "%STARTUP_LOG%" 2>&1
@@ -115,7 +107,6 @@ if %ERRORLEVEL% neq 0 (
 )
 echo.
 
-REM ── Write init log header ─────────────────────────────────────
 (
     echo ==============================================================
     echo    InnerLink Launcher - Init Log
@@ -146,12 +137,8 @@ type "%STARTUP_LOG%" >> "%INIT_LOG%"
 echo [Logs] Per-service ^(real-time^): logs\live\^<service^>.log
 echo [Logs] Run artifacts: %LOGDIR%\
 
-REM ── Capture launch time (PowerShell UTC) ──────────────────────
 for /f %%a in ('powershell -NoProfile -Command "[DateTime]::UtcNow.ToString(\"yyyy-MM-ddTHH:mm:ssZ\")"') do set LAUNCH_TIME=%%a
 
-REM ── Combined aggregate log watchers ───────────────────────────
-REM Per-service logs are written directly by each container (LOG_DIR=/app/logs
-REM bind-mounted to logs\live\) -- no per-service watchdog needed here.
 
 start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% > %LOGFILE% 2>&1"
 
@@ -159,7 +146,6 @@ start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% 2>&1 | findstr /i 
 
 start /b cmd /c "docker compose logs -f --since %LAUNCH_TIME% 2>&1 | findstr /v /i /c:\"GET /health\" /c:\"OPTIONS /health\" /c:\"GET / HTTP/1.1\" > %IMPORTANT_LOG%"
 
-REM ── Wait for containers ───────────────────────────────────────
 echo.
 echo [Wait] Waiting for all containers to start...
 
@@ -186,7 +172,6 @@ echo    Check logs: %LOGFILE%
 docker compose ps
 exit /b 1
 
-REM ── Health checks ─────────────────────────────────────────────
 :HEALTH_CHECKS
 echo.
 echo [Health] Running service health checks...
@@ -194,7 +179,6 @@ set PASS=0
 set FAIL=0
 set FAILED_CHECKS=
 
-REM Check Redis
 docker compose exec -T redis redis-cli ping 2>nul | find "PONG" >nul
 if %ERRORLEVEL% equ 0 (
     echo    [OK] Redis - PONG
@@ -206,7 +190,6 @@ if %ERRORLEVEL% equ 0 (
 
 )
 
-REM Check PostgreSQL
 docker compose exec -T db pg_isready -U user -d emotion_db 2>nul | find "accepting" >nul
 if %ERRORLEVEL% equ 0 (
     echo    [OK] PostgreSQL - accepting connections
@@ -218,12 +201,10 @@ if %ERRORLEVEL% equ 0 (
 
 )
 
-REM Check HTTP services
 call :CheckHTTP "Ingestion Service (API :8000)" "http://localhost:8000/health"
 call :CheckHTTP "API Service (WebSocket :8001)" "http://localhost:8001/conversation/conv-1/state"
 call :CheckHTTP "Frontend (UI :5173)" "http://localhost:5173"
 
-REM Check Meta-Learner loaded
 docker compose logs central_responder_service 2>nul | find "Running in META-LEARNER mode" >nul
 if %ERRORLEVEL% equ 0 (
     echo    [OK] Meta-Learner - loaded and active
@@ -235,7 +216,6 @@ if %ERRORLEVEL% equ 0 (
 
 )
 
-REM ── Pipeline test (10 retries) ────────────────────────────────
 echo.
 echo [Test] Running end-to-end pipeline test...
 set PIPE_ATTEMPT=0
@@ -259,7 +239,6 @@ echo    [Fail] Pipeline test - failed ^(HTTP !HTTP_CODE!^) after 10 tries
 set /a FAIL+=1
 set FAILED_CHECKS=!FAILED_CHECKS!   - Pipeline test: POST /messages returned HTTP !HTTP_CODE!^
 
-REM ── Summary ───────────────────────────────────────────────────
 :SUMMARY
 echo.
 echo ==============================================================
@@ -288,7 +267,6 @@ echo    Tip: type logs\live\central_responder_service.log
 echo    Tip: type %ERRORS_LOG%
 echo ==============================================================
 
-REM ── Append health summary to init.log ─────────────────────────
 (
     echo.
     echo [Health Checks]
@@ -321,7 +299,6 @@ echo.
 pause
 exit /b !FAIL!
 
-REM ── Helper: HTTP check with retries ───────────────────────────
 :CheckHTTP
 set CHECK_NAME=%~1
 set CHECK_URL=%~2

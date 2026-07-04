@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, status, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+
 from fastapi.responses import HTMLResponse
 import sys
 import os
@@ -9,22 +9,25 @@ import asyncio
 import time
 import uuid
 from collections import OrderedDict
-from typing import List, Optional
+from typing import Optional
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger, sanitize_email
-from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
+from shared.utils.auth import RateLimiter
 from shared.constants import EMOTION_LABELS
 
 _NON_EMOTION = frozenset({
     'vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion',
 })
+_EMOTION_SET = frozenset(EMOTION_LABELS)
 from api_service.auth_utils import hash_password, verify_password, create_jwt, decode_jwt, get_current_user, require_admin, JWT_EXPIRY_HOURS
 from api_service.db.pool import init_pool as _init_pool, close_pool as _close_pool, get_pool
 from api_service.routes.conversations import router as conv_router, set_redis as _conv_set_redis, set_cache_invalidator as _conv_set_cache_invalidator
 from api_service.routes.messages import router as msg_router, set_redis as _msg_set_redis
+from api_service.routes.ai_demo import router as ai_demo_router, set_redis as _ai_demo_set_redis
+from api_service.demo_users import DEMO_USERS, upsert_demo_user
 
 logger = get_logger("api_service")
 
@@ -32,6 +35,7 @@ app = FastAPI(title="Emotion API", version="1.0.0")
 
 app.include_router(conv_router)
 app.include_router(msg_router)
+app.include_router(ai_demo_router)
 
 _DEFAULT_ORIGINS = "http://localhost:5173,http://localhost,http://127.0.0.1,http://127.0.0.1:5173"
 _allowed_origins = [
@@ -201,7 +205,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-_participant_cache: OrderedDict = OrderedDict()  # conv_id → [user_id,...], LRU evict at 1000
+_participant_cache: OrderedDict = OrderedDict()
 _PARTICIPANT_CACHE_MAX = 1000
 
 
@@ -462,13 +466,14 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 @app.on_event("startup")
 async def startup_event():
     global db_pool, rate_limiter
-    await _init_pool()           # uses retry logic in db/pool.py
-    db_pool = get_pool()         # keep local ref for inline endpoints
+    await _init_pool()
+    db_pool = get_pool()
 
     await redis_client.connect()
     rate_limiter = RateLimiter(redis_client)
     _conv_set_redis(redis_client)
     _msg_set_redis(redis_client)
+    _ai_demo_set_redis(redis_client)
     _conv_set_cache_invalidator(lambda conv_id: _participant_cache.pop(conv_id, None))
 
     asyncio.create_task(redis_listener())
@@ -787,10 +792,13 @@ async def admin_pipeline_detail(
         "stages": {
             "vader":      models.get("vader", {}),
             "bert":       models.get("basic_bert", {}),
-            "goemotions": models.get("go_emotions", {}),
+            # go_emotions carries side-channel keys (vad_*, goe_confidence) — show only real labels
+            "goemotions": {k: v for k, v in models.get("go_emotions", {}).items()
+                           if k in _EMOTION_SET},
         },
         "decision": {
             "aggregated":            pipeline_log.get("aggregated", {}),
+            "decision_trace":        pipeline_log.get("decision_trace", []),
             "dominant":              pipeline_log.get("dominant_selected"),
             "confidence":            pipeline_log.get("meta_confidence"),
             "decision_mode":         pipeline_log.get("decision_mode", "rule-based"),
@@ -821,59 +829,20 @@ async def get_online_users():
     return {"online_user_ids": list(manager.active_connections.keys())}
 
 
-DEMO_USERS = [
-    {"user_id": "531c7f56-e5c4-4557-9b2d-e7e8ed7c942f", "email": "alice@demo.innerlink",   "first_name": "Alice",   "last_name": "Chen",  "role": "admin"},
-    {"user_id": "90b04411-2879-4e2d-adb9-cf254793d1d2", "email": "bob@demo.innerlink",     "first_name": "Bob",     "last_name": "Kim"},
-    {"user_id": "b3c15d22-3f4a-4b8e-a1c9-df365804e3a1", "email": "charlie@demo.innerlink", "first_name": "Charlie", "last_name": "Park"},
-    {"user_id": "c4d26e33-4f5b-4c9f-b2da-ef476915f4b2", "email": "diana@demo.innerlink",   "first_name": "Diana",   "last_name": "Lee"},
-    {"user_id": "d5e37f44-5f6c-4d0f-c3eb-f0587a26f5c3", "email": "eve@demo.innerlink",     "first_name": "Eve",     "last_name": "Zhao"},
-]
-_DEMO_PW = os.environ.get("DEMO_PASSWORD", "demo-innerlink-2026")
-
-
 @app.post("/auth/demo-login/{slot}")
 async def demo_login(slot: int, response: Response):
     if slot < 0 or slot >= len(DEMO_USERS):
         raise HTTPException(status_code=400, detail="Invalid demo slot.")
-    demo = DEMO_USERS[slot]
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT user_id, display_name, role FROM users WHERE email = $1", demo["email"]
-        )
-        desired_role = demo.get("role", "user")
-        if row:
-            user_id      = row["user_id"]
-            display_name = row["display_name"]
-            role         = row["role"]
-            if role != desired_role:
-                await conn.execute(
-                    "UPDATE users SET role = $1 WHERE user_id = $2", desired_role, user_id
-                )
-                role = desired_role
-        else:
-            user_id      = demo.get("user_id") or str(uuid.uuid4())
-            display_name = f"{demo['first_name']} {demo['last_name']}"
-            pw_hash      = hash_password(_DEMO_PW)
-            role         = desired_role
-            await conn.execute(
-                """INSERT INTO users
-                   (user_id, email, first_name, last_name, display_name,
-                    password_hash, role, is_active, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8)""",
-                user_id, demo["email"], demo["first_name"], demo["last_name"],
-                display_name, pw_hash, role, time.time()
-            )
-        await conn.execute(
-            "UPDATE users SET last_login = $1 WHERE user_id = $2", time.time(), user_id
-        )
+        user = await upsert_demo_user(conn, slot)
 
-    token = create_jwt(user_id, display_name, role)
+    token = create_jwt(user["user_id"], user["display_name"], user["role"])
     response.set_cookie(
         key="_req_sid", value=token,
         httponly=True, samesite="lax",
         max_age=JWT_EXPIRY_HOURS * 3600,
     )
-    return {"user_id": user_id, "display_name": display_name, "email": demo["email"], "role": role}
+    return user
 
 
 @app.get("/users", dependencies=[Depends(get_current_user)])
@@ -881,12 +850,14 @@ async def get_users(current_user_id: str = Query(None)):
     async with db_pool.acquire() as conn:
         if current_user_id:
             rows = await conn.fetch(
-                "SELECT user_id, display_name FROM users WHERE user_id != $1 AND is_active = TRUE",
+                "SELECT user_id, display_name FROM users WHERE user_id != $1 AND is_active = TRUE "
+                "AND email NOT LIKE '%@ai-demo.innerlink'",
                 current_user_id
             )
         else:
             rows = await conn.fetch(
-                "SELECT user_id, display_name FROM users WHERE is_active = TRUE"
+                "SELECT user_id, display_name FROM users WHERE is_active = TRUE "
+                "AND email NOT LIKE '%@ai-demo.innerlink'"
             )
     return [dict(r) for r in rows]
 
@@ -920,7 +891,7 @@ async def get_calibration_analytics():
         ems       = json.loads(row['emotions_json'])
         numeric   = {k: float(v) for k, v in ems.items() if isinstance(v, (int, float)) and k in EMOTION_LABELS}
         if not numeric:
-            total_verified -= 1  # feedback-only row, no model output → skip
+            total_verified -= 1
             continue
         predicted = max(numeric, key=numeric.get)
 

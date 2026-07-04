@@ -1,28 +1,4 @@
-"""
-relabel.py — Re-label conversations via Claude API.
-
-Modes
------
-  (default)  implicit emotion chunking — reads conversations.jsonl,
-             writes conversations_relabeled.jsonl
-
-  sarcasm    per-message binary sarcasm/passive-aggression labels —
-             reads conversations.jsonl, writes sarcasm_labels.jsonl
-             One flat JSONL record per message.
-
-Usage:
-  python relabel.py --dry-run                          # default mode dry-run
-  python relabel.py --mode sarcasm --dry-run           # sarcasm mode dry-run
-  python relabel.py --mode sarcasm --limit 50          # label first 50 conversations
-  ANTHROPIC_API_KEY=sk-ant-... python relabel.py --mode sarcasm
-  ANTHROPIC_API_KEY=sk-ant-... python relabel.py --mode sarcasm --model claude-haiku-4-5-20251001
-
-Batch API (50% cost reduction, async):
-  python relabel.py --batch                            # batch implicit mode
-  python relabel.py --mode sarcasm --batch             # batch sarcasm mode
-  python relabel.py --mode sarcasm --batch --limit 200 # batch 200 conversations
-  The batch ID is saved to <output>.batch_id for crash recovery.
-"""
+"""relabel.py — Re-label conversations via Claude API."""
 
 import argparse
 import json
@@ -35,7 +11,6 @@ from typing import Optional
 _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent))
 
-# ── Prompt ────────────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an expert at recognizing implicit emotions and psychological states in human narrative text.
 
@@ -122,7 +97,6 @@ gratitude, grief, joy, love, nervousness, optimism, pride, realization, relief,
 remorse, sadness, surprise, neutral."""
 
 
-# ── Sarcasm mode ─────────────────────────────────────────────────────────────
 
 SARCASM_SYSTEM_PROMPT = """You are a linguist specializing in pragmatics and implied meaning.
 You label individual chat messages for sarcasm and passive aggression.
@@ -201,7 +175,6 @@ def parse_sarcasm_response(raw: str, conv_id: str, msg_idx: int) -> Optional[dic
         )
         return None
 
-    # Validate required fields
     if "is_sarcastic" not in parsed or "subtype" not in parsed:
         print(
             f"  [WARN] Missing fields in response for {conv_id}[{msg_idx}]: {parsed}",
@@ -221,7 +194,6 @@ def run_sarcasm_mode(args, conversations: list, api_key: Optional[str]) -> None:
     output_path = _HERE / "training_data" / "sarcasm_labels.jsonl"
     output_path.parent.mkdir(exist_ok=True)
 
-    # Build resume set: (conv_id, msg_idx) already in output file
     done: set[tuple[str, int]] = set()
     if output_path.exists():
         for line in output_path.read_text().splitlines():
@@ -241,7 +213,6 @@ def run_sarcasm_mode(args, conversations: list, api_key: Optional[str]) -> None:
     print(f"Model: {args.model}")
     print(f"Output: {output_path}")
 
-    # Dry-run: show prompt for message index 2 of first conversation (likely has context)
     if args.dry_run:
         conv  = conversations[0]
         msgs  = conv.get("messages", [])
@@ -400,12 +371,7 @@ def parse_response(raw: str, conversation_id: str):
 # ── Batch API mode ────────────────────────────────────────────────────────────
 
 def run_batch_mode(args, conversations: list, api_key: str) -> None:
-    """Submit all labeling requests to Anthropic Batch API (50% cost reduction).
-
-    custom_id format: "<conv_id>||<msg_index>" for sarcasm mode,
-                      "<conv_id>" for implicit mode.
-    The "||" separator cannot appear in conversation IDs (which are UUIDs).
-    """
+    """Submit all labeling requests to Anthropic Batch API (50% cost reduction)."""
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -421,7 +387,6 @@ def run_batch_mode(args, conversations: list, api_key: str) -> None:
 
     output_path.parent.mkdir(exist_ok=True)
 
-    # Build resume set from existing output
     done: set[str] = set()
     if output_path.exists():
         for line in output_path.read_text().splitlines():
@@ -438,7 +403,6 @@ def run_batch_mode(args, conversations: list, api_key: str) -> None:
     if done:
         print(f"Resuming — {len(done)} items already labeled, skipping.")
 
-    # Build requests list and keep metadata for result reconstruction
     requests = []
     request_meta: dict = {}
 
@@ -488,12 +452,10 @@ def run_batch_mode(args, conversations: list, api_key: str) -> None:
     batch_id = batch.id
     print(f"Batch submitted: {batch_id}")
 
-    # Persist batch_id so a crashed run can resume without re-submitting
     batch_id_path = output_path.with_suffix(output_path.suffix + ".batch_id")
     batch_id_path.write_text(batch_id)
     print(f"Batch ID saved to: {batch_id_path}")
 
-    # Poll until complete
     print("Polling for completion (checking every 60s)...")
     while True:
         batch = client.beta.messages.batches.retrieve(batch_id)
@@ -507,7 +469,6 @@ def run_batch_mode(args, conversations: list, api_key: str) -> None:
             break
         time.sleep(60)
 
-    # Stream results and write output
     processed = failed = 0
     with output_path.open("a", encoding="utf-8") as out:
         for result in client.beta.messages.batches.results(batch_id):
@@ -601,7 +562,6 @@ def main():
 
     print(f"Conversations loaded: {len(conversations)}")
 
-    # ── Batch mode ────────────────────────────────────────────────────────────
     if args.batch:
         if args.dry_run:
             print("[--batch --dry-run] Would submit requests to Anthropic Batch API.")
@@ -614,13 +574,11 @@ def main():
         run_batch_mode(args, conversations, api_key)
         return
 
-    # ── Dispatch ──────────────────────────────────────────────────────────────
     if args.mode == "sarcasm":
         api_key = os.environ.get("ANTHROPIC_API_KEY") if not args.dry_run else None
         run_sarcasm_mode(args, conversations, api_key)
         return
 
-    # ── Default: implicit emotion mode ────────────────────────────────────────
     output_path = _HERE / args.output
     print(f"Model: {args.model}")
 

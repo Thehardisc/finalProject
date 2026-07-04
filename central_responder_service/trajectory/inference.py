@@ -1,20 +1,8 @@
-"""
-Trajectory inference — EmotionalDialogueEncoder (EDE) integration.
-
-Public API (unchanged from LSTM version):
-  run_trajectory_step(model, model_outputs, conv_id, redis, context_vector=None)
-  load_trajectory_model(model_path, config_path)
-
-Changes from LSTM:
-  - No hidden state serialization (no h/c tensors, no distributed lock)
-  - Redis stores plain JSON list of last N GoE distributions (trajectory:{conv_id}:goe_history)
-  - Trajectory prior [82:110] is still written to trajectory:{conv_id}:prior
-  - Phase label written to trajectory:{conv_id}:phase
-"""
+"""Trajectory inference — EmotionalDialogueEncoder (EDE) integration."""
 
 import json
 import numpy as np
-from typing import Optional, List
+from typing import List
 
 import torch
 
@@ -42,7 +30,7 @@ _EMOTION_VALENCE = {
 }
 
 HISTORY_KEY_PREFIX = "trajectory:"
-HISTORY_TTL        = 7200   # 2-hour inactivity TTL
+HISTORY_TTL        = 7200
 MAX_HISTORY        = 12
 
 
@@ -109,12 +97,7 @@ async def run_trajectory_step(
     redis,
     context_vector: list = None,
 ) -> dict:
-    """
-    EDE inference step.  Drop-in for the old LSTM run_trajectory_step.
-
-    Extracts go_emotions scores from model_outputs, runs EDE over stored
-    history window, writes trajectory prior [82:110] to Redis, returns dict.
-    """
+    """EDE inference step.  Drop-in for the old LSTM run_trajectory_step."""
     if model is None:
         return {}
 
@@ -127,7 +110,7 @@ async def run_trajectory_step(
 
         N = model.max_window
         if history_vecs:
-            arr = np.stack(history_vecs[-N:])           # [k, 28]
+            arr = np.stack(history_vecs[-N:])
             k   = len(arr)
             if k < N:
                 pad     = np.zeros((N - k, 28), dtype=np.float32)
@@ -140,16 +123,15 @@ async def run_trajectory_step(
             hist = np.zeros((N, 28), dtype=np.float32)
             mask = np.ones(N, dtype=bool)
 
-        x = torch.tensor(hist, dtype=torch.float32).unsqueeze(0)   # [1, N, 28]
-        m = torch.tensor(mask, dtype=torch.bool).unsqueeze(0)      # [1, N]
+        x = torch.tensor(hist, dtype=torch.float32).unsqueeze(0)
+        m = torch.tensor(mask, dtype=torch.bool).unsqueeze(0)
 
         with torch.no_grad():
             prior, phase_logits = model(x, padding_mask=m)
 
-        scores    = prior[0].cpu().tolist()                         # [28]
+        scores    = prior[0].cpu().tolist()
         phase_idx = int(phase_logits[0].argmax())
 
-        # Derive phase from valence computed from real GoE history if available
         if history_vecs:
             valence_window = [_goe_vec_to_valence(v) for v in history_vecs]
             phase_name     = _derive_phase(valence_window)
@@ -157,10 +139,8 @@ async def run_trajectory_step(
             from trajectory.model import PHASES
             phase_name = PHASES[phase_idx]
 
-        # Save updated history (current message)
         await _save_goe_history(conv_id, goe_scores, redis)
 
-        # Write trajectory prior for meta-learner [82:110]
         try:
             await redis.set(
                 f"trajectory:{conv_id}:prior",
@@ -191,10 +171,7 @@ async def run_trajectory_step(
 
 
 def load_trajectory_model(model_path: str, config_path: str):
-    """
-    Load EmotionalDialogueEncoder from checkpoint.
-    Returns model in eval mode, or None if files are missing.
-    """
+    """Load EmotionalDialogueEncoder from checkpoint."""
     import os
     from trajectory.model import EmotionalDialogueEncoder
 

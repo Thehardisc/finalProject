@@ -21,7 +21,7 @@ from trainer import start_trainer_thread
 from trajectory.inference import load_trajectory_model, run_trajectory_step
 from sarcasm_classifier import load_sarcasm_model
 
-import metrics as METRICS  # noqa: F401  (kept so the module is imported once at startup)
+import metrics as METRICS
 from prometheus_client import start_http_server as _start_metrics_server
 
 from shared.utils.redis_client import RedisClient
@@ -127,7 +127,7 @@ async def _optional_timeout(msg_id: str, r) -> None:
     await asyncio.sleep(OPTIONAL_TIMEOUT_MS / 1000.0)
     info = pending_aggregations.get(msg_id)
     if info and not info.get("aggregated"):
-        info["aggregated"] = True   # claim before any await
+        info["aggregated"] = True
         optional_present = set(info["models"].keys()) & (REGISTRY.optional if REGISTRY else set())
         logger.debug(
             f"[OPT TIMEOUT] {msg_id}: firing after {OPTIONAL_TIMEOUT_MS}ms  "
@@ -279,8 +279,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         dynamics_scores=dynamics_scores,
         appraisal_scores=appraisal_scores,
     )
+    decision_trace = []
     dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc, gate_alpha = \
-        predict_with_meta_learner(META_LEARNER, fv)
+        predict_with_meta_learner(META_LEARNER, fv, trace=decision_trace)
 
     ekman_group = final_scores.pop("ekman_group", None)
 
@@ -316,19 +317,36 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         logger.warning(f"[ANOMALY DETECTED] {message_id}: {', '.join(anomaly_reason)}")
 
         original_conflict_desc = conflict_desc
+        _is_hyperbole = bool(conflict_desc and "Hyperbole" in conflict_desc)
         conflict_desc = "Anomaly Fallback: Dynamic Recovery"
-        if goe_max_prob >= bert_max_prob and goe_scores:
-            final_scores = goe_scores   # already filtered to emotion labels only
+        # Hyperbole = BERT fooled by literal negative wording — trust GoE regardless of max.
+        if goe_scores and (_is_hyperbole or goe_max_prob >= bert_max_prob):
+            final_scores = goe_scores
+            _anomaly_src = "raw GoEmotions" + (" (hyperbole → GoE preferred)" if _is_hyperbole else "")
         elif bert_scores:
             final_scores = bert_scores
+            _anomaly_src = "raw BERT"
         else:
             final_scores = {"neutral": 1.0}
+            _anomaly_src = "neutral default"
 
         dominant_emotion = max(final_scores, key=final_scores.get) if final_scores else "neutral"
         meta_confidence = final_scores.get(dominant_emotion, 0.0)
+        decision_trace.append({
+            "step": "Anomaly fallback", "status": "applied",
+            "detail": f"{', '.join(anomaly_reason)} — replaced scores with {_anomaly_src}",
+            "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+        })
 
     _impl_override = False
-    if is_implicit_candidate(dominant_emotion, goe_scores, _orig_text, meta_confidence):
+    # Expert conflict / hyperbole → let the implicit-emotion LLM arbitrate; its
+    # should_override margin still gates acceptance.
+    _expert_conflict = bool(conflict_desc and (
+        "Expert conflict" in conflict_desc or "Hyperbole" in conflict_desc))
+    if _expert_conflict or is_implicit_candidate(dominant_emotion, goe_scores, _orig_text, meta_confidence):
+        _route_why = ("expert conflict / hyperbole" if _expert_conflict
+                      else ("neutral prediction" if dominant_emotion == "neutral"
+                            else f"low meta confidence ({meta_confidence:.2f})"))
         _impl_result  = await request_implicit_emotion(r, message_id, _orig_text, _conv_history)
         if _impl_result and should_override(dominant_emotion, meta_confidence, _impl_result):
             _prev_dom        = dominant_emotion
@@ -336,10 +354,35 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             meta_confidence  = float(_impl_result["confidence"])
             final_scores     = _impl_result.get("scores", {dominant_emotion: meta_confidence})
             _impl_override   = True
+            decision_trace.append({
+                "step": "Implicit-emotion arbiter", "status": "applied",
+                "detail": f"Routed ({_route_why}); {_impl_result.get('method','?')} overrode '{_prev_dom}'",
+                "label": dominant_emotion, "confidence": round(meta_confidence, 4),
+            })
             logger.info(
                 f"[ImplicitEmotion] {message_id}: {_prev_dom} → {dominant_emotion} "
                 f"(conf={meta_confidence:.2f}, method={_impl_result.get('method','?')})"
             )
+        elif _impl_result:
+            decision_trace.append({
+                "step": "Implicit-emotion arbiter", "status": "rejected",
+                "detail": (f"Routed ({_route_why}); {_impl_result.get('method','?')} suggested "
+                           f"'{_impl_result.get('emotion','?')}' ({float(_impl_result.get('confidence',0)):.2f}) "
+                           f"but did not clear the override margin"),
+                "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+            })
+        else:
+            decision_trace.append({
+                "step": "Implicit-emotion arbiter", "status": "info",
+                "detail": f"Routed ({_route_why}); no implicit signal returned",
+                "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+            })
+    decision_trace.append({
+        "step": "Final decision", "status": "final",
+        "detail": ("implicit-emotion-override" if _impl_override
+                   else ("meta-learner" if META_LEARNER is not None else "rule-based")),
+        "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+    })
     await store_message_for_history(r, conv_id, _orig_text)
 
     original_ts = original_data.get("timestamp")
@@ -414,6 +457,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "sarcasm_score":         float(sarcasm_score),
         "inversion_applied":     (sarcasm_score > 0.5),
         "conflict":              conflict_desc,
+        "decision_trace":        decision_trace,
         "trajectory":            trajectory,
         "vad":                   vad_scores,
         "dynamics":              dynamics_scores,

@@ -89,7 +89,7 @@ async def update_conversation_state(
                 logger.warning(f"Failed to publish idle event: {e}")
 
     msg_count   = int(current_state.get("message_count", 0))
-    ema_valence = float(current_state.get("ema_valence", 0.0))  # replaces accumulated_valence
+    ema_valence = float(current_state.get("ema_valence", 0.0))
     prev_mood   = current_state.get("overall_mood", "Neutral")
 
     override_trigger, override_meaning = await handle_dynamic_rules(
@@ -124,9 +124,6 @@ async def update_conversation_state(
             dominant_score   = 1.0
 
     msg_count += 1
-    # Exponential moving average — recent messages have higher weight.
-    # Alpha=0.35: each new message contributes 35%, history contributes 65%.
-    # After 5 consecutive angry messages the EMA reflects ~83% of that anger.
     alpha       = 0.35
     avg_valence = alpha * new_valence + (1.0 - alpha) * ema_valence
     overall_mood = _valence_to_mood(avg_valence)
@@ -140,26 +137,23 @@ async def update_conversation_state(
     new_state = {
         "message_count":          msg_count,
         "ema_valence":            avg_valence,
-        "average_valence":        avg_valence,   # kept for API compatibility
+        "average_valence":        avg_valence,
         "overall_mood":           overall_mood,
         "dominant_emotion":       dominant_emotion,
         "dominant_emotion_score": dominant_score,
         "last_updated":           now,
-        "last_activity":          now,           # used by idle detection
+        "last_activity":          now,
         "last_message_emotions":  json.dumps(new_emotions)
     }
 
-    # CDM history — written here so context_engine reads it for the NEXT message
-    # prev_valence lets context_engine compute velocity without a separate query
-    new_state["prev_valence"] = str(ema_valence)   # valence BEFORE this update
+    new_state["prev_valence"] = str(ema_valence)
 
     if user_id:
         new_state[f"spk:{user_id}"] = str(new_valence)
 
     await r.hset(state_key, mapping={k: str(v) for k, v in new_state.items()})
-    await r.expire(state_key, 86400 * 7)  # 7-day TTL — stale conversations don't leak memory
+    await r.expire(state_key, 86400 * 7)
 
-    # Sliding valence history (last 3) — used by context_engine for velocity + acceleration
     hist_key = f"conv:{conversation_id}:valence_hist"
     await r.lpush(hist_key, str(new_valence))
     await r.ltrim(hist_key, 0, 2)
@@ -170,7 +164,7 @@ async def update_conversation_state(
     await r.lpush(arc_key, current_mood)
     await r.ltrim(arc_key, 0, 4)
     await r.expire(arc_key, 86400 * 7)
-    mood_arc = await r.lrange(arc_key, 0, -1)  # newest first
+    mood_arc = await r.lrange(arc_key, 0, -1)
 
     raw_hist = await r.lrange(hist_key, 0, -1)
     valence_history = [float(v) for v in raw_hist]

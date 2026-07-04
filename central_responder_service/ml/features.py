@@ -1,13 +1,4 @@
-"""
-ml/features.py — Shared derived-feature math for the 103-dim meta-learner vector.
-
-The training pipeline (`trainer/preprocessor.py:build_fv`) and the inference
-pipeline (`ml/predictor.py:build_feature_vector`) BOTH must produce identical
-103-dim vectors for the same input. Block 6 (the 7 derived features) used to
-be implemented twice — once in each file — and could silently desync.
-
-All derived-feature math now lives here and is imported by both call sites.
-"""
+"""ml/features.py — Shared derived-feature math for the 103-dim meta-learner vector."""
 import math
 from typing import List
 
@@ -43,18 +34,7 @@ def agreement(bert: dict, goe: dict) -> float:
 
 
 def build_derived_block(bert: dict, goe: dict, vader: dict) -> List[float]:
-    """
-    Build the 7-dim derived-features block (indices [96:103] of the FV).
-
-    Layout:
-      0: bert_entropy        — how uncertain is BERT?
-      1: goe_entropy         — how uncertain is GoEmotions?
-      2: bert_margin         — how decisive is BERT?
-      3: goe_margin          — how decisive is GoEmotions?
-      4: bert_goe_agreement  — do both transformers pick the same top label?
-      5: vader_abs_compound  — sentiment magnitude
-      6: max_goe_score       — GoEmotions peak confidence
-    """
+    """Build the 7-dim derived-features block (indices [96:103] of the FV)."""
     return [
         entropy(bert,  BERT_LABELS),
         entropy(goe,   EMOTION_LABELS),

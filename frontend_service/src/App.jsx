@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import LoginModal from './components/LoginModal';
-import DemoRunner from './components/DemoRunner';
 import IGDashboard from './pages/IGDashboard';
 import AnalyticsPage from './pages/AnalyticsPage';
 import LiveAnalyticsDashboardPage from './pages/LiveAnalyticsDashboardPage';
@@ -14,7 +13,6 @@ const WS_BASE  = import.meta.env.VITE_WS_URL   || 'ws://localhost:8001';
 
 axios.defaults.withCredentials = true;
 
-// ── Covert Micro-Delay (friction) ─────────────────────────────────────────────
 const FRICTION_DELAY_MS = 280;
 const FRICTION_CDM_STATES = new Set(['TENSION', 'CONFLICT', 'ARGUMENT', 'FRUSTRATION']);
 
@@ -80,7 +78,7 @@ function parseAnalysis(msg) {
 // ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'live-analytics' | 'admin'
+  const [view, setView] = useState('dashboard');
   const [showLoginModal, setShowLoginModal] = useState(false);
 
   useEffect(() => {
@@ -88,11 +86,9 @@ export default function App() {
     document.body.style.background = '#05060F';
   }, []);
 
-  // ── Auth ────────────────────────────────────────────────────────────────
   const [currentUser, setCurrentUser]       = useState(null);
   const [sessionChecked, setSessionChecked] = useState(false);
 
-  // ── System readiness ────────────────────────────────────────────────────
   const [systemReady, setSystemReady]               = useState(false);
   const [gateVisible, setGateVisible]               = useState(false);
   const [trainingInProgress, setTrainingInProgress] = useState(false);
@@ -100,7 +96,6 @@ export default function App() {
     database: false, redis: false, meta_learner: false,
   });
 
-  // ── Data ────────────────────────────────────────────────────────────────
   const [conversations, setConversations]           = useState([]);
   const [globalUsers, setGlobalUsers]               = useState([]);
   const [onlineUsers, setOnlineUsers]               = useState(new Set());
@@ -114,19 +109,28 @@ export default function App() {
   const [regeneratingIds, setRegeneratingIds]       = useState(new Set());
   const [partialModels, setPartialModels]           = useState(new Set());
 
-  const socketRef      = useRef(null);
-  const activeConvRef  = useRef(activeConversationId); // tracks current conv without causing WS reconnect
+  const socketRef        = useRef(null);
+  const globalUsersRef   = useRef([]);
+  const conversationsRef = useRef([]);
+
+  // AI-demo agent users are hidden from /users, so resolve their names via group membership.
+  const resolveSenderName = (senderId, convId) => {
+    if (!senderId) return undefined;
+    return globalUsersRef.current.find(u => u.user_id === senderId)?.display_name
+      || conversationsRef.current.find(c => c.conversation_id === convId)
+           ?.members?.find(m => m.user_id === senderId)?.display_name
+      || senderId.substring(0, 8);
+  };
+  const activeConvRef  = useRef(activeConversationId);
   const retryCountRef  = useRef(0);
   const isSendingRef   = useRef(false);
   const retryTimerRef  = useRef(null);
   const mountedRef     = useRef(true);
 
-  // Keep ref in sync whenever the active conversation changes
   useEffect(() => {
     activeConvRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  // ── Session restore ──────────────────────────────────────────────────────
   useEffect(() => {
     if (currentUser) return;
     axios.get(`${API_BASE}/auth/me`)
@@ -164,7 +168,6 @@ export default function App() {
     setView('dashboard');
   };
 
-  // ── System readiness gate ────────────────────────────────────────────────
   useEffect(() => {
     if (!currentUser) return;
     setGateVisible(true);
@@ -206,10 +209,12 @@ export default function App() {
         axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`),
         axios.get(`${API_BASE}/users/online`),
       ]);
-      // Filter out any self-conversations that may exist from legacy data
       const all = chats.data || [];
-      setConversations(all.filter(c => c.type === 'group' || c.other_user_id !== currentUser.user_id));
+      const visible = all.filter(c => c.type === 'group' || c.other_user_id !== currentUser.user_id);
+      setConversations(visible);
+      conversationsRef.current = visible;
       setGlobalUsers(users.data || []);
+      globalUsersRef.current = users.data || [];
       setOnlineUsers(new Set(online.data?.online_user_ids || []));
     } catch {}
   };
@@ -221,7 +226,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [currentUser]);
 
-  // ── Persistent WebSocket — one connection per session, not per conversation ──
   useEffect(() => {
     if (!currentUser || !systemReady) return;
 
@@ -249,7 +253,6 @@ export default function App() {
           const payload = JSON.parse(event.data);
 
           if (payload.type === 'analysis') {
-            // Only update UI if this message belongs to the active conversation
             const convId = payload.data?.conversation_id;
             if (convId && convId !== activeConvRef.current) return;
 
@@ -264,7 +267,8 @@ export default function App() {
                 id:         payload.data.id,
                 sender:     isSelf ? 'user' : 'ai',
                 text:       payload.data.raw_text,
-                senderName: isSelf ? currentUser.display_name : payload.data.sender_id?.substring(0, 8),
+                senderName: isSelf ? currentUser.display_name
+                  : resolveSenderName(payload.data.sender_id, payload.data.conversation_id),
                 analysis:   payload,
                 timestamp:  Date.now(),
               };
@@ -332,9 +336,8 @@ export default function App() {
       clearTimeout(retryTimerRef.current);
       if (socketRef.current) socketRef.current.close(1000, 'component unmounted');
     };
-  }, [currentUser, systemReady]); // ← activeConversationId intentionally excluded
+  }, [currentUser, systemReady]);
 
-  // ── History load on conversation switch ─────────────────────────────────
   useEffect(() => {
     if (!currentUser || !systemReady || !activeConversationId) return;
 
@@ -350,7 +353,7 @@ export default function App() {
               text:       m.content,
               senderName: isSelf ? currentUser.display_name : (
                 conversations.find(c => c.other_user_id === m.sender_id)?.other_display_name
-                || m.sender_id.substring(0, 8)
+                || resolveSenderName(m.sender_id, activeConversationId)
               ),
               analysis:  parseAnalysis(m),
               timestamp: m.timestamp,
@@ -477,12 +480,6 @@ export default function App() {
     }, 2800);
   };
 
-  const handleInjectDemo = (demoMessages) => {
-    setMessages(demoMessages);
-    const last = demoMessages[demoMessages.length - 1];
-    if (last?.analysis) setCurrentAnalysis(last.analysis);
-  };
-
   const handleDemoStart = async (convId) => {
     await fetchConversations();
     setActiveConversationId(convId);
@@ -490,7 +487,6 @@ export default function App() {
     setCurrentAnalysis(null);
   };
 
-  // ── Render: loading gate ──────────────────────────────────────────────────
   if (currentUser && !systemReady) {
     const ready = Object.values(componentStatus).filter(Boolean).length;
     const total = Math.max(Object.keys(componentStatus).length, 1);
@@ -567,7 +563,6 @@ export default function App() {
     );
   }
 
-  // ── Render: login / landing ───────────────────────────────────────────────
   if (!sessionChecked) return null;
   if (!currentUser) return (
     <>
@@ -578,7 +573,6 @@ export default function App() {
     </>
   );
 
-  // ── Render: main app ──────────────────────────────────────────────────────
   return (
     <div className="crystal-shell">
       {trainingInProgress && (
@@ -618,7 +612,6 @@ export default function App() {
           partialModels={partialModels}
           regeneratingIds={regeneratingIds}
           onRegenerateAnalysis={handleRegenerateAnalysis}
-          onInjectDemo={handleInjectDemo}
           socketRef={socketRef}
           onDemoStart={handleDemoStart}
         />

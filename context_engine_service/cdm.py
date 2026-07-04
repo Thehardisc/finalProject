@@ -140,35 +140,20 @@ def _emotion_to_idx(emotion: str) -> int:
 
 
 _STATE_PRIORS: List[Dict[str, float]] = [
-    # 0  NEUTRAL
     {"sarcasm": 1.0, "negative": 1.0, "positive": 1.0, "conflict": 1.0, "complexity": 1.0},
-    # 1  WARMTH
     {"sarcasm": 0.9, "negative": 1.3, "positive": 0.8, "conflict": 1.3, "complexity": 0.9},
-    # 2  PRAISE
     {"sarcasm": 1.2, "negative": 1.4, "positive": 0.7, "conflict": 1.4, "complexity": 0.9},
-    # 3  HELP_REQUEST
     {"sarcasm": 0.9, "negative": 1.1, "positive": 0.9, "conflict": 1.1, "complexity": 1.3},
-    # 4  HUMOR
     {"sarcasm": 1.7, "negative": 1.2, "positive": 0.8, "conflict": 1.2, "complexity": 0.8},
-    # 5  TENSION
     {"sarcasm": 1.3, "negative": 0.8, "positive": 1.3, "conflict": 0.7, "complexity": 1.1},
-    # 6  CONFLICT
     {"sarcasm": 1.2, "negative": 0.7, "positive": 1.4, "conflict": 0.7, "complexity": 1.0},
-    # 7  ARGUMENT
     {"sarcasm": 1.3, "negative": 0.75, "positive": 1.3, "conflict": 0.7, "complexity": 1.2},
-    # 8  WITHDRAWAL
     {"sarcasm": 1.1, "negative": 0.9, "positive": 1.2, "conflict": 1.0, "complexity": 0.9},
-    # 9  RECONCILIATION
     {"sarcasm": 1.1, "negative": 1.2, "positive": 0.9, "conflict": 1.2, "complexity": 1.0},
-    # 10 CURIOSITY
     {"sarcasm": 1.0, "negative": 1.1, "positive": 0.9, "conflict": 1.1, "complexity": 1.3},
-    # 11 ASSERTIVENESS
     {"sarcasm": 1.1, "negative": 1.1, "positive": 1.0, "conflict": 1.0, "complexity": 1.1},
-    # 12 EMPATHY
     {"sarcasm": 0.9, "negative": 1.3, "positive": 0.8, "conflict": 1.3, "complexity": 0.9},
-    # 13 FRUSTRATION
     {"sarcasm": 1.4, "negative": 0.8, "positive": 1.3, "conflict": 0.8, "complexity": 1.1},
-    # 14 AGREEMENT
     {"sarcasm": 1.0, "negative": 1.3, "positive": 0.8, "conflict": 1.3, "complexity": 0.9},
 ]
 

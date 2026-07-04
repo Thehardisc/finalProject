@@ -1,20 +1,4 @@
-"""
-Pipeline runner — sends generated conversations through the live emotion pipeline
-and captures per-model results for each message.
-
-Flow per conversation:
-  1. Login as Alice (admin, slot 0) + Bob (slot 1) via demo-login
-  2. Create a direct conversation between them
-  3. Open WebSocket as Alice, send each message with delay
-  4. Collect "analysis" events returned over WebSocket (contain message_id)
-  5. Fetch full pipeline breakdown via GET /admin/pipeline/{message_id}
-  6. Return enriched conversation record
-
-Usage:
-    from data.runner import PipelineRunner
-    runner = PipelineRunner(base_url="http://localhost:8000")
-    result = runner.run_conversation(trajectory_type, messages)
-"""
+"""Pipeline runner — sends generated conversations through the live emotion pipeline"""
 
 import asyncio
 import json
@@ -25,8 +9,6 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("runner")
 
-# Seconds to wait after sending the last message before closing the WebSocket.
-# The pipeline (preprocessing → 3 models → central_responder) takes ~3-5s per message.
 PIPELINE_WAIT_PER_MSG = 1.0
 MSG_SEND_INTERVAL = 0.5
 PIPELINE_POLL_RETRIES = 10
@@ -97,7 +79,6 @@ class PipelineRunner:
                 )
                 if resp.status_code == 200:
                     data = resp.json()
-                    # Check that pipeline data actually arrived (persistence_service may lag)
                     if data.get("stages", {}).get("vader") or data.get("decision", {}).get("dominant"):
                         return data
                     logger.debug(f"  Pipeline data not ready yet for {message_id[:8]}, retrying...")
@@ -116,10 +97,7 @@ class PipelineRunner:
     async def _ws_send_and_capture(
         self, conv_id: str, messages: List[str]
     ) -> List[Dict]:
-        """
-        Open a WebSocket as Alice, send all messages, collect analysis events.
-        Returns list of analysis event dicts (one per processed message).
-        """
+        """Open a WebSocket as Alice, send all messages, collect analysis events."""
         try:
             import websockets
         except ImportError:
@@ -132,8 +110,6 @@ class PipelineRunner:
         analysis_events: List[Dict] = []
         total_messages = len(messages)
 
-        # How long to wait after ALL messages are sent before closing.
-        # Each message needs PIPELINE_WAIT_PER_MSG seconds to process.
         tail_wait = PIPELINE_WAIT_PER_MSG * total_messages
 
         async with websockets.connect(ws_url, additional_headers=headers) as ws:
@@ -141,7 +117,6 @@ class PipelineRunner:
 
             async def sender():
                 for i, text in enumerate(messages):
-                    # Alternate senders: even turns = Alice, odd turns = Bob
                     turn_sender = self._alice["user_id"] if i % 2 == 0 else self._bob["user_id"]
                     payload = json.dumps({
                         "text":            text,
@@ -152,9 +127,7 @@ class PipelineRunner:
                     logger.debug(f"  Sent [{i+1}/{total_messages}]: {text[:60]}")
                     if i < total_messages - 1:
                         await asyncio.sleep(MSG_SEND_INTERVAL)
-                # After last message, wait for pipeline to finish all messages
                 await asyncio.sleep(tail_wait)
-                # Close WebSocket so receiver() unblocks and asyncio.gather() can return
                 await ws.close()
 
             async def receiver():
@@ -172,7 +145,7 @@ class PipelineRunner:
                         except json.JSONDecodeError:
                             pass
                 except Exception:
-                    pass  # WebSocket closed normally
+                    pass
 
             await asyncio.gather(sender(), receiver())
 
@@ -186,37 +159,16 @@ class PipelineRunner:
         trajectory_type: str,
         messages: List[str],
     ) -> dict:
-        """
-        Send a list of messages through the pipeline and return an enriched record.
-
-        Returns:
-            {
-                "trajectory_type": str,
-                "conversation_id": str,
-                "collected_at": float,
-                "messages": [
-                    {
-                        "turn": int,
-                        "text": str,
-                        "message_id": str,
-                        "pipeline": {full admin/pipeline response}
-                    },
-                    ...
-                ]
-            }
-        """
+        """Send a list of messages through the pipeline and return an enriched record."""
         self._ensure_users()
         conv_id = self._create_conversation()
 
         logger.info(f"  Running {len(messages)} messages through pipeline...")
 
-        # Send messages and capture WebSocket analysis events
         analysis_events = asyncio.run(
             self._ws_send_and_capture(conv_id, messages)
         )
 
-        # Map message text → message_id via the analysis events
-        # Analysis events come back in order (same order as messages sent)
         enriched_messages = []
         for i, text in enumerate(messages):
             event = analysis_events[i] if i < len(analysis_events) else None
@@ -224,7 +176,6 @@ class PipelineRunner:
 
             pipeline_data = None
             if msg_id:
-                # Extra wait for persistence_service to write to DB
                 time.sleep(1.0)
                 pipeline_data = self._fetch_pipeline(msg_id)
 

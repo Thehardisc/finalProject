@@ -1,25 +1,10 @@
 #!/usr/bin/env bash
-#
-# run_qa.sh — run the emotion-engine QA suite.
-#
-# Usage:
-#   ./qa_suite/run_qa.sh              # fast offline tests (no docker stack needed)
-#   ./qa_suite/run_qa.sh offline      # same as default
-#   ./qa_suite/run_qa.sh slow         # big batteries: per-emotion corpus + ~950 fuzz
-#   ./qa_suite/run_qa.sh live         # live @e2e tests (needs stack up + .env)
-#   ./qa_suite/run_qa.sh all          # offline + live, excluding slow batteries
-#   ./qa_suite/run_qa.sh full         # EVERYTHING: offline + slow + live (~1000 cases)
-#   ./qa_suite/run_qa.sh calibrate    # derive/refresh thresholds from the battery
-#
-# Extra pytest args pass through, e.g.:  ./qa_suite/run_qa.sh offline -k emoji -v
-#
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-# Prefer the project venv if present.
 if [ -x "$ROOT/.venv/bin/python" ]; then
     PY="$ROOT/.venv/bin/python"
 else
@@ -29,7 +14,6 @@ fi
 load_env() {
     if [ -f "$ROOT/.env" ]; then
         set -a
-        # shellcheck disable=SC1091
         source "$ROOT/.env"
         set +a
         echo "[run_qa] loaded .env"
@@ -39,9 +23,6 @@ load_env() {
 }
 
 ensure_model() {
-    # If the trained meta-learner pkl is missing, copy it out of the running
-    # central_responder container so the 3 model-gated invariants run instead of
-    # skip. Falls back silently (suite still green) if the container/model isn't there.
     local m="$ROOT/central_responder_service/models/meta_weights.pkl"
     [ -f "$m" ] && return 0
     local cid

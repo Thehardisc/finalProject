@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Optional
+
 
 from shared.utils.logger import get_logger
 
@@ -27,6 +27,13 @@ def is_implicit_candidate(dominant_emotion, goe_scores, text, meta_confidence=1.
     return meta_confidence < IMPLICIT_LOW_CONF_THRESHOLD
 
 
+_POSITIVE_FAMILY = {"joy", "amusement", "excitement", "admiration", "approval", "caring",
+                    "gratitude", "love", "optimism", "pride", "relief", "desire"}
+_NEGATIVE_FAMILY = {"anger", "annoyance", "disappointment", "disapproval", "disgust",
+                    "sadness", "grief", "remorse", "fear", "nervousness", "embarrassment"}
+IMPLICIT_FLIP_MARGIN = float(os.environ.get("IMPLICIT_FLIP_MARGIN", "0.30"))
+
+
 def should_override(dominant_emotion, meta_confidence, impl_result):
     impl_conf = float(impl_result.get("confidence", 0))
     impl_emo  = impl_result.get("emotion", "neutral")
@@ -34,7 +41,12 @@ def should_override(dominant_emotion, meta_confidence, impl_result):
         return False
     if dominant_emotion == "neutral":
         return impl_conf > IMPLICIT_CONF_THRESHOLD
-    return impl_conf > (meta_confidence + IMPLICIT_LOW_CONF_MARGIN)
+    # Flipping valence polarity is drastic — demand a much larger margin than a
+    # same-family refinement.
+    flips = ((dominant_emotion in _POSITIVE_FAMILY and impl_emo in _NEGATIVE_FAMILY)
+             or (dominant_emotion in _NEGATIVE_FAMILY and impl_emo in _POSITIVE_FAMILY))
+    margin = IMPLICIT_FLIP_MARGIN if flips else IMPLICIT_LOW_CONF_MARGIN
+    return impl_conf > (meta_confidence + margin)
 
 
 async def request_implicit_emotion(redis, message_id, text, conv_history):

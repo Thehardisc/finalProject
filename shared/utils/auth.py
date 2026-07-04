@@ -5,18 +5,13 @@ from shared.utils.logger import get_logger
 
 logger = get_logger("shared.auth")
 
-# api key validation
-# Default key for internal use/local dev. 
-# In production, set INTERNAL_API_KEY environment variable.
 _raw_key = os.environ.get("INTERNAL_API_KEY")
 if not _raw_key:
     raise RuntimeError("INTERNAL_API_KEY environment variable is required but not set.")
 VALID_API_KEYS = _raw_key.split(",")
 
 async def validate_api_key(x_api_key: str = Header(None)):
-    """
-    FastAPI dependency to validate X-API-Key header.
-    """
+    """FastAPI dependency to validate X-API-Key header."""
     if not x_api_key:
         logger.warning("Request missing X-API-Key header")
         raise HTTPException(
@@ -35,35 +30,27 @@ async def validate_api_key(x_api_key: str = Header(None)):
 
 # rate limiter
 class RateLimiter:
-    """
-    Simple Redis-backed Fixed Window Rate Limiter.
-    """
+    """Simple Redis-backed Fixed Window Rate Limiter."""
     def __init__(self, redis_client, limit: int = 60, window: int = 60):
-        """
-        :param limit: Max requests allowed in the window.
-        :param window: Window size in seconds.
-        """
+        """:param limit: Max requests allowed in the window."""
         self.redis_client = redis_client
         self.limit = int(os.environ.get("RATE_LIMIT_MAX", limit))
         self.window = int(os.environ.get("RATE_LIMIT_WINDOW", window))
 
     async def is_allowed(self, identifier: str) -> bool:
-        """
-        Checks if the given identifier (e.g., API key or IP) is within limits.
-        """
+        """Checks if the given identifier (e.g., API key or IP) is within limits."""
         r = self.redis_client.redis
         if not r:
             logger.error("RateLimiter: Redis connection missing. Failing closed.")
             return False
         
-        # Key format: ratelimit:<identifier>:<window_bucket>
         bucket = int(time.time() // self.window)
         key = f"ratelimit:{identifier}:{bucket}"
         
         try:
             count = await r.incr(key)
             if count == 1:
-                await r.expire(key, self.window + 10) # 10s buffer
+                await r.expire(key, self.window + 10)
             
             if count > self.limit:
                 logger.warning(f"Rate limit exceeded for {identifier}: {count}/{self.limit}")

@@ -21,7 +21,6 @@ const TOKEN_COLORS = {
   'agreement': '#34d399', 'absolute': '#c084fc', 'default': 'rgba(255,255,255,0.82)',
 };
 
-// SVG icons for features — no emoji
 const FEATURE_ICONS = {
   emotion: (c) => (
     <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke={`rgb(${c})`} strokeWidth="1.6" strokeLinecap="round">
@@ -179,7 +178,6 @@ function DemoChat() {
       boxShadow: '0 24px 60px rgba(0,0,0,0.50)',
       animation: 'lp-float 6s ease-in-out infinite',
     }}>
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, paddingBottom: 12, borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
         <div style={{ width: 8, height: 8, borderRadius: '50%', background: '#4ade80', animation: 'lp-pulse 2s ease infinite' }} />
         <span style={{ fontSize: '0.70rem', fontWeight: 700, color: 'rgba(255,255,255,0.45)', letterSpacing: '.10em', textTransform: 'uppercase' }}>Live Analysis</span>
@@ -190,7 +188,6 @@ function DemoChat() {
         </div>
       </div>
 
-      {/* Messages */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 10, minHeight: 140 }}>
         {visible.map((msg) => {
           const emoColor = EMOTION_COLORS[msg.emotion] || EMOTION_COLORS.neutral;
@@ -220,7 +217,6 @@ function DemoChat() {
         })}
       </div>
 
-      {/* Mini stat strip */}
       <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', gap: 12 }}>
         {[['VADER', '#facc15'], ['BERT', '#60a5fa'], ['GoE', '#4ade80']].map(([label, color]) => (
           <div key={label} style={{ flex: 1, textAlign: 'center' }}>
@@ -250,14 +246,12 @@ export default function LandingPage({ onSignIn }) {
     <div style={{ minHeight: '100vh', background: '#05060F', color: '#fff', fontFamily: '"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif', overflowX: 'hidden' }}>
       <style>{INJECTED_CSS}</style>
 
-      {/* ── Background orbs ───────────────────────────────────────────────── */}
       <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
         <div style={{ position: 'absolute', width: 800, height: 800, borderRadius: '50%', top: -300, left: -250, background: 'radial-gradient(circle, rgba(79,40,210,0.42) 0%, transparent 70%)', filter: 'blur(100px)', animation: 'lp-orb1 22s ease-in-out infinite' }} />
         <div style={{ position: 'absolute', width: 700, height: 700, borderRadius: '50%', bottom: -200, right: -200, background: 'radial-gradient(circle, rgba(46,16,130,0.55) 0%, transparent 70%)', filter: 'blur(90px)', animation: 'lp-orb2 28s ease-in-out infinite' }} />
         <div style={{ position: 'absolute', width: 500, height: 500, borderRadius: '50%', top: '40%', right: '20%', background: 'radial-gradient(circle, rgba(109,40,217,0.18) 0%, transparent 70%)', filter: 'blur(80px)', animation: 'lp-orb3 18s ease-in-out infinite' }} />
       </div>
 
-      {/* ── Navbar ────────────────────────────────────────────────────────── */}
       <nav style={{
         position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100,
         padding: '0 48px',
@@ -291,11 +285,9 @@ export default function LandingPage({ onSignIn }) {
         </div>
       </nav>
 
-      {/* ── Hero ──────────────────────────────────────────────────────────── */}
       <section style={{ position: 'relative', zIndex: 1, minHeight: '100vh', display: 'flex', alignItems: 'center', padding: '100px 48px 80px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto', width: '100%', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 80, alignItems: 'center' }}>
 
-          {/* Left: copy */}
           <div style={{ animation: 'lp-fadeUp .7s ease both' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(109,40,217,0.15)', border: '1px solid rgba(139,92,246,0.30)', borderRadius: 99, padding: '5px 14px', marginBottom: 28 }}>
               <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#a78bfa', animation: 'lp-pulse 2s ease infinite' }} />
@@ -328,7 +320,6 @@ export default function LandingPage({ onSignIn }) {
               </button>
             </div>
 
-            {/* Social proof strip */}
             <div style={{ marginTop: 44, display: 'flex', gap: 28, flexWrap: 'wrap' }}>
               {STATS.map(s => (
                 <div key={s.label}>
@@ -339,14 +330,12 @@ export default function LandingPage({ onSignIn }) {
             </div>
           </div>
 
-          {/* Right: live chat preview */}
           <div style={{ display: 'flex', justifyContent: 'center', animation: 'lp-fadeUp .7s .2s ease both' }}>
             <DemoChat />
           </div>
         </div>
       </section>
 
-      {/* ── Features ──────────────────────────────────────────────────────── */}
       <section style={{ position: 'relative', zIndex: 1, padding: '80px 48px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 56 }}>
@@ -389,7 +378,6 @@ export default function LandingPage({ onSignIn }) {
         </div>
       </section>
 
-      {/* ── How it works ──────────────────────────────────────────────────── */}
       <section style={{ position: 'relative', zIndex: 1, padding: '80px 48px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 56 }}>
@@ -400,7 +388,6 @@ export default function LandingPage({ onSignIn }) {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 2, position: 'relative' }}>
             {STEPS.map((step, i) => (
               <div key={i} style={{ position: 'relative', padding: '32px 28px', animation: `lp-fadeUp .6s ${i * 0.15}s ease both` }}>
-                {/* Connector line */}
                 {i < 2 && (
                   <div style={{ position: 'absolute', top: 48, right: -1, width: 2, height: 24, background: 'linear-gradient(180deg, rgba(109,40,217,0.6), transparent)', borderRadius: 2 }} />
                 )}
@@ -421,7 +408,6 @@ export default function LandingPage({ onSignIn }) {
         </div>
       </section>
 
-      {/* ── Pipeline visualization ─────────────────────────────────────────── */}
       <section style={{ position: 'relative', zIndex: 1, padding: '80px 48px' }}>
         <div style={{ maxWidth: 1200, margin: '0 auto' }}>
           <div style={{ textAlign: 'center', marginBottom: 48 }}>
@@ -479,7 +465,6 @@ export default function LandingPage({ onSignIn }) {
         </div>
       </section>
 
-      {/* ── CTA ───────────────────────────────────────────────────────────── */}
       <section style={{ position: 'relative', zIndex: 1, padding: '80px 48px 120px' }}>
         <div style={{ maxWidth: 680, margin: '0 auto', textAlign: 'center' }}>
           <div style={{
@@ -506,7 +491,6 @@ export default function LandingPage({ onSignIn }) {
         </div>
       </section>
 
-      {/* ── Footer ────────────────────────────────────────────────────────── */}
       <footer style={{ position: 'relative', zIndex: 1, padding: '24px 48px', borderTop: '1px solid rgba(255,255,255,0.07)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <div style={{ width: 22, height: 22, borderRadius: 7, background: 'linear-gradient(135deg,#7c3aed,#4338ca)' }} />

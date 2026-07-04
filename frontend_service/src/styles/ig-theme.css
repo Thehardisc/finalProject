@@ -1,24 +1,20 @@
-/* ig-theme.css — light/dark token set for the chat (IGDashboard).
-   Scoped to the chat root via [data-ig-theme]; variables cascade to all
-   nested surfaces + modals so inline styles can use var(--ig-*). */
 
 [data-ig-theme="light"] {
-  --ig-bg:      #ffffff;   /* page background */
-  --ig-surf:    #ffffff;   /* sidebar / header / chat / modal surfaces */
-  --ig-surf2:   #f3f4f6;   /* secondary surface (search, pills, hover-active) */
-  --ig-surf3:   #f9fafb;   /* subtle surface (cards, row hover) */
-  --ig-bord:    #efefef;   /* default border / divider */
-  --ig-bord2:   #e5e7eb;   /* stronger border / toggle-off track */
-  --ig-txt:     #1c1c2e;   /* primary text */
-  --ig-txt2:    #6b7280;   /* secondary text */
-  --ig-txt3:    #9ca3af;   /* muted text */
-  --ig-bub-in:  #f0f0f0;   /* incoming message bubble */
-  --ig-knob:    #ffffff;   /* toggle knob */
+  --ig-bg:      #ffffff;
+  --ig-surf:    #ffffff;
+  --ig-surf2:   #f3f4f6;
+  --ig-surf3:   #f9fafb;
+  --ig-bord:    #efefef;
+  --ig-bord2:   #e5e7eb;
+  --ig-txt:     #1c1c2e;
+  --ig-txt2:    #6b7280;
+  --ig-txt3:    #9ca3af;
+  --ig-bub-in:  #f0f0f0;
+  --ig-knob:    #ffffff;
 
-  /* Emotional Signal rail — "ink" rgb (text/borders) flips per theme */
   --ig-ink-rgb: 28, 28, 46;
-  --ig-rail-bg: #f7f8fa;   /* analysis rail surface */
-  --ig-surf-rgb: 255, 255, 255;  /* surface rgb for frosted/glass alpha */
+  --ig-rail-bg: #f7f8fa;
+  --ig-surf-rgb: 255, 255, 255;
 }
 
 [data-ig-theme="dark"] {
@@ -34,14 +30,11 @@
   --ig-bub-in:  #20242f;
   --ig-knob:    #e9ebf2;
 
-  --ig-ink-rgb: 230, 232, 240;   /* near-white ink in dark */
-  --ig-rail-bg: #0e0b20;         /* signature deep-purple rail */
-  --ig-surf-rgb: 20, 23, 31;     /* surface rgb for frosted/glass alpha */
+  --ig-ink-rgb: 230, 232, 240;
+  --ig-rail-bg: #0e0b20;
+  --ig-surf-rgb: 20, 23, 31;
 }
 
-/* Dark rail also re-points the shared design-system tokens so token-based
-   panels (EmotionIntelligencePanel, etc.) follow the chat theme. Scoped to the
-   chat subtree only — other views (no data-ig-theme) are unaffected. */
 [data-ig-theme="dark"] {
   --text-primary:   #e9ebf2;
   --text-secondary: #9aa3b5;
@@ -58,8 +51,6 @@
   --bg-overlay:   rgba(10, 12, 18, 0.92);
 }
 
-/* Glass cards / tabs (CrystalGlass-v2) follow the dark chat theme when an
-   ancestor sets data-ig-theme="dark" (e.g. the Analytics page). */
 [data-ig-theme="dark"] .analytics-layer,
 [data-ig-theme="dark"] .crystal-card,
 [data-ig-theme="dark"] .crystal-panel {

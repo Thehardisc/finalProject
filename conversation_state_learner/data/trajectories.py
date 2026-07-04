@@ -1,16 +1,4 @@
-"""
-Emotional arc templates for demo conversation generation.
-
-Each trajectory defines:
-  - type:        machine-readable identifier (used as JSONL key)
-  - description: what this arc represents emotionally
-  - arc:         ordered list of dominant emotions per phase
-  - length:      target message count (8-14)
-  - prompt:      instruction injected into the Claude generation prompt
-  - count:       how many distinct conversations to generate per trajectory
-
-Designed to cover the full GoEmotions-28 label space across trajectories.
-"""
+"""Emotional arc templates for demo conversation generation."""
 
 TRAJECTORIES = [
     {

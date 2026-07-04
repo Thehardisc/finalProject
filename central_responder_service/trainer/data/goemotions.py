@@ -14,8 +14,8 @@ logger = get_logger("trainer")
 
 MODEL_PATH = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"))
 
-_GOE_DIRECT_PER_CLASS   = 400    # capped from 1000 — reduces circular-labeling contamination
-_GOE_DIRECT_CACHE_ID    = "goemotions_direct_v4"   # bumped to force cache invalidation
+_GOE_DIRECT_PER_CLASS   = 400
+_GOE_DIRECT_CACHE_ID    = "goemotions_direct_v4"
 
 
 def extract_goemotions_direct_features(
@@ -59,13 +59,12 @@ def extract_goemotions_direct_features(
         logger.warning(f"[GoEDirect] Could not load GoEmotions dataset: {e} — skipping.")
         return empty, [], []
 
-    # Dataset label names (28 GoEmotions classes, may differ in order from EMOTION_LABELS)
     id2label = ds_val.features["labels"].feature.int2str
 
     per_class: dict = {lbl: [] for lbl in EMOTION_LABELS}
     for row in list(ds_train) + list(ds_val) + list(ds_test):
         if len(row["labels"]) != 1:
-            continue   # skip multi-label rows
+            continue
         label_str = id2label(row["labels"][0])
         if label_str in per_class and len(per_class[label_str]) < _GOE_DIRECT_PER_CLASS:
             per_class[label_str].append(row["text"])

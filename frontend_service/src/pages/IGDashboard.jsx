@@ -1,17 +1,14 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { EmotionPalette } from '../components/EmotionPalette';
-import { getEmotionCSSVars } from '../utils/emotionColorUtils';
-import { EMOTION_COLOR_CONFIG as CFG } from '../utils/emotionColorConfig';
-import AnalysisDrawer        from '../components/AnalysisDrawer';
-import DemoRunner            from '../components/DemoRunner';
-import PixelFace, { toEkman } from '../components/PixelFace';
-import EmotionArcChart       from '../components/EmotionArcChart';
-import CDMStateGraph         from '../components/CDMStateGraph';
-import AmbientOrb            from '../components/AmbientOrb';
-import TelemetryPanel        from '../components/TelemetryPanel';
-import PlutchikWheel         from '../visualizations/PlutchikWheel';
-import EmotionIntelligencePanel from '../components/EmotionIntelligencePanel';
+import AnalysisDrawer from '../components/AnalysisDrawer';
+import AiDemo from '../components/AiDemo';
+import PixelFace from '../components/PixelFace';
+import EmotionArcChart from '../components/EmotionArcChart';
+import CDMStateGraph from '../components/CDMStateGraph';
+import AmbientOrb from '../components/AmbientOrb';
+import TelemetryPanel from '../components/TelemetryPanel';
+import PlutchikWheel from '../visualizations/PlutchikWheel';
 import '../styles/ig-theme.css';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8001';
@@ -61,175 +58,6 @@ function timeAgo(id) {
   return `${Math.floor(diff / 86400000)}d`;
 }
 
-function buildDemoMessages(myName, otherName) {
-  return [
-    {
-      id: 'demo-1', sender: 'ai', senderName: otherName,
-      text: "Sure, totally fine with that 🙄",
-      analysis: {
-        type: 'analysis',
-        data: {
-          id: 'demo-1', raw_text: "Sure, totally fine with that 🙄",
-          final_dominant_emotion: 'annoyance', final_valence: -0.42,
-          meta_confidence: 0.81, sarcasm_score: 0.91,
-          bert_emotions: [
-            { label: 'annoyance',   score: 0.48 },
-            { label: 'disgust',     score: 0.22 },
-            { label: 'disapproval', score: 0.15 },
-            { label: 'neutral',     score: 0.10 },
-            { label: 'joy',         score: 0.05 },
-          ],
-          logic_map: { VADER: 0.17, BERT: 0.33, GoEmotions: 0.43, Context: 0.07 },
-          gate_weights_alpha: [0.19, 0.34, 0.47],
-          ekman_group: 'disgust',
-          context_snapshot: {
-            cur_valence: -0.42, prev_emotion: 'neutral',
-            topic_resonance: 0.31, volatility: 0.72, ce_available: true,
-            cdm_current_state: 'CONFLICT_RISE', cdm_entry_abruptness: 0.68, cdm_residency: 0.14,
-          },
-          lstm_trajectory: {
-            model_available: true, top_predicted: 'disgust',
-            predicted_next: { disgust: 0.38, annoyance: 0.29, disapproval: 0.18, anger: 0.09, neutral: 0.06 },
-          },
-          dynamics:  { inertia: 0.62,  contagion: -0.35 },
-          appraisal: { novelty: 0.72, goal_congruence: -0.58, coping: 0.28 },
-        },
-      },
-    },
-    {
-      id: 'demo-2', sender: 'user', senderName: myName,
-      text: "Wait, are you being sarcastic right now?",
-      analysis: {
-        type: 'analysis',
-        data: {
-          id: 'demo-2', raw_text: "Wait, are you being sarcastic right now?",
-          final_dominant_emotion: 'confusion', final_valence: -0.18,
-          meta_confidence: 0.74, sarcasm_score: 0.12,
-          bert_emotions: [
-            { label: 'confusion',   score: 0.44 },
-            { label: 'nervousness', score: 0.26 },
-            { label: 'surprise',    score: 0.18 },
-            { label: 'neutral',     score: 0.08 },
-            { label: 'anger',       score: 0.04 },
-          ],
-          logic_map: { VADER: 0.18, BERT: 0.32, GoEmotions: 0.42, Context: 0.08 },
-          gate_weights_alpha: [0.21, 0.37, 0.42],
-          ekman_group: 'surprise',
-          context_snapshot: {
-            cur_valence: -0.30, prev_emotion: 'annoyance',
-            topic_resonance: 0.28, volatility: 0.65, ce_available: true,
-            cdm_current_state: 'TENSION', cdm_entry_abruptness: 0.55, cdm_residency: 0.20,
-          },
-          lstm_trajectory: {
-            model_available: true, top_predicted: 'anger',
-            predicted_next: { anger: 0.31, annoyance: 0.27, disgust: 0.22, fear: 0.12, neutral: 0.08 },
-          },
-          dynamics:  { inertia: 0.45,  contagion: 0.58 },
-          appraisal: { novelty: 0.65, goal_congruence: -0.30, coping: 0.42 },
-        },
-      },
-    },
-    {
-      id: 'demo-3', sender: 'ai', senderName: otherName,
-      text: "Yes I was. I'm sorry — I've been stressed and that wasn't fair to you.",
-      analysis: {
-        type: 'analysis',
-        data: {
-          id: 'demo-3', raw_text: "Yes I was. I'm sorry — I've been stressed and that wasn't fair to you.",
-          final_dominant_emotion: 'remorse', final_valence: -0.28,
-          meta_confidence: 0.88, sarcasm_score: 0.04,
-          bert_emotions: [
-            { label: 'remorse',      score: 0.52 },
-            { label: 'sadness',      score: 0.24 },
-            { label: 'caring',       score: 0.12 },
-            { label: 'neutral',      score: 0.07 },
-            { label: 'nervousness',  score: 0.05 },
-          ],
-          logic_map: { VADER: 0.22, BERT: 0.35, GoEmotions: 0.38, Context: 0.05 },
-          gate_weights_alpha: [0.25, 0.39, 0.36],
-          ekman_group: 'sadness',
-          context_snapshot: {
-            cur_valence: -0.20, prev_emotion: 'confusion',
-            topic_resonance: 0.44, volatility: 0.58, ce_available: true,
-            cdm_current_state: 'REPAIR', cdm_entry_abruptness: 0.40, cdm_residency: 0.25,
-          },
-          lstm_trajectory: {
-            model_available: true, top_predicted: 'caring',
-            predicted_next: { caring: 0.35, relief: 0.25, gratitude: 0.20, joy: 0.12, neutral: 0.08 },
-          },
-          dynamics:  { inertia: -0.28, contagion: -0.18 },
-          appraisal: { novelty: 0.55, goal_congruence: 0.42, coping: 0.61 },
-        },
-      },
-    },
-    {
-      id: 'demo-4', sender: 'user', senderName: myName,
-      text: "Thank you for saying that. I appreciate your honesty.",
-      analysis: {
-        type: 'analysis',
-        data: {
-          id: 'demo-4', raw_text: "Thank you for saying that. I appreciate your honesty.",
-          final_dominant_emotion: 'gratitude', final_valence: 0.61,
-          meta_confidence: 0.91, sarcasm_score: 0.03,
-          bert_emotions: [
-            { label: 'gratitude',   score: 0.56 },
-            { label: 'relief',      score: 0.22 },
-            { label: 'caring',      score: 0.12 },
-            { label: 'joy',         score: 0.07 },
-            { label: 'approval',    score: 0.03 },
-          ],
-          logic_map: { VADER: 0.30, BERT: 0.25, GoEmotions: 0.38, Context: 0.07 },
-          gate_weights_alpha: [0.31, 0.30, 0.39],
-          ekman_group: 'joy',
-          context_snapshot: {
-            cur_valence: 0.20, prev_emotion: 'remorse',
-            topic_resonance: 0.60, volatility: 0.42, ce_available: true,
-            cdm_current_state: 'RECOVERY', cdm_entry_abruptness: 0.30, cdm_residency: 0.30,
-          },
-          lstm_trajectory: {
-            model_available: true, top_predicted: 'joy',
-            predicted_next: { joy: 0.38, optimism: 0.28, relief: 0.18, caring: 0.10, gratitude: 0.06 },
-          },
-          dynamics:  { inertia: 0.22,  contagion: 0.71 },
-          appraisal: { novelty: 0.32, goal_congruence: 0.78, coping: 0.82 },
-        },
-      },
-    },
-    {
-      id: 'demo-5', sender: 'ai', senderName: otherName,
-      text: "Me too. Let's start fresh — want to grab coffee tomorrow? ☕",
-      analysis: {
-        type: 'analysis',
-        data: {
-          id: 'demo-5', raw_text: "Me too. Let's start fresh — want to grab coffee tomorrow? ☕",
-          final_dominant_emotion: 'optimism', final_valence: 0.72,
-          meta_confidence: 0.87, sarcasm_score: 0.02,
-          bert_emotions: [
-            { label: 'optimism',  score: 0.38 },
-            { label: 'relief',    score: 0.28 },
-            { label: 'approval',  score: 0.18 },
-            { label: 'gratitude', score: 0.10 },
-            { label: 'joy',       score: 0.06 },
-          ],
-          logic_map: { VADER: 0.25, BERT: 0.28, GoEmotions: 0.37, Context: 0.10 },
-          gate_weights_alpha: [0.27, 0.32, 0.41],
-          ekman_group: 'joy',
-          context_snapshot: {
-            cur_valence: 0.72, prev_emotion: 'caring',
-            topic_resonance: 0.71, volatility: 0.34, ce_available: true,
-            cdm_current_state: 'RESOLUTION', cdm_entry_abruptness: 0.22, cdm_residency: 0.41,
-          },
-          lstm_trajectory: {
-            model_available: true, top_predicted: 'joy',
-            predicted_next: { joy: 0.36, optimism: 0.28, excitement: 0.18, relief: 0.11, gratitude: 0.07 },
-          },
-          dynamics:  { inertia: 0.48,  contagion: 0.84 },
-          appraisal: { novelty: 0.28, goal_congruence: 0.86, coping: 0.91 },
-        },
-      },
-    },
-  ];
-}
 
 // ── Avatar ─────────────────────────────────────────────────────────────────────
 
@@ -276,9 +104,6 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, showTimestam
   const confidence   = msg.analysis?.data?.meta_confidence;
   const timeLabel    = showTimestamp ? formatMsgTime(msg.timestamp) : null;
 
-  // Flat bubbles: a slightly-elevated neutral surface (var(--ig-bub-in) — visible
-  // against both the dark and light chat backgrounds) with a thin emotion-coloured
-  // outline on BOTH members' bubbles. No gradient fill.
   const lineColor = domRgb ? `rgb(${domRgb})` : 'var(--ig-bord2)';
 
   return (
@@ -549,7 +374,6 @@ function EmotionalArcStrip({ messages, onSelectMsg }) {
   );
 }
 
-// ── LiveAnalysisPanel ──────────────────────────────────────────────────────────
 
 const SECT = {
   fontSize: '0.58rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.38)',
@@ -606,7 +430,6 @@ function AnalysisWaiting() {
   ];
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '16px 14px', boxSizing: 'border-box' }}>
-      {/* PlutchikWheel instead of emoji orb */}
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginBottom: 18 }}>
         <div style={{ width: 88, height: 88, opacity: 0.40, '--accent-primary': 'rgba(139,92,246,0.75)', '--glass-border': 'rgba(var(--ig-ink-rgb),0.14)' }}>
           <PlutchikWheel dominantEmotion="neutral" />
@@ -697,21 +520,17 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
   return (
     <div style={{ padding: '14px 14px 20px', overflowY: 'auto', flex: 1, minHeight: 0, boxSizing: 'border-box' }}>
 
-      {/* Ambient orb — emotion-reactive glow behind the rail (fixed, bottom-right) */}
       {showOrb && <AmbientOrb valence={valence} volatility={snap?.volatility ?? 0} />}
 
-      {/* ── Emotion Card ─────────────────────────────────────────────────── */}
       <div style={{
         background: `rgba(${rgb},0.08)`,
         border: `1px solid rgba(${rgb},0.22)`,
         borderRadius: 16, padding: '14px 14px 12px',
         marginBottom: 12, position: 'relative', overflow: 'hidden',
       }}>
-        {/* Ambient glow blob */}
         <div style={{ position: 'absolute', right: -20, top: -20, width: 80, height: 80, borderRadius: '50%', background: `radial-gradient(circle, rgba(${rgb},0.25) 0%, transparent 70%)`, filter: 'blur(20px)', pointerEvents: 'none' }} />
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          {/* PixelFace — pixel-art face expressing the detected Ekman emotion */}
           <div style={{ flexShrink: 0, lineHeight: 0 }}>
             <PixelFace emotion={dom} scale={4} showLabel={false} />
           </div>
@@ -725,12 +544,10 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
           </div>
         </div>
 
-        {/* Confidence bar */}
         <div style={{ height: 4, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.08)', overflow: 'hidden' }}>
           <div style={{ height: '100%', width: `${confPct}%`, background: `rgba(${rgb},0.75)`, borderRadius: 3, transition: 'width .5s ease', boxShadow: `0 0 8px rgba(${rgb},0.40)` }} />
         </div>
 
-        {/* Badges row */}
         <div style={{ display: 'flex', gap: 5, marginTop: 8, flexWrap: 'wrap' }}>
           {data?.ekman_group && (
             <span style={{ fontSize: '0.60rem', fontWeight: 600, background: 'rgba(var(--ig-ink-rgb),0.07)', color: 'rgba(var(--ig-ink-rgb),0.50)', borderRadius: 5, padding: '2px 7px' }}>
@@ -750,7 +567,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         </div>
       </div>
 
-      {/* ── Sentiment Breakdown ───────────────────────────────────────────── */}
       {topBert.length > 0 && (
         <>
           <div style={SECT}>Emotion breakdown</div>
@@ -760,7 +576,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
               return <Bar key={label} value={score} max={1} color={eRgb} label={label} right={score.toFixed(2)} />;
             })}
           </div>
-          {/* EmotionArcChart — valence trajectory across conversation */}
           {valenceHistory.length >= 2 && (
             <div style={{ marginBottom: 10 }}>
               <div style={{ fontSize: '0.55rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.28)', letterSpacing: '.10em', textTransform: 'uppercase', marginBottom: 5 }}>
@@ -773,7 +588,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         </>
       )}
 
-      {/* ── Trajectory ───────────────────────────────────────────────────── */}
       {showTrajectory && traj?.model_available && topPredicted && (
         <>
           <div style={SECT}>Trajectory prediction</div>
@@ -803,10 +617,8 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         </>
       )}
 
-      {/* ── CDM State — CDMStateGraph from git ───────────────────────────── */}
       {snap && (
         <>
-          {/* Override light-theme text colors for dark context */}
           <style>{`.cdm-dark span[style*="374151"]{color:rgba(var(--ig-ink-rgb),.55)!important}.cdm-dark div[style*="rgba(0,0,0,.07)"]{background:rgba(var(--ig-ink-rgb),.08)!important}`}</style>
           <div className="cdm-dark" style={{ marginBottom: 10 }}>
             <CDMStateGraph snapshot={snap} />
@@ -815,7 +627,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         </>
       )}
 
-      {/* ── VAD + Dynamics ───────────────────────────────────────────────── */}
       <div style={SECT}>Affective dimensions</div>
       <div style={{ marginBottom: 12 }}>
         <BipolarBar value={valence}   label="Valence" />
@@ -830,7 +641,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         )}
       </div>
 
-      {/* ── Appraisal ────────────────────────────────────────────────────── */}
       {(appr.novelty != null || appr.goal_congruence != null || appr.coping != null) && (
         <>
           <div style={DIVIDER} />
@@ -843,7 +653,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         </>
       )}
 
-      {/* ── Gate weights ─────────────────────────────────────────────────── */}
       {pipelineVerbose && gateWeights && gateWeights.length >= 3 && (
         <>
           <div style={DIVIDER} />
@@ -871,7 +680,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
         </>
       )}
 
-      {/* ── Logic map fallback ───────────────────────────────────────────── */}
       {pipelineVerbose && !gateWeights && data?.logic_map && Object.keys(data.logic_map).length > 0 && (
         <>
           <div style={DIVIDER} />
@@ -885,7 +693,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
   );
 }
 
-// ── Living Aura ────────────────────────────────────────────────────────────────
 
 // ── Main Dashboard ─────────────────────────────────────────────────────────────
 
@@ -914,7 +721,6 @@ export default function IGDashboard({
   processing = false,
   partialModels = new Set(),
   onRegenerateAnalysis,
-  onInjectDemo,
   regeneratingIds = new Set(),
   socketRef,
   onDemoStart,
@@ -938,10 +744,10 @@ export default function IGDashboard({
     localStorage.setItem('ig_settings', JSON.stringify(next));
     return next;
   });
-  useEffect(() => {   // "Analysis panel" setting applies immediately (button still overrides per-session)
+  useEffect(() => {
     if (settings.showAnalysisPanel != null) setRightPanelOpen(settings.showAnalysisPanel);
   }, [settings.showAnalysisPanel]);
-  const igTheme = settings.theme === 'dark' ? 'dark' : 'light';  // chat light/dark mode (default light)
+  const igTheme = settings.theme === 'dark' ? 'dark' : 'light';
 
   const messagesContainerRef = useRef(null);
   const inputRef             = useRef(null);
@@ -981,7 +787,12 @@ export default function IGDashboard({
     setCrisisDismissed(false);
   }, [activeConversationId]);
 
+  // Demo mode (admin): sidebar shows only AI-demo chats; normal mode hides them.
+  const demoMode   = currentUser?.role === 'admin' && (settings.demoMode ?? false);
+  const isDemoConv = (c) => c.type === 'group' && (c.name || '').startsWith('AI Demo:');
+
   const filteredConvs = conversations.filter(c => {
+    if (demoMode ? !isDemoConv(c) : isDemoConv(c)) return false;
     const label = c.type === 'group' ? c.name : c.other_display_name;
     return label?.toLowerCase().includes(search.toLowerCase());
   });
@@ -999,6 +810,13 @@ export default function IGDashboard({
   const [rightPanelOpen, setRightPanelOpen] = useState(() => settings.showAnalysisPanel ?? true);
 
   const convLabel  = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
+
+  // Toggling demo mode deselects a conversation that belongs to the other view.
+  useEffect(() => {
+    if (activeConv && (demoMode ? !isDemoConv(activeConv) : isDemoConv(activeConv))) {
+      onSelectConversation(null);
+    }
+  }, [demoMode]);
   const activeLabel = activeConv ? convLabel(activeConv) : '';
 
   const isCrisis = (() => {
@@ -1033,7 +851,6 @@ export default function IGDashboard({
       fontFamily: '-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif',
     }}>
 
-      {/* ── Compose Modal ──────────────────────────────────────────────── */}
       <AnimatePresence>
       {showCompose && (
         <motion.div
@@ -1084,7 +901,6 @@ export default function IGDashboard({
       )}
       </AnimatePresence>
 
-      {/* ── Group Modal ─────────────────────────────────────────────────── */}
       {showGroupModal && (
         <GroupModal
           globalUsers={globalUsers}
@@ -1095,7 +911,6 @@ export default function IGDashboard({
         />
       )}
 
-      {/* ── Settings Modal ───────────────────────────────────────────────── */}
       <AnimatePresence>
       {showSettings && (
         <motion.div
@@ -1110,7 +925,6 @@ export default function IGDashboard({
             exit={{ opacity: 0, scale: 0.94, y: 6 }}
             transition={{ type: 'spring', stiffness: 340, damping: 26 }}
             onClick={e => e.stopPropagation()} style={{ background: 'var(--ig-surf)', border: '1px solid var(--ig-bord)', borderRadius: 20, width: 420, maxWidth: '90vw', boxShadow: '0 12px 40px rgba(0,0,0,.12)', overflow: 'hidden' }}>
-            {/* Header */}
             <div style={{ padding: '20px 24px 16px', borderBottom: '1px solid var(--ig-bord)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div style={{ width: 32, height: 32, borderRadius: 9, background: 'rgba(109,40,217,0.08)', border: '1px solid rgba(109,40,217,0.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#7c3aed' }}>
@@ -1121,9 +935,7 @@ export default function IGDashboard({
               <button onClick={() => setShowSettings(false)} style={{ background: 'var(--ig-surf2)', border: '1px solid var(--ig-bord)', borderRadius: '50%', width: 30, height: 30, color: 'var(--ig-txt2)', cursor: 'pointer', fontSize: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>×</button>
             </div>
 
-            {/* Settings rows */}
             <div style={{ padding: '8px 0 16px' }}>
-              {/* Appearance — force light / dark theme */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 24px' }}>
                 <div>
                   <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ig-txt)' }}>Appearance</div>
@@ -1151,6 +963,9 @@ export default function IGDashboard({
                 { key: 'showTimestamps',    label: 'Message timestamps', sub: 'Display send time below each message', default: false },
                 { key: 'showConfidence',    label: 'Confidence scores', sub: 'Show meta-learner confidence % on each message', default: true },
                 { key: 'ambientOrb',        label: 'Ambient orb', sub: 'Emotion-reactive background color in the analysis panel', default: true },
+                ...(currentUser?.role === 'admin'
+                  ? [{ key: 'demoMode', label: 'Demo mode', sub: 'Show the AI demo launcher in the chat header (admin only)', default: false }]
+                  : []),
               ].map(row => {
                 const val = settings[row.key] ?? row.default;
                 return (
@@ -1163,7 +978,6 @@ export default function IGDashboard({
                       <div style={{ fontSize: '0.88rem', fontWeight: 600, color: 'var(--ig-txt)' }}>{row.label}</div>
                       <div style={{ fontSize: '0.72rem', color: 'var(--ig-txt2)', marginTop: 2 }}>{row.sub}</div>
                     </div>
-                    {/* Toggle pill */}
                     <div style={{ width: 40, height: 22, borderRadius: 11, background: val ? '#6d28d9' : 'var(--ig-bord2)', border: `1px solid ${val ? 'rgba(109,40,217,0.60)' : '#d1d5db'}`, position: 'relative', flexShrink: 0, transition: 'all .18s', marginLeft: 16 }}>
                       <div style={{ position: 'absolute', top: 2, left: val ? 20 : 2, width: 16, height: 16, borderRadius: '50%', background: 'var(--ig-knob)', transition: 'left .18s', boxShadow: '0 1px 4px rgba(0,0,0,.20)' }} />
                     </div>
@@ -1201,10 +1015,8 @@ export default function IGDashboard({
       )}
       </AnimatePresence>
 
-      {/* ── Left Sidebar ─────────────────────────────────────────────────── */}
       <div style={{ width: 320, borderRight: '1px solid var(--ig-bord)', display: 'flex', flexDirection: 'column', background: 'var(--ig-surf)', flexShrink: 0 }}>
 
-        {/* Header */}
         <div style={{ padding: '18px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div ref={profileMenuRef} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', position: 'relative' }}
             onClick={() => setShowProfileMenu(p => !p)}
@@ -1254,7 +1066,9 @@ export default function IGDashboard({
             </AnimatePresence>
           </div>
 
-          <div style={{ display: 'flex', gap: 4 }}>
+          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+            {demoMode && onDemoStart && <AiDemo onDemoStart={onDemoStart} />}
+            {!demoMode && (<>
             <button onClick={() => setShowCompose(true)} title="New Message"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
               onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
@@ -1269,6 +1083,7 @@ export default function IGDashboard({
             >
               <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </button>
+            </>)}
             <button onClick={() => setShowSettings(true)} title="Settings"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
               onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
@@ -1279,7 +1094,6 @@ export default function IGDashboard({
           </div>
         </div>
 
-        {/* Search */}
         <div style={{ padding: '0 12px 10px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--ig-surf2)', borderRadius: 10, padding: '8px 12px' }}>
             <svg width="14" height="14" fill="none" stroke="#9ca3af" strokeWidth="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
@@ -1288,7 +1102,6 @@ export default function IGDashboard({
           </div>
         </div>
 
-        {/* Status */}
         <div style={{ padding: '0 16px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontWeight: 700, fontSize: '0.75rem', color: 'var(--ig-txt3)', textTransform: 'uppercase', letterSpacing: '.08em' }}>Conversations</span>
           <span style={{ fontSize: '0.72rem', color: status === 'Live' ? '#16a34a' : '#9ca3af', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1297,15 +1110,18 @@ export default function IGDashboard({
           </span>
         </div>
 
-        {/* Conversation list */}
         <div style={{ flex: 1, overflowY: 'auto' }}>
           {filteredConvs.length === 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 20px', gap: 10, color: 'var(--ig-txt3)' }}>
-              <div style={{ fontSize: '1.8rem', opacity: 0.4 }}>💬</div>
-              <p style={{ margin: 0, fontSize: '0.85rem', textAlign: 'center' }}>No conversations yet.</p>
-              <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 18px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
-                Start chatting
-              </button>
+              <div style={{ fontSize: '1.8rem', opacity: 0.4 }}>{demoMode ? '✨' : '💬'}</div>
+              <p style={{ margin: 0, fontSize: '0.85rem', textAlign: 'center' }}>
+                {demoMode ? 'No AI demo chats yet. Use ✨ AI Demo above to generate one.' : 'No conversations yet.'}
+              </p>
+              {!demoMode && (
+                <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 10, padding: '9px 18px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}>
+                  Start chatting
+                </button>
+              )}
             </div>
           )}
           {filteredConvs.map(conv => {
@@ -1357,7 +1173,7 @@ export default function IGDashboard({
           })}
         </div>
 
-        {/* Footer */}
+        {!demoMode && (
         <div style={{ padding: '10px 12px', borderTop: '1px solid var(--ig-bord)' }}>
           <button onClick={() => setShowCompose(true)} style={{
             width: '100%', background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none',
@@ -1369,15 +1185,14 @@ export default function IGDashboard({
             New Message
           </button>
         </div>
+        )}
       </div>
 
-      {/* ── Center: Chat ──────────────────────────────────────────────────── */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden', position: 'relative' }}>
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'hidden' }}>
         {!activeConversationId ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', overflowY: 'auto', padding: '32px 24px' }}>
-            {/* Hero */}
             <div style={{ textAlign: 'center', marginBottom: 36 }}>
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, background: 'rgba(109,40,217,0.06)', border: '1px solid rgba(109,40,217,0.15)', borderRadius: 99, padding: '4px 14px', marginBottom: 18 }}>
                 <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#16a34a', animation: 'pulse 2s ease infinite' }} />
@@ -1385,13 +1200,16 @@ export default function IGDashboard({
               </div>
               <h2 style={{ margin: '0 0 10px', fontSize: '1.6rem', fontWeight: 800, color: 'var(--ig-txt)', letterSpacing: '-0.02em' }}>Emotion intelligence, live.</h2>
               <p style={{ margin: '0 0 24px', fontSize: '0.90rem', color: 'var(--ig-txt2)', maxWidth: 400, lineHeight: 1.6 }}>
-                Select a conversation or start a new one. Every message flows through 4 parallel ML models in under a second.
+                {demoMode
+                  ? 'Demo mode — generate an AI conversation and watch the pipeline analyze it live.'
+                  : 'Select a conversation or start a new one. Every message flows through 4 parallel ML models in under a second.'}
               </p>
-              <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 12, padding: '12px 32px', cursor: 'pointer', fontWeight: 700, fontSize: '0.92rem', boxShadow: '0 4px 20px rgba(109,40,217,0.30)', transition: 'all .2s', fontFamily: 'inherit' }}>
-                New Conversation →
-              </button>
+              {!demoMode && (
+                <button onClick={() => setShowCompose(true)} style={{ background: 'linear-gradient(135deg,#4c1d95,#6d28d9)', color: '#fff', border: 'none', borderRadius: 12, padding: '12px 32px', cursor: 'pointer', fontWeight: 700, fontSize: '0.92rem', boxShadow: '0 4px 20px rgba(109,40,217,0.30)', transition: 'all .2s', fontFamily: 'inherit' }}>
+                  New Conversation →
+                </button>
+              )}
             </div>
-            {/* Feature cards */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, maxWidth: 580, width: '100%' }}>
               {[
                 { svg: <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>, label: 'Emotion Detection', desc: '28 GoEmotions classes + 7 Ekman categories fused by a trained meta-learner', color: '124,58,237' },
@@ -1406,7 +1224,6 @@ export default function IGDashboard({
                 </div>
               ))}
             </div>
-            {/* Pipeline strip */}
             <div style={{ marginTop: 24, display: 'flex', alignItems: 'center', gap: 0, flexWrap: 'wrap', justifyContent: 'center' }}>
               {['VADER', '→', 'BERT', '→', 'GoE', '→', 'Context', '→', 'Meta'].map((n, i) => (
                 <span key={i} style={{ fontSize: '0.65rem', fontWeight: n === '→' ? 400 : 700, color: n === '→' ? '#d1d5db' : '#6b7280', padding: n === '→' ? '0 4px' : '3px 8px', background: n === '→' ? 'none' : '#f3f4f6', borderRadius: 6, letterSpacing: '.04em' }}>{n}</span>
@@ -1416,7 +1233,6 @@ export default function IGDashboard({
           </div>
         ) : (
           <>
-            {/* Chat header */}
             <div style={{ position: 'relative', borderBottom: '1px solid var(--ig-bord)', flexShrink: 0, background: 'var(--ig-surf)' }}>
             <div style={{ padding: '11px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1439,18 +1255,6 @@ export default function IGDashboard({
                     👥 Members
                   </button>
                 )}
-                {socketRef && onDemoStart && (
-                  <DemoRunner currentUser={currentUser} socketRef={socketRef} onDemoStart={onDemoStart} />
-                )}
-                {onInjectDemo && (
-                  <button
-                    onClick={() => onInjectDemo(buildDemoMessages(currentUser.display_name, activeLabel || 'Other'))}
-                    title="Inject demo conversation"
-                    style={{ background: 'none', border: '1px solid var(--ig-bord)', borderRadius: 8, padding: '5px 10px', cursor: 'pointer', fontSize: '0.70rem', color: 'var(--ig-txt2)', fontWeight: 500, transition: 'all .12s' }}
-                    onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
-                    onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
-                  >⚗ Demo</button>
-                )}
                 <button onClick={onGoToAnalytics} title="Analytics"
                   style={{ background: 'none', border: 'none', borderRadius: 8, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ig-txt2)', transition: 'all .12s' }}
                   onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
@@ -1467,7 +1271,6 @@ export default function IGDashboard({
                 </button>
               </div>
             </div>
-            {/* Emotion color strip — 2px bar that pulses with dominant emotion */}
             {currentAnalysis?.data && (() => {
               const d = currentAnalysis.data;
               const eRgb = EmotionPalette[d.final_dominant_emotion?.toLowerCase()] || EmotionPalette.neutral;
@@ -1480,7 +1283,6 @@ export default function IGDashboard({
             })()}
             </div>
 
-            {/* Member panel */}
             {isGroup && memberPanelOpen && (
               <div style={{ borderBottom: '1px solid var(--ig-bord)', padding: '12px 18px', background: 'var(--ig-surf3)', maxHeight: 200, overflowY: 'auto', flexShrink: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: '0.72rem', color: 'var(--ig-txt3)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '.06em' }}>Members ({activeConv?.member_count || 0})</div>
@@ -1513,7 +1315,6 @@ export default function IGDashboard({
               </div>
             )}
 
-            {/* Messages */}
             <div
               ref={messagesContainerRef}
               style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: 4 }}
@@ -1579,7 +1380,6 @@ export default function IGDashboard({
               })}
             </div>
 
-            {/* Crisis alert */}
             <AnimatePresence>
               {isCrisis && !crisisDismissed && (
                 <motion.div
@@ -1595,7 +1395,6 @@ export default function IGDashboard({
               )}
             </AnimatePresence>
 
-            {/* Suggested responses */}
             {suggestionEmotion && SUGGESTIONS[suggestionEmotion?.toLowerCase()] && (
               <SuggestedResponses
                 dominant={suggestionEmotion}
@@ -1603,13 +1402,11 @@ export default function IGDashboard({
               />
             )}
 
-            {/* Emotional Arc Strip */}
             <EmotionalArcStrip
               messages={messages}
               onSelectMsg={(m) => setSelectedMsg(m)}
             />
 
-            {/* Input */}
             <div style={{ padding: '8px 18px 12px', borderTop: '1px solid var(--ig-bord)', background: 'var(--ig-surf)', flexShrink: 0 }}>
               <div style={{
                 display: 'flex', alignItems: 'center', gap: 8,
@@ -1647,10 +1444,9 @@ export default function IGDashboard({
             </div>
           </>
         )}
-        </div>{/* end content wrapper */}
+        </div>
       </div>
 
-      {/* ── Right Rail — toggled via header button ────────────────────────── */}
       <AnimatePresence>
       {activeConversationId && rightPanelOpen && (
         <motion.div
@@ -1667,7 +1463,6 @@ export default function IGDashboard({
             overflow: 'hidden',
           }}
         >
-          {/* Rail header */}
           <div style={{ padding: '12px 16px 10px', borderBottom: '1px solid rgba(var(--ig-ink-rgb),0.08)', flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: '0.65rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.38)', textTransform: 'uppercase', letterSpacing: '.10em' }}>
               {selectedMsg ? 'Message X-Ray' : 'Emotional Signal'}
@@ -1681,7 +1476,6 @@ export default function IGDashboard({
             )}
           </div>
 
-          {/* Rail content */}
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             {selectedMsg ? (
               <AnalysisDrawer

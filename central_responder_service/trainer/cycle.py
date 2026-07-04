@@ -16,19 +16,15 @@ from sklearn.metrics import accuracy_score, f1_score, classification_report
 
 from shared.constants import EMOTION_LABELS, FEATURE_DIM
 from shared.utils.logger import get_logger
-from trainer.utils import (
-    _get_analyzers, filter_outliers, filter_balance, print_report, _bar,
-)
-from trainer.data.synthetic import (
-    build_synthetic_context_vector, load_synthetic_features,
-    _SYNTHETIC_CLASSES,
-)
+from trainer.utils import (_get_analyzers, filter_outliers, filter_balance, print_report, _bar)
+from trainer.data.synthetic import (load_synthetic_features, _SYNTHETIC_CLASSES)
 from trainer.data.empathetic import extract_empathetic_dialogues_features
 from trainer.data.goemotions import extract_goemotions_direct_features
-from trainer.data.meld import extract_meld_features, _download_meld_raw
+from trainer.data.meld import extract_meld_features
 from trainer.data.dailydialog import extract_dailydialog_features
 from trainer.data.db import fetch_live_data, load_relabeled_conversations
 from trainer.data.csv_local import extract_csv_local_features
+from trainer.data.hyperbole import extract_hyperbole_features
 from trainer.models import train_gating_network
 
 logger = get_logger("trainer")
@@ -46,7 +42,7 @@ RELOAD_CHANNEL = "model_reload_signal"
 def run_one_cycle(reload_callback=None) -> None:
     cycle_start = time.time()
     logger.info(f"═══ Starting cycle at {datetime.datetime.utcnow():%H:%M:%S UTC} ═══")
-    phase_times = {}  # track wall-clock seconds per phase
+    phase_times = {}
 
     prev_meta: dict = {}
     if META_PATH.exists():
@@ -66,7 +62,7 @@ def run_one_cycle(reload_callback=None) -> None:
         logger.info("Training device: CUDA GPU — NLP batch_size=128")
     elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         device = "mps"
-        nlp_batch_size = 128  # capped: Unified Memory swaps to SSD above 128
+        nlp_batch_size = 128
         logger.info(f"Training device: Apple MPS ({cpu_count} CPU cores) — NLP batch_size=128")
 
 
@@ -291,6 +287,16 @@ def run_one_cycle(reload_callback=None) -> None:
             has_cdm_tr = has_cdm_tr + [False] * n_csv
             logger.info(f"Bootstrap: +{n_csv} local CSV samples → {len(X_tr)} total train")
 
+        X_hyp, y_hyp = extract_hyperbole_features(vader, bert, goe, batch_size=nlp_batch_size)
+        n_hyp = 0
+        if len(X_hyp) > 0:
+            n_hyp      = len(X_hyp)
+            X_tr       = list(X_tr) + list(X_hyp)
+            y_tr       = y_tr + list(y_hyp)
+            gs_tr      = gs_tr + [{label: 1.0} for label in y_hyp]
+            has_cdm_tr = has_cdm_tr + [False] * n_hyp
+            logger.info(f"Bootstrap: +{n_hyp} hyperbole samples → {len(X_tr)} total train")
+
         dataset_composition = {
             "EmpatheticDialogues (train)":    n_ed,
             "Synthetic (train, 5 classes)":   n_syn,
@@ -300,6 +306,7 @@ def run_one_cycle(reload_callback=None) -> None:
             f"MELD ({n_meld_ctx} w/ real ctx)": n_meld,
             f"DailyDialog ({n_dd_ctx} w/ real ctx)": n_dd,
             "Local CSV (gold labels)":        n_csv,
+            "Hyperbole/slang (Claude-gen)":   n_hyp,
         }
 
     else:
@@ -356,6 +363,11 @@ def run_one_cycle(reload_callback=None) -> None:
         if n_csv_cont > 0:
             logger.info(f"  [CSVLocal] +{n_csv_cont} local CSV samples added to continuous cycle.")
 
+        X_hyp_c, y_hyp_c = extract_hyperbole_features(vader, bert, goe, batch_size=nlp_batch_size)
+        n_hyp_cont = len(X_hyp_c)
+        if n_hyp_cont > 0:
+            logger.info(f"  [Hyperbole] +{n_hyp_cont} hyperbole samples added to continuous cycle.")
+
         X_all = (
             X_db
             + list(X_goe_d)
@@ -363,6 +375,7 @@ def run_one_cycle(reload_callback=None) -> None:
             + list(X_emp_c)
             + list(X_dd_c)
             + list(X_csv_c)
+            + list(X_hyp_c)
         )
         y_all = (
             y_db
@@ -371,6 +384,7 @@ def run_one_cycle(reload_callback=None) -> None:
             + list(y_emp_c)
             + list(y_dd_c)
             + list(y_csv_c)
+            + list(y_hyp_c)
         )
         has_cdm_all = (
             [False] * len(X_db)
@@ -379,6 +393,7 @@ def run_one_cycle(reload_callback=None) -> None:
             + list(has_cdm_emp_c)
             + list(has_cdm_dd_c)
             + [False] * n_csv_cont
+            + [False] * n_hyp_cont
         )
 
         X_tr, X_v, y_tr, y_v, hc_tr, _ = _tts(
@@ -609,7 +624,7 @@ def run_one_cycle(reload_callback=None) -> None:
 
     if deployed:
         tmp = MODEL_PATH.with_suffix(".tmp.pkl")
-        wrapper.model_.cpu()  # pkl must be portable (Linux/CPU) even if trained on MPS/CUDA
+        wrapper.model_.cpu()
         wrapper._device = torch.device("cpu")
         with open(tmp, "wb") as f:
             pickle.dump(wrapper, f)

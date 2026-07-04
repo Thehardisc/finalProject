@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import { useMemo } from 'react';
 
 function valenceToHsl(valence = 0, volatility = 0) {
   let hue;

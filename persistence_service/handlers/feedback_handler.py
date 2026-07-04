@@ -1,6 +1,4 @@
-"""
-persistence_service/handlers/feedback_handler.py — Persist human-verified emotion labels.
-"""
+"""persistence_service/handlers/feedback_handler.py — Persist human-verified emotion labels."""
 from shared.utils.logger import get_logger
 from persistence_service.db_models import EmotionAnalysis
 

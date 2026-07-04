@@ -1,13 +1,4 @@
-"""
-PyTorch Dataset for variable-length conversation sequences.
-
-Each sample is one conversation:
-  x:      [T-1, 67]  input messages (all except last)
-  y:      [T-1, 28]  target = go_emotions of the NEXT message at each step
-  length: T-1        actual sequence length (before padding)
-
-The DataLoader uses collate_fn to pad batches to the longest sequence.
-"""
+"""PyTorch Dataset for variable-length conversation sequences."""
 
 import pickle
 import numpy as np
@@ -15,14 +6,14 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 from pathlib import Path
-from typing import List, Tuple
+from typing import List
 
 
 class ConversationDataset(Dataset):
     def __init__(
         self,
-        sequences:  List[np.ndarray],   # [T, 67] per conv
-        targets:    List[np.ndarray],    # [T-1, 28] per conv
+        sequences:  List[np.ndarray],
+        targets:    List[np.ndarray],
         trajectory_types: List[str],
     ):
         assert len(sequences) == len(targets)
@@ -34,13 +25,11 @@ class ConversationDataset(Dataset):
         return len(self.sequences)
 
     def __getitem__(self, idx: int):
-        seq = self.sequences[idx]    # [T, 67]
-        tgt = self.targets[idx]      # [T-1, 28]
+        seq = self.sequences[idx]
+        tgt = self.targets[idx]
 
-        # Input: all messages except last (T-1 steps)
-        # Target: next-message emotions at each step (T-1 predictions)
-        x = torch.tensor(seq[:-1], dtype=torch.float32)   # [T-1, 67]
-        y = torch.tensor(tgt,      dtype=torch.float32)    # [T-1, 28]
+        x = torch.tensor(seq[:-1], dtype=torch.float32)
+        y = torch.tensor(tgt,      dtype=torch.float32)
         length = x.shape[0]
 
         return x, y, length, self.trajectory_types[idx]
@@ -50,18 +39,15 @@ def collate_fn(batch):
     """Pad sequences in a batch to the same length."""
     xs, ys, lengths, trajs = zip(*batch)
 
-    xs_padded = pad_sequence(xs, batch_first=True, padding_value=0.0)   # [B, T_max, 67]
-    ys_padded = pad_sequence(ys, batch_first=True, padding_value=0.0)   # [B, T_max, 28]
+    xs_padded = pad_sequence(xs, batch_first=True, padding_value=0.0)
+    ys_padded = pad_sequence(ys, batch_first=True, padding_value=0.0)
     lengths   = torch.tensor(lengths, dtype=torch.long)
 
     return xs_padded, ys_padded, lengths, trajs
 
 
 def load_sequence_dataset(features_dir: Path):
-    """
-    Load sequences.pkl and split into train/val/test by trajectory type.
-    Returns three ConversationDataset objects.
-    """
+    """Load sequences.pkl and split into train/val/test by trajectory type."""
     pkl_path = features_dir / "sequences.pkl"
     if not pkl_path.exists():
         raise FileNotFoundError(f"{pkl_path} not found. Run feature extraction first.")
@@ -69,11 +55,10 @@ def load_sequence_dataset(features_dir: Path):
     with open(pkl_path, "rb") as fh:
         data = pickle.load(fh)
 
-    sequences   = data["sequences"]          # list of [T, 67]
-    seq_targets = data["seq_targets"]        # list of [T-1, 28]
-    trajs       = data["seq_trajectories"]   # list of str
+    sequences   = data["sequences"]
+    seq_targets = data["seq_targets"]
+    trajs       = data["seq_trajectories"]
 
-    # Skip sequences too short to make even one training step
     valid = [
         (s, t, tr)
         for s, t, tr in zip(sequences, seq_targets, trajs)
@@ -84,7 +69,6 @@ def load_sequence_dataset(features_dir: Path):
 
     sequences, seq_targets, trajs = zip(*valid)
 
-    # Stratified 70/15/15 split by trajectory type
     rng = np.random.default_rng(42)
     traj_arr = np.array(trajs)
     train_idx, val_idx, test_idx = [], [], []

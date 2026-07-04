@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import axios from 'axios';
 import LiveDemoBackground from './LiveDemoBackground';
 
@@ -132,17 +132,14 @@ export default function LoginModal({ onSuccess, onClose }) {
         <div style={s.overlay}>
             <style>{INJECTED_CSS}</style>
 
-            {/* Animated mesh gradient orbs */}
             <div style={s.orb1} />
             <div style={s.orb2} />
             <div style={s.orb3} />
             <div style={s.orb4} />
 
-            {/* Scrolling Live Chat Demo */}
             <LiveDemoBackground />
 
             <div style={s.card}>
-                {/* Close button (when launched from landing page) */}
                 {onClose && (
                     <button
                         onClick={onClose}
@@ -152,17 +149,14 @@ export default function LoginModal({ onSuccess, onClose }) {
                         ×
                     </button>
                 )}
-                {/* Logo */}
                 <div style={s.logoRow}>
                     <div style={s.logoIcon} />
                     <h1 style={s.logoText}>InnerLink</h1>
                 </div>
 
-                {/* Value proposition */}
                 <p style={s.tagline}>Understand every message. Feel every word.</p>
                 <p style={s.subTagline}>Real-time emotion intelligence for human connection.</p>
 
-                {/* Tab switcher */}
                 <div style={s.tabRow}>
                     <button
                         id="auth-tab-login"
@@ -297,7 +291,6 @@ export default function LoginModal({ onSuccess, onClose }) {
                     }
                 </p>
 
-                {/* Demo users */}
                 <div style={s.demoSection}>
                     <div style={s.demoDivider}>
                         <span style={s.demoDividerLine} />
@@ -333,7 +326,6 @@ export default function LoginModal({ onSuccess, onClose }) {
     );
 }
 
-// ── Styles — Dark Glassmorphism ────────────────────────────────────────────
 const s = {
     overlay: {
         position: 'fixed', inset: 0,

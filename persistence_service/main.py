@@ -1,8 +1,4 @@
-"""
-persistence_service/main.py — Entry point for the persistence worker.
-
-Reads from 4 Redis streams and dispatches each event type to its dedicated handler.
-"""
+"""persistence_service/main.py — Entry point for the persistence worker."""
 import asyncio
 import sys
 import os
@@ -37,8 +33,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 redis_client = RedisClient()
 
-_shutdown = False   # R1: set True on SIGTERM so the loop exits cleanly
-DLQ_STREAM = "failed_events_stream"  # R2: dead letter queue
+_shutdown = False
+DLQ_STREAM = "failed_events_stream"
 
 STREAMS = {
     "message_stream":             "persistence_group",
@@ -48,16 +44,13 @@ STREAMS = {
 }
 CONSUMER_NAME = "worker_1"
 
-# After this many failed attempts a message is force-written to the DLQ and
-# ACK'd regardless — prevents permanently-broken records from looping forever.
 MAX_DELIVERY_ATTEMPTS = 5
-RETRY_COUNTER_TTL     = 86400  # 24 h — counter auto-expires for completed conversations
+RETRY_COUNTER_TTL     = 86400
 
 
 async def main():
     print("[persistence_service] main() loop starting", flush=True)
 
-    # R1: register SIGTERM so Docker stop finishes the current batch gracefully
     loop = asyncio.get_event_loop()
     def _handle_sigterm():
         global _shutdown
@@ -87,7 +80,6 @@ async def main():
 
     while True:
         try:
-            # PEL recovery: reclaim messages idle >30s per stream (handles crash-before-ACK)
             stale_messages = []
             for stream in STREAMS:
                 try:
@@ -121,7 +113,6 @@ async def main():
                         mlog.debug("persist_dispatch", extra={"event": "persist_dispatch"})
                         try:
                             if stream == "message_stream":
-                                # Pv2: strip null bytes that corrupt PostgreSQL text columns
                                 if "text" in data:
                                     data["text"] = data["text"].replace("\x00", "")
                                 await process_message_event(session, data)
@@ -147,20 +138,15 @@ async def main():
                                 exc_info=True,
                             )
 
-                            # Increment per-message attempt counter so permanently-broken
-                            # records don't retry forever inside the PEL.
                             retry_key = f"persistence:attempts:{stream}:{message_id}"
                             attempt = 1
                             try:
                                 attempt = int(await r.incr(retry_key))
                                 await r.expire(retry_key, RETRY_COUNTER_TTL)
                             except Exception:
-                                pass  # if Redis is down, we'll retry on next xautoclaim
+                                pass
 
                             if attempt >= MAX_DELIVERY_ATTEMPTS:
-                                # Permanently broken: best-effort DLQ then always ACK.
-                                # Keeping in PEL forever is worse than accepting data loss
-                                # after MAX_DELIVERY_ATTEMPTS documented attempts.
                                 mlog.error(
                                     "max_retries_exceeded",
                                     extra={
@@ -182,15 +168,13 @@ async def main():
                                         "force_dlq":       "true",
                                     }, maxlen=5000, approximate=True)
                                 except Exception:
-                                    pass  # best-effort: log already captures the loss
+                                    pass
                                 to_ack.append((stream, message_id))
                                 try:
                                     await r.delete(retry_key)
                                 except Exception:
                                     pass
                             else:
-                                # Transient failure: write to DLQ and ACK if write succeeds;
-                                # leave in PEL if DLQ also fails (xautoclaim will retry).
                                 try:
                                     await r.xadd(DLQ_STREAM, {
                                         "original_stream": stream,
@@ -207,7 +191,6 @@ async def main():
                                         "dlq_write_failed",
                                         extra={"event": "dlq_write_failed", "stream": stream, "error": str(dlq_err)},
                                     )
-                                    # Do NOT ACK — stays in PEL for xautoclaim retry
                         finally:
                             session.close()
 
@@ -238,7 +221,6 @@ async def main():
                 logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
-        # R1: exit cleanly after finishing a batch
         if _shutdown:
             logger.info("Graceful shutdown complete.")
             break

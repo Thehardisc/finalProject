@@ -1,6 +1,5 @@
 import re
 
-# fmt: off
 _VAD: dict[str, tuple[float, float, float]] = {
     "happy":        ( 0.90,  0.50,  0.60),
     "happiness":    ( 0.90,  0.50,  0.60),
@@ -241,7 +240,6 @@ _VAD: dict[str, tuple[float, float, float]] = {
     "perfect":      ( 0.88,  0.52,  0.68),
     "broken":       (-0.72,  0.48, -0.48),
 }
-# fmt: on
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 

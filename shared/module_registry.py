@@ -1,7 +1,7 @@
 import json
 import time
 import datetime
-from typing import Optional
+
 
 REGISTRY_KEY = "module_registry"
 

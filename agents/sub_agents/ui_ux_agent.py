@@ -1,10 +1,10 @@
 """UI/UX Pro Max sub-agent — visual design expert, no design constraints."""
 import subprocess
 import base64
-from pathlib import Path
+
 from typing import Optional
 
-import anthropic
+
 
 from .base_agent import BaseAgent, PROJECT_ROOT
 
@@ -29,7 +29,6 @@ class UiUxAgent(BaseAgent):
         "frontend_service/src/styles/tokens.css",
     ]
 
-    # Pro Max: deeper thinking budget, higher output ceiling
     _MODEL = "claude-opus-4-8"
     _MAX_TOKENS = 16000
     _THINKING_BUDGET = 10000
