@@ -403,6 +403,17 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
                 _t(trace, "NLP-guard / BERT", "applied",
                    f"Raw BERT {bert_top} ({bert_max:.2f}) ≥ 0.80 outside meta '{_prev}' family — blended {blend:.0%} toward BERT",
                    pred_label, confidence)
+            else:
+                _t(trace, "NLP-guard / BERT", "skipped",
+                   f"BERT {bert_top} ({bert_max:.2f}) confident, but meta '{pred_label}' is within the {bert_top} family — no override needed")
+
+        else:
+            _goe_why  = ("meta already agrees with GoE" if pred_label == goe_top
+                         else f"GoE max {goe_max:.2f} < 0.75 threshold")
+            _bert_why = ("meta already agrees with BERT" if pred_label == bert_top
+                         else (f"BERT max {bert_max:.2f} < 0.80 threshold" if bert_max < 0.80
+                               else f"BERT top '{bert_top}' is not a GoE label"))
+            _t(trace, "NLP-guards", "skipped", f"GoE guard: {_goe_why} · BERT guard: {_bert_why}")
 
         sarcasm_score, conflict_desc = detect_emotional_conflicts(feature_vector)
         if conflict_desc is None and guard_conflict:
@@ -429,6 +440,9 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
             _t(trace, "Sarcasm inversion", "applied",
                f"Sarcasm score {sarcasm_score:.2f} > 0.5 — shifted {inv:.0%} of positive mass onto paired negatives ('{_prev}' → '{pred_label}')",
                pred_label, confidence)
+        else:
+            _t(trace, "Sarcasm inversion", "skipped",
+               f"conflict score {sarcasm_score:.2f} ≤ 0.50 — scores unchanged")
 
         all_scores["ekman_group"] = _GOE_TO_EKMAN.get(pred_label, "neutral")
         return pred_label, confidence, all_scores, sarcasm_score, conflict_desc, gate_alpha

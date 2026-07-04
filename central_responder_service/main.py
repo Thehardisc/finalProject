@@ -337,6 +337,14 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             "detail": f"{', '.join(anomaly_reason)} — replaced scores with {_anomaly_src}",
             "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
         })
+    else:
+        decision_trace.append({
+            "step": "Anomaly fallback", "status": "skipped",
+            "detail": (f"not triggered — BERT max {bert_max_prob:.2f}, GoE max {goe_max_prob:.2f}, "
+                       f"meta {meta_confidence:.2f}, conflict {'present' if conflict_desc else 'none'} "
+                       f"(needs BERT<0.35 & GoE<0.20, or meta<0.45 with a conflict)"),
+            "label": None, "confidence": None,
+        })
 
     _impl_override = False
     # Expert conflict / hyperbole → let the implicit-emotion LLM arbitrate; its
@@ -377,6 +385,13 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
                 "detail": f"Routed ({_route_why}); no implicit signal returned",
                 "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
             })
+    else:
+        decision_trace.append({
+            "step": "Implicit-emotion arbiter", "status": "skipped",
+            "detail": (f"not routed — confidence {meta_confidence:.2f} ≥ 0.42, "
+                       f"prediction not neutral, no expert conflict"),
+            "label": None, "confidence": None,
+        })
     decision_trace.append({
         "step": "Final decision", "status": "final",
         "detail": ("implicit-emotion-override" if _impl_override
