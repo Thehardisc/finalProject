@@ -484,11 +484,12 @@ function ContextCard({ decision, context }) {
 }
 
 const TRACE_STYLE = {
-  applied:    { icon: '⚡', color: '234,140,20',  label: 'applied'    },
-  suppressed: { icon: '⊘', color: '120,130,150', label: 'stood down' },
-  rejected:   { icon: '✗', color: '150,120,200', label: 'rejected'   },
-  info:       { icon: '·', color: '110,140,190', label: ''           },
-  final:      { icon: '✓', color: '34,197,94',   label: 'final'      },
+  applied:    { icon: '⚡', color: '234,140,20',  label: 'applied'       },
+  suppressed: { icon: '⊘', color: '120,130,150', label: 'stood down'    },
+  rejected:   { icon: '✗', color: '150,120,200', label: 'rejected'      },
+  skipped:    { icon: '○', color: '107,114,128', label: 'not triggered', dim: true },
+  info:       { icon: '·', color: '110,140,190', label: ''              },
+  final:      { icon: '✓', color: '34,197,94',   label: 'final'         },
 };
 
 // Ordered decision path: which mechanism produced/changed the verdict and why.
@@ -504,7 +505,7 @@ function DecisionTrace({ trace, dominant }) {
         const m = TRACE_STYLE[t.status] || TRACE_STYLE.info;
         const isLast = i === trace.length - 1;
         return (
-          <div key={i} style={{ display: 'flex', gap: 10 }}>
+          <div key={i} style={{ display: 'flex', gap: 10, opacity: m.dim ? 0.62 : 1 }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 18, flexShrink: 0 }}>
               <span style={{ fontSize: '0.78rem', color: `rgb(${m.color})`, lineHeight: '18px' }}>{m.icon}</span>
               {!isLast && <div style={{ width: 1, flex: 1, background: 'rgba(var(--ig-ink-rgb),0.10)', minHeight: 10 }} />}
