@@ -9,7 +9,6 @@ from shared.utils.logger import get_logger
 
 logger = get_logger("sarcasm_classifier")
 
-# Module-level tokenizer cache — loaded once on first call, reused across messages.
 _TOKENIZER = None
 
 
@@ -31,8 +30,8 @@ class _SarcasmNet(nn.Module):
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        cls = out.last_hidden_state[:, 0, :]        # [B, 768]
-        return self.head(self.drop(cls)).squeeze(-1) # [B]  (logit)
+        cls = out.last_hidden_state[:, 0, :]
+        return self.head(self.drop(cls)).squeeze(-1)
 
 
 class SarcasmInference:

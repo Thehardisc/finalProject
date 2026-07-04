@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""
-train_sarcasm_classifier.py — Fine-tune DistilBERT for binary sarcasm/passive-aggression detection.
-
-Reads:   training_data/sarcasm_labels.jsonl   (produced by relabel.py --mode sarcasm)
-Writes:  ../central_responder_service/models/sarcasm_clf.pt
-         ../central_responder_service/models/sarcasm_clf_config.json
-
-Architecture:
-  DistilBERT [CLS] → Dropout(0.3) → Linear(768, 1)
-  Input text:  "<ctx_1> [SEP] <ctx_2> [SEP] <ctx_3> [SEP] <target>"
-  Split:       by conversation_id (no leakage — all messages from one conversation
-               go to the same partition)
-  Loss:        BCEWithLogitsLoss with pos_weight to handle class imbalance
-  Threshold:   tuned on the val set after training (maximises F1, not fixed at 0.5)
-
-Usage:
-  python train_sarcasm_classifier.py --dry-run           # dataset stats, no training
-  python train_sarcasm_classifier.py                     # train with defaults
-  python train_sarcasm_classifier.py --epochs 15 --lr 2e-5 --batch-size 16
-"""
+"""train_sarcasm_classifier.py — Fine-tune DistilBERT for binary sarcasm/passive-aggression detection."""
 
 import argparse
 import json
@@ -27,7 +8,7 @@ import sys
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -35,7 +16,6 @@ import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
 from transformers import DistilBertModel, DistilBertTokenizerFast, get_linear_schedule_with_warmup
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
 
 ROOT       = Path(__file__).parent
 DATA_FILE  = ROOT / "training_data" / "sarcasm_labels.jsonl"
@@ -54,14 +34,14 @@ class SarcasmClassifier(nn.Module):
     def __init__(self, dropout: float = DROPOUT):
         super().__init__()
         self.bert = DistilBertModel.from_pretrained(BASE_MODEL)
-        hidden    = self.bert.config.hidden_size  # 768
+        hidden    = self.bert.config.hidden_size
         self.drop = nn.Dropout(dropout)
         self.head = nn.Linear(hidden, 1)
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         out = self.bert(input_ids=input_ids, attention_mask=attention_mask)
-        cls = out.last_hidden_state[:, 0, :]       # [B, 768]
-        return self.head(self.drop(cls)).squeeze(-1)  # [B]  (logits, no sigmoid)
+        cls = out.last_hidden_state[:, 0, :]
+        return self.head(self.drop(cls)).squeeze(-1)
 
 
 # ── Dataset ───────────────────────────────────────────────────────────────────
@@ -92,8 +72,8 @@ class SarcasmDataset(Dataset):
             return_tensors="pt",
         )
         return {
-            "input_ids":      enc["input_ids"].squeeze(0),        # [MAX_LENGTH]
-            "attention_mask": enc["attention_mask"].squeeze(0),    # [MAX_LENGTH]
+            "input_ids":      enc["input_ids"].squeeze(0),
+            "attention_mask": enc["attention_mask"].squeeze(0),
             "label": torch.tensor(float(rec["is_sarcastic"]), dtype=torch.float32),
         }
 
@@ -145,7 +125,6 @@ def compute_metrics(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.
     f1        = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
     acc       = (tp + tn) / len(labels) if len(labels) > 0 else 0.0
 
-    # AUC-ROC (manual trapezoidal)
     thresholds = np.linspace(0.0, 1.0, 51)
     tprs, fprs = [], []
     for t in thresholds:
@@ -251,7 +230,6 @@ def print_stats(records: List[dict]) -> None:
           f"p95={np.percentile(lengths, 95):.0f} max={max(lengths)}")
     print(f"  Truncated msgs : {over_limit} / {n}  (>{MAX_LENGTH} tokens)")
 
-    # Show two examples per subtype
     by_sub: Dict[str, List[dict]] = defaultdict(list)
     for r in records:
         by_sub[r["subtype"]].append(r)
@@ -294,7 +272,6 @@ def main() -> None:
         print_stats(records)
         return
 
-    # ── Setup ─────────────────────────────────────────────────────────────────
     torch.manual_seed(SEED)
     np.random.seed(SEED)
     random.seed(SEED)
@@ -330,7 +307,6 @@ def main() -> None:
     warmup_steps  = int(total_steps * args.warmup_frac)
     scheduler     = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
-    # ── Training loop ─────────────────────────────────────────────────────────
     best_val_f1    = 0.0
     best_threshold = 0.5
     best_state     = None
@@ -364,7 +340,6 @@ def main() -> None:
                 print(f"\nEarly stopping at epoch {epoch} (no improvement for {args.patience} epochs).")
                 break
 
-    # ── Final eval & save ─────────────────────────────────────────────────────
     if best_state is None:
         print("WARNING: no best state found — saving current model.", file=sys.stderr)
         best_state = {k: v.cpu() for k, v in model.state_dict().items()}

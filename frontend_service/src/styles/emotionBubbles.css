@@ -1,4 +1,3 @@
-/* ── Sarcasm inline icon ────────────────────────────────────────────────── */
 
 .bubble__sarcasm-icon {
   margin-left: 5px;
@@ -9,7 +8,6 @@
   user-select: none;
 }
 
-/* ── MoodTimeline ───────────────────────────────────────────────────────── */
 
 .mood-timeline {
   position: absolute;

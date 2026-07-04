@@ -1,4 +1,3 @@
-/* InnerLink v2 Base Styles — Warm Wellness */
 @import './styles/tokens.css';
 @import './sarcasm.css';
 
@@ -23,7 +22,6 @@ body {
   transition: background var(--dur-ambient, 2000ms) ease;
 }
 
-/* ── Keyframes ───────────────────────────────────────────────────── */
 
 @keyframes shimmer {
   0%   { background-position: -200% center; }
@@ -80,7 +78,6 @@ body {
   to { transform: rotate(360deg); }
 }
 
-/* ── Scrollbars ──────────────────────────────────────────────────── */
 ::-webkit-scrollbar         { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track   { background: transparent; }
 ::-webkit-scrollbar-thumb   { background: rgba(0,0,0,0.12); border-radius: 99px; }

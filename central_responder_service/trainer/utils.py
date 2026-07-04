@@ -4,7 +4,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
-import torch
+
 
 from shared.constants import EMOTION_LABELS
 from shared.utils.logger import get_logger
@@ -110,18 +110,16 @@ def _get_analyzers(device):
         device=device,
     )
 
-    # Sentence transformer for semantic NLI blend — same model as goemotions_service
     logger.info("Loading sentence transformer for semantic NLI (all-MiniLM-L6-v2)...")
     from sentence_transformers import SentenceTransformer
     sent_model = SentenceTransformer("all-MiniLM-L6-v2")
-    proto_embs = sent_model.encode(_TRAINER_PROTO_SENTENCES, convert_to_numpy=True)   # [28, 384]
+    proto_embs = sent_model.encode(_TRAINER_PROTO_SENTENCES, convert_to_numpy=True)
     proto_norms = np.linalg.norm(proto_embs, axis=1, keepdims=True) + 1e-8
-    proto_norm  = proto_embs / proto_norms                                             # [28, 384]
+    proto_norm  = proto_embs / proto_norms
 
     # Wrap into an ensemble callable matching the pipeline interface
     class _GoEEnsemble:
         def __init__(self):
-            # expose .model.device so _run_parallel_batches MPS-cache check doesn't error
             self.model = goe_primary.model
 
         def __call__(self, texts, batch_size=32):
@@ -134,13 +132,12 @@ def _get_analyzers(device):
                 p_out = f_primary.result()
                 s_out = f_secondary.result()
 
-            # Semantic NLI: batch encode all texts, cosine sim to prototypes
-            sent_embs = sent_model.encode(texts, batch_size=batch_size, convert_to_numpy=True)   # [N, 384]
+            sent_embs = sent_model.encode(texts, batch_size=batch_size, convert_to_numpy=True)
             e_norms   = np.linalg.norm(sent_embs, axis=1, keepdims=True) + 1e-8
-            sent_norm = sent_embs / e_norms                               # [N, 384]
-            sims      = sent_norm @ proto_norm.T                          # [N, 28]
+            sent_norm = sent_embs / e_norms
+            sims      = sent_norm @ proto_norm.T
             exp_s     = np.exp((sims - sims.max(axis=1, keepdims=True)) * 5.0)
-            sims_prob = exp_s / exp_s.sum(axis=1, keepdims=True)         # [N, 28]
+            sims_prob = exp_s / exp_s.sum(axis=1, keepdims=True)
 
             results = []
             for idx, (p_item, s_item) in enumerate(zip(p_out, s_out)):
@@ -281,7 +278,6 @@ def _run_parallel_batches(
                 )
                 last_logged = done
                 
-                # Prevent Apple Unified Memory from fragmenting and swapping to disk
                 if getattr(model.model, "device", None) is not None and model.model.device.type == "mps":
                     import torch
                     torch.mps.empty_cache()

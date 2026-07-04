@@ -1,21 +1,4 @@
-"""
-situation_encoder.py — Stage 2: COMET-ATOMIC-2020-inspired situation encoder.
-
-NOTE: single-word keywords use word-boundary matching (\bword\b) to avoid
-false positives (e.g. "died" inside "studied"). Multi-word phrases use
-substring matching (no boundary issue for phrases ≥ 2 words).
-
-Encodes commonsense causal knowledge ("PersonX did Y → PersonX feels Z") as
-structured Python rules. Classifies text into situation archetypes, detects
-contextual modifiers, and returns a GoEmotions-aligned emotion distribution.
-
-Three components:
-  1. Situation archetype detection — ~20 archetypes (MEDICAL, ACHIEVEMENT, etc.)
-  2. Modifier detection — uncertainty / completion / reversal / temporal cues
-  3. Situation-emotion priors — (archetype × modifiers) → emotion distribution
-
-No external ML dependencies — pure Python, deterministic, fast.
-"""
+"""situation_encoder.py — Stage 2: COMET-ATOMIC-2020-inspired situation encoder."""
 
 import re
 from typing import Optional
@@ -27,9 +10,6 @@ def _kw_in(kw: str, text_lower: str) -> bool:
         return kw in text_lower
     return bool(re.search(r'\b' + re.escape(kw) + r'\b', text_lower))
 
-# ── Situation archetypes ───────────────────────────────────────────────────────
-# Each archetype is defined by keyword clusters. A text matches the archetype
-# if at least one keyword from ANY cluster is present.
 
 _ARCHETYPES: list[tuple[str, list[list[str]]]] = [
 
@@ -130,7 +110,6 @@ _ARCHETYPES: list[tuple[str, list[list[str]]]] = [
     ]),
 
     ("SOCIAL_EMBARRASSMENT", [
-        # Only phrases where the SPEAKER is the one embarrassed
         ["i froze up completely", "i went completely blank",
          "i forgot the words", "i forgot my lines", "i tripped on stage",
          "i fell on stage", "i autocorrected", "i sent to the wrong person",
@@ -213,7 +192,6 @@ _ARCHETYPES: list[tuple[str, list[list[str]]]] = [
     ]),
 
     ("ANTICIPATION_POSITIVE", [
-        # "looking forward to" intentionally excluded — covered by optimism rules
         ["can't wait for", "can't wait until", "can't wait —", "can't wait,",
          "so excited for", "counting down to", "only a few more days",
          "finally happening", "it's actually happening",
@@ -245,9 +223,6 @@ _ARCHETYPES: list[tuple[str, list[list[str]]]] = [
     ]),
 ]
 
-# ── Archetype → emotion priors ─────────────────────────────────────────────────
-# Maps archetype name to a dict of {emotion_label: base_confidence}
-# These priors are boosted / reduced by modifier detection below.
 
 _PRIORS: dict[str, dict[str, float]] = {
     "MEDICAL_UNCERTAIN":     {"fear": 0.72, "nervousness": 0.65, "confusion": 0.45},
@@ -272,73 +247,58 @@ _PRIORS: dict[str, dict[str, float]] = {
     "PRIDE_PERSONAL":        {"pride": 0.80, "joy": 0.55, "excitement": 0.50},
 }
 
-# ── Contextual modifiers ───────────────────────────────────────────────────────
-# Each modifier: (phrases, {emotion: delta})
-# Positive delta = boost; negative delta = suppress (relative to priors).
 
 _MODIFIERS: list[tuple[list[str], dict[str, float]]] = [
 
-    # Uncertainty language → amplifies fear, suppresses relief
     (["don't know", "not sure", "might be", "could be", "possibly",
       "maybe", "uncertain", "unclear", "waiting to find out"],
      {"fear": +0.08, "nervousness": +0.06, "relief": -0.15}),
 
-    # Good outcome confirmed → amplifies joy/relief, suppresses fear
     (["all clear", "came back fine", "came back normal", "negative result",
       "benign", "nothing serious", "worked out perfectly",
       "made it", "pulled through", "survived", "they're okay"],
      {"relief": +0.10, "joy": +0.08, "fear": -0.20, "nervousness": -0.20}),
 
-    # Personal uniqueness / milestone → amplifies pride
     (["first in my family", "first time", "never done before",
       "youngest ever", "record", "milestone", "breakthrough",
       "generations", "family history"],
      {"pride": +0.12, "joy": +0.05}),
 
-    # Temporal proximity → amplifies nervousness (performance context)
     (["tomorrow", "tonight", "in an hour", "in two hours",
       "this afternoon", "this morning", "in a few hours",
       "next hour", "right now", "any minute"],
      {"nervousness": +0.10, "excitement": +0.05}),
 
-    # Physical anxiety signals → amplifies nervousness over fear
     (["hands are shaking", "heart is pounding", "can't sleep",
       "stomach in knots", "dry mouth", "sweating", "palms sweaty",
       "voice is shaking", "legs are shaking"],
      {"nervousness": +0.15, "fear": -0.05}),
 
-    # Past tense / irreversible → amplifies remorse/grief
     (["never got to", "never said", "never told", "too late",
       "last time", "final", "goodbye", "already gone",
       "it's over", "can't take it back", "no going back"],
      {"remorse": +0.12, "grief": +0.08, "sadness": +0.05}),
 
-    # Presence of "I loved" / "I love" in regret context → suppress love, boost remorse
     (["last thing i said", "last words", "never told them i loved",
       "never got to say i love", "wish i had said i love"],
      {"remorse": +0.15, "love": -0.25}),
 
-    # Betrayal language → amplifies anger/disgust
     (["lied", "deceived", "manipulated", "fake", "pretend",
       "behind my back", "using me", "took credit"],
      {"anger": +0.08, "disgust": +0.08, "disappointment": +0.05}),
 
-    # Achievement with effort → amplifies pride
     (["worked for", "years of", "months of", "trained for",
       "sacrificed", "gave up", "hard work", "dedication"],
      {"pride": +0.10, "joy": +0.05}),
 
-    # Completion / finality → amplifies relief
     (["finally", "at last", "after all that", "it's over",
       "behind me now", "done now", "finished now"],
      {"relief": +0.08, "joy": +0.05}),
 
-    # Isolation / alone → amplifies sadness/fear
     (["alone", "by myself", "no one", "nobody",
       "completely alone", "all alone"],
      {"sadness": +0.06, "fear": +0.06}),
 
-    # Surprise / disbelief → amplifies surprise
     (["can't believe", "cannot believe", "unbelievable",
       "never expected", "totally unexpected",
       "came out of nowhere", "out of the blue"],
@@ -353,7 +313,7 @@ def _detect_archetypes(text_lower: str) -> list[str]:
         for cluster in clusters:
             if any(_kw_in(kw, text_lower) for kw in cluster):
                 matched.append(name)
-                break  # one cluster match is enough per archetype
+                break
     return matched
 
 
@@ -374,36 +334,25 @@ def _apply_modifiers(
 
 
 def encode(text: str) -> Optional[dict[str, float]]:
-    """
-    Run the situation encoder on a text.
-
-    Returns a dict of {emotion: confidence} for the detected archetype(s),
-    or None if no archetype matched.
-    """
+    """Run the situation encoder on a text."""
     text_lower = text.lower()
     archetypes  = _detect_archetypes(text_lower)
 
     if not archetypes:
         return None
 
-    # Merge priors from all matched archetypes (take the max per emotion)
     merged: dict[str, float] = {}
     for arch in archetypes:
         for emo, conf in _PRIORS.get(arch, {}).items():
             merged[emo] = max(merged.get(emo, 0.0), conf)
 
-    # Apply contextual modifiers
     merged = _apply_modifiers(text_lower, merged)
 
-    # Remove emotions with negligible scores
     return {e: round(c, 3) for e, c in merged.items() if c >= 0.40}
 
 
 def top_emotion(text: str) -> Optional[tuple[str, float]]:
-    """
-    Return (emotion, confidence) for the highest-scoring archetype emotion,
-    or None if no archetype matched or top score < 0.52.
-    """
+    """Return (emotion, confidence) for the highest-scoring archetype emotion,"""
     scores = encode(text)
     if not scores:
         return None

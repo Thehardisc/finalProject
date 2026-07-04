@@ -49,16 +49,11 @@ def _fv(**kw):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 1. Sarcasm / cognitive-dissonance detection
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestSarcasmDetection:
 
     def test_classic_sarcasm_positive_vader_negative_goe(self):
-        """
-        'Yeah, GREAT idea 🙄' — VADER is positive, GoEmotions says annoyance.
-        Expect sarcasm_score > 0 and conflict_desc set.
-        """
+        """'Yeah, GREAT idea 🙄' — VADER is positive, GoEmotions says annoyance."""
         fv = _fv(
             vader=_vader(neg=0.05, neu=0.40, pos=0.55, compound=0.65),
             basic_bert=_bert(joy=0.70, neutral=0.20),
@@ -69,18 +64,13 @@ class TestSarcasmDetection:
         assert desc is not None, "Conflict description should be set"
 
     def test_extreme_compound_with_annoyance_triggers_high_sarcasm(self):
-        """
-        Compound=0.95 with low surface positive signal → second branch fires.
-        v_cmp > 0.8 AND neg_emo > 0.2 → sarcasm_score = 0.5 + neg_emo.
-        bert_joy and v_pos kept low so first branch (pos_text > 0.6) does NOT fire.
-        """
+        """Compound=0.95 with low surface positive signal → second branch fires."""
         fv = _fv(
             vader=_vader(pos=0.10, compound=0.95, neu=0.85, neg=0.05),
-            basic_bert=_bert(neutral=0.80, joy=0.05),   # joy low → pos_text < 0.6
+            basic_bert=_bert(neutral=0.80, joy=0.05),
             go_emotions=_goe(annoyance=0.45, neutral=0.35),
         )
         score, desc = detect_emotional_conflicts(fv)
-        # second branch: 0.5 + 0.45 = 0.95, capped at 1.0
         assert score >= 0.90, f"Expected score ≥ 0.90, got {score:.3f}"
 
     def test_genuine_positive_no_sarcasm(self):
@@ -94,10 +84,7 @@ class TestSarcasmDetection:
         assert score == 0.0, f"Pure positive should have zero sarcasm, got {score:.3f}"
 
     def test_passive_aggression_neutral_bert_with_annoyance_goe(self):
-        """
-        Formal 'polite' text (BERT neutral=0.75) but GoE annoyance underlying.
-        Third branch: sarcasm_score = 0.4.
-        """
+        """Formal 'polite' text (BERT neutral=0.75) but GoE annoyance underlying."""
         fv = _fv(
             vader=_vader(neu=0.80, compound=0.05),
             basic_bert=_bert(neutral=0.75, disgust=0.15),
@@ -118,9 +105,7 @@ class TestSarcasmDetection:
         assert score <= 1.0, f"Sarcasm score must be capped at 1.0, got {score}"
 
     def test_pure_negative_no_sarcasm(self):
-        """
-        Genuine sadness: VADER negative, GoE sadness — no positive signal to create conflict.
-        """
+        """Genuine sadness: VADER negative, GoE sadness — no positive signal to create conflict."""
         fv = _fv(
             vader=_vader(neg=0.70, compound=-0.75, neu=0.25, pos=0.05),
             basic_bert=_bert(sadness=0.80),
@@ -131,14 +116,12 @@ class TestSarcasmDetection:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. Implicit emotion routing
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestImplicitEmotionRouting:
 
     def test_neutral_prediction_triggers_implicit_path(self):
         """meta=neutral + GoE neutral not hyper-confident → should route to implicit."""
-        goe = _goe(neutral=0.60, curiosity=0.20)  # below 0.90 cap
+        goe = _goe(neutral=0.60, curiosity=0.20)
         result = is_implicit_candidate("neutral", goe, "I just wanted to see how things go")
         assert result is True
 
@@ -199,16 +182,11 @@ class TestImplicitEmotionRouting:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 3. Conflicting signals in the feature vector
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestConflictingSignals:
 
     def test_vader_positive_goe_negative_both_in_vector(self):
-        """
-        Classic sentiment contradiction: VADER says positive, GoE says grief.
-        Both signals must be faithfully encoded — no implicit clamping.
-        """
+        """Classic sentiment contradiction: VADER says positive, GoE says grief."""
         fv = _fv(
             vader=_vader(pos=0.70, compound=0.65, neu=0.25, neg=0.05),
             go_emotions=_goe(grief=0.80, sadness=0.10),
@@ -234,18 +212,14 @@ class TestConflictingSignals:
         fv = _fv(go_emotions=_goe(anger=1.0)).flatten()
         anger_idx = EMOTION_LABELS.index("anger")
         assert fv[11 + anger_idx] == pytest.approx(1.0, abs=1e-5)
-        # All other GoE slots must be zero
         goe_block = fv[11:39].copy()
         goe_block[anger_idx] = 0.0
         assert goe_block.sum() == pytest.approx(0.0, abs=1e-5)
 
     def test_uniform_goe_distribution_entropy(self):
-        """
-        Uniform GoE (1/28 each) → maximum entropy → VAD valence ≈ 0 (emotions cancel out).
-        """
+        """Uniform GoE (1/28 each) → maximum entropy → VAD valence ≈ 0 (emotions cancel out)."""
         uniform = {k: 1.0 / 28 for k in EMOTION_LABELS}
         fv = _fv(go_emotions=uniform).flatten()
-        # VAD valence from uniform distribution should be near zero
         vad_valence = fv[39]
         assert abs(vad_valence) < 0.15, f"Uniform GoE → near-zero valence, got {vad_valence:.3f}"
 
@@ -256,14 +230,12 @@ class TestConflictingSignals:
             _fv(vader=_vader(compound=1.0),  go_emotions=_goe(joy=1.0)),
             _fv(go_emotions={k: 1.0/28 for k in EMOTION_LABELS}),
             _fv(basic_bert=_bert(neutral=1.0)),
-            _fv(),  # all zeros
+            _fv(),
         ]
         for i, fv in enumerate(cases):
             assert fv.shape == (1, FEATURE_DIM), f"Case {i}: shape {fv.shape} ≠ (1, {FEATURE_DIM})"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 4. Inertia and novelty on challenging inputs
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestInertiaNovelty:
@@ -313,14 +285,9 @@ class TestInertiaNovelty:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 5. GoEmotions gate cap under extreme inputs (model required)
-# ══════════════════════════════════════════════════════════════════════════════
 
 def test_goe_gate_cap_with_extreme_goe_dominant_vector():
-    """
-    Feature vector where GoEmotions block is all-ones (extreme GoE signal).
-    Even in this extreme case the gate cap must hold at ≤ 0.50.
-    """
+    """Feature vector where GoEmotions block is all-ones (extreme GoE signal)."""
     import torch
     from meta_learner import GatingEnsembleNet, D_MODEL, DROPOUT
 
@@ -328,9 +295,8 @@ def test_goe_gate_cap_with_extreme_goe_dominant_vector():
     net = GatingEnsembleNet(n_classes=28, d=D_MODEL, dropout=DROPOUT)
     net.eval()
 
-    # All-ones GoE block, zeros elsewhere
     X = np.zeros((50, FEATURE_DIM), dtype=np.float32)
-    X[:, 11:39] = 1.0  # GoEmotions block saturated
+    X[:, 11:39] = 1.0
 
     t = torch.tensor(X)
     with torch.no_grad():
@@ -341,10 +307,7 @@ def test_goe_gate_cap_with_extreme_goe_dominant_vector():
 
 
 def test_goe_gate_cap_with_extreme_context_vector():
-    """
-    Feature vector with zero NLP block but saturated context.
-    Gate should still honour the cap regardless of context strength.
-    """
+    """Feature vector with zero NLP block but saturated context."""
     import torch
     from meta_learner import GatingEnsembleNet, D_MODEL, DROPOUT
 
@@ -353,7 +316,7 @@ def test_goe_gate_cap_with_extreme_context_vector():
     net.eval()
 
     X = np.zeros((50, FEATURE_DIM), dtype=np.float32)
-    X[:, ML_DIM:] = 1.0  # context block saturated
+    X[:, ML_DIM:] = 1.0
 
     t = torch.tensor(X)
     with torch.no_grad():
@@ -363,8 +326,6 @@ def test_goe_gate_cap_with_extreme_context_vector():
     assert (goe_w <= 0.5001).all(), f"GoE cap violated with saturated context: max={goe_w.max():.4f}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 6. Edge cases: extreme / boundary inputs
 # ══════════════════════════════════════════════════════════════════════════════
 
 class TestEdgeCases:
@@ -410,7 +371,7 @@ class TestEdgeCases:
 
     def test_context_vector_wrong_length_uses_zeros(self):
         """Context vector shorter than CDM_CTX_DIM → zero-padded, no crash."""
-        fv = _fv(context_vector=[0.5] * 10)  # should be 40
+        fv = _fv(context_vector=[0.5] * 10)
         assert fv.shape == (1, FEATURE_DIM)
         assert np.isfinite(fv).all()
 
@@ -446,9 +407,6 @@ class TestEdgeCases:
         assert coping > 0.5, f"High-compound → coping > 0.5, got {coping:.3f}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 7. Emotion dynamics: compute_inertia / compute_contagion unit tests
-# ══════════════════════════════════════════════════════════════════════════════
 
 import sys as _sys
 import os as _os

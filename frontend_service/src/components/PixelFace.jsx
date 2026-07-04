@@ -1,4 +1,3 @@
-import React from 'react';
 
 const TO_EKMAN = {
   anger: 'anger', annoyance: 'anger', disapproval: 'anger',

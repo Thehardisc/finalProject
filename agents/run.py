@@ -1,23 +1,10 @@
 #!/usr/bin/env python3
-"""
-InnerLink Multi-Agent CLI
-=========================
-Usage:
-  python agents/run.py "task description"
-  python agents/run.py --agents nlp,meta_learner "check feature vector parity"
-  python agents/run.py --status
-  python agents/run.py --agent pipeline "debug stream backpressure"
-
-Must be run from the project root:
-  cd /path/to/finalProject-main
-  python agents/run.py "..."
-"""
+"""InnerLink Multi-Agent CLI"""
 
 import argparse
 import sys
 from pathlib import Path
 
-# Add agents/ to path so imports work when run from project root
 sys.path.insert(0, str(Path(__file__).parent))
 
 from head_agent import HeadAgent
@@ -52,7 +39,6 @@ def main():
         sys.exit(1)
 
     if args.agent:
-        # Single-agent mode
         from sub_agents import ALL_AGENTS
         name = args.agent.strip()
         if name not in ALL_AGENTS:

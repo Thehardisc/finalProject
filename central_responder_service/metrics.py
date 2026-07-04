@@ -14,13 +14,13 @@ aggregation_latency_ms = Histogram(
 meta_predictions_total = Counter(
     "central_responder_meta_predictions_total",
     "Meta-learner inference outcomes.",
-    labelnames=("outcome",),  # "success" | "fallback"
+    labelnames=("outcome",),
 )
 
 trainer_runs_total = Counter(
     "central_responder_trainer_runs_total",
     "Trainer cycles by outcome.",
-    labelnames=("result",),  # "accepted" | "rejected" | "errored"
+    labelnames=("result",),
 )
 
 trainer_last_run_timestamp = Gauge(

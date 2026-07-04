@@ -1,12 +1,4 @@
-"""
-EmotionalDialogueEncoder — replaces ConversationLSTM.
-
-Input:  GoE history window [B, N, 28] — last N real GoE distributions (oldest first)
-Output: prior [B, 28] Softmax, phase_logits [B, 6]
-
-prior is stored at trajectory:{conv_id}:prior and consumed by meta_learner.py
-as feature vector slot [82:110].  FEATURE_DIM=116 and the slot width are unchanged.
-"""
+"""EmotionalDialogueEncoder — replaces ConversationLSTM."""
 
 import torch
 import torch.nn as nn
@@ -73,28 +65,28 @@ class EmotionalDialogueEncoder(nn.Module):
 
     def forward(
         self,
-        history:      torch.Tensor,                    # [B, N, 28]
-        padding_mask: Optional[torch.Tensor] = None,   # [B, N] True = padding
+        history:      torch.Tensor,
+        padding_mask: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, N, _ = history.shape
 
-        x   = self.input_proj(history)                       # [B, N, d]
-        cls = self.cls_token.expand(B, -1, -1)               # [B, 1, d]
-        x   = torch.cat([cls, x], dim=1)                     # [B, N+1, d]
+        x   = self.input_proj(history)
+        cls = self.cls_token.expand(B, -1, -1)
+        x   = torch.cat([cls, x], dim=1)
 
         positions = torch.arange(N + 1, device=x.device)
         x = x + self.pos_embed(positions).unsqueeze(0)
 
         if padding_mask is not None:
             cls_mask = torch.zeros(B, 1, dtype=torch.bool, device=padding_mask.device)
-            mask = torch.cat([cls_mask, padding_mask], dim=1)  # [B, N+1]
+            mask = torch.cat([cls_mask, padding_mask], dim=1)
         else:
             mask = None
 
         h       = self.transformer(x, src_key_padding_mask=mask)
-        cls_out = h[:, 0]                                    # [B, d]
+        cls_out = h[:, 0]
 
-        prior = self.prior_head(cls_out)   # [B, 28] — Softmax
-        phase = self.phase_head(cls_out)   # [B,  6] — raw logits
+        prior = self.prior_head(cls_out)
+        phase = self.phase_head(cls_out)
 
         return prior, phase

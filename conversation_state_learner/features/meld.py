@@ -1,29 +1,7 @@
-"""
-conversation_state_learner/features/meld.py
-────────────────────────────────────────────
-MELD (Multimodal EmotionLines Dataset) integration for LSTM sequence training.
-
-MELD: 1,433 dialogues / 13,708 utterances from Friends TV.
-Emotions: anger, disgust, fear, joy, neutral, sadness, surprise
-→ map directly to GoEmotions 28-class labels.
-
-Output per dialogue: ([T, MSG_DIM] features, [T-1, 28] targets)
-  features[t] = GoEmotions(28) + BERT(7) + VADER(4) + CDM zeros(40) = 79-dim
-  targets[t]  = GoEmotions distribution of utterance t+1
-
-CDM block is zeros for MELD (no live pipeline context).
-The model is expected to learn to route through GoEmotions/BERT/VADER on
-external data and context block on live-pipeline data.
-
-Usage:
-    from features.meld import load_meld_sequences
-    sequences, targets = load_meld_sequences(
-        vader_fn, bert_fn, goe_fn, max_dialogues=1000
-    )
-"""
+"""conversation_state_learner/features/meld.py"""
 
 import logging
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Tuple
 
 import numpy as np
 
@@ -38,9 +16,7 @@ from features.schema import (
 
 logger = logging.getLogger("meld")
 
-# ── Emotion mapping ────────────────────────────────────────────────────────────
 
-# MELD 7 labels → GoEmotions 28 — all are exact matches
 _MELD_TO_GOEMOTION: Dict[str, str] = {
     "anger":    "anger",
     "disgust":  "disgust",
@@ -51,7 +27,6 @@ _MELD_TO_GOEMOTION: Dict[str, str] = {
     "surprise": "surprise",
 }
 
-# VADER compound approximations used for CDM HMM obs (same index scheme as _empathetic_obs)
 _MELD_VALENCE: Dict[str, float] = {
     "joy":      0.80,
     "surprise": 0.15,
@@ -72,13 +47,7 @@ def _utterance_to_vec(
     bert_fn:  Callable,
     goe_fn:   Callable,
 ) -> np.ndarray:
-    """
-    Run NLP models on a single MELD utterance and return a MSG_DIM-dim vector.
-
-    BERT block: we run the real BERT classifier so the distribution is genuine
-    rather than a one-hot from the MELD label.
-    CDM block: zeros (no conversation context available for external data).
-    """
+    """Run NLP models on a single MELD utterance and return a MSG_DIM-dim vector."""
     try:
         vader_out = vader_fn(text)
         bert_out  = bert_fn(text)
@@ -92,7 +61,7 @@ def _utterance_to_vec(
     vader_vec = np.array([float(vader_out.get(k, 0.0)) for k in VADER_KEYS_4],     dtype=np.float32)
     cdm_vec   = np.zeros(CDM_CTX_DIM, dtype=np.float32)
 
-    return np.concatenate([go_vec, bert_vec, vader_vec, cdm_vec])  # 79
+    return np.concatenate([go_vec, bert_vec, vader_vec, cdm_vec])
 
 
 # ── Public API ─────────────────────────────────────────────────────────────────
@@ -104,20 +73,7 @@ def load_meld_sequences(
     max_dialogues: int = 1000,
     splits:        Tuple[str, ...] = ("train", "validation"),
 ) -> Tuple[List[np.ndarray], List[np.ndarray]]:
-    """
-    Load MELD and build LSTM training sequences.
-
-    Args:
-        vader_fn:      callable: text → {vader_neg, vader_neu, vader_pos, vader_compound}
-        bert_fn:       callable: text → {anger, disgust, fear, joy, neutral, sadness, surprise}
-        goe_fn:        callable: text → {admiration, ..., neutral} (28 GoEmotions labels)
-        max_dialogues: cap on number of MELD dialogues to process
-        splits:        which dataset splits to use
-
-    Returns:
-        sequences : list of [T,   MSG_DIM] float32 arrays  — per-step features
-        targets   : list of [T-1, N_EMOTIONS] float32 arrays — next-step GoEmotions dist.
-    """
+    """Load MELD and build LSTM training sequences."""
     try:
         from datasets import load_dataset
         meld = load_dataset("declare-lab/MELD")
@@ -125,7 +81,6 @@ def load_meld_sequences(
         logger.warning(f"MELD load failed: {e} — skipping.")
         return [], []
 
-    # Group utterances by dialogue_id within requested splits
     dialogues: Dict[int, List[dict]] = {}
     for split in splits:
         if split not in meld:
@@ -145,7 +100,6 @@ def load_meld_sequences(
         if idx % 100 == 0:
             logger.info(f"  [MELD] {idx}/{len(dialogue_list)} dialogues processed ({len(sequences)} valid)")
 
-        # Sort by utterance_id within the dialogue
         turns_sorted = sorted(turns, key=lambda t: t["Utterance_ID"])
 
         vecs = []
@@ -156,13 +110,12 @@ def load_meld_sequences(
             vec = _utterance_to_vec(text, turn.get("Emotion", "neutral"), vader_fn, bert_fn, goe_fn)
             vecs.append(vec)
 
-        # Need at least 2 utterances to form an (input, target) pair
         if len(vecs) < 2:
             skipped += 1
             continue
 
-        X = np.stack(vecs)          # [T, MSG_DIM]
-        y = X[1:, :N_EMOTIONS]      # [T-1, 28] — GoEmotions of next utterance
+        X = np.stack(vecs)
+        y = X[1:, :N_EMOTIONS]
 
         sequences.append(X)
         targets.append(y)
@@ -181,13 +134,7 @@ def load_meld_flat(
     max_dialogues: int = 1000,
     splits:        Tuple[str, ...] = ("train",),
 ) -> Tuple[np.ndarray, List[str]]:
-    """
-    Load MELD as a flat feature matrix for meta-learner training.
-
-    Returns:
-        X : [N, MSG_DIM] float32 — one row per utterance
-        y : [N] list of str     — GoEmotions label strings
-    """
+    """Load MELD as a flat feature matrix for meta-learner training."""
     try:
         from datasets import load_dataset
         meld = load_dataset("declare-lab/MELD")
@@ -202,7 +149,6 @@ def load_meld_flat(
         if split not in meld:
             continue
         split_data = list(meld[split])
-        # Limit by max_dialogues × average turns (~7.5)
         utterance_cap = max_dialogues * 10
         for row in split_data[:utterance_cap]:
             text = str(row.get("Utterance", "")).strip()

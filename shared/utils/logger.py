@@ -7,7 +7,6 @@ from datetime import datetime
 
 _VALID_FORMATS = ("TEXT", "JSON")
 
-# Prevents logs from being silently lost on crashes due to buffering in Docker.
 try:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -132,14 +131,12 @@ class CustomLogger:
 def _configure_root_logger(log_level: int, log_format: str) -> None:
     root = logging.getLogger()
 
-    # _OurHandler marker prevents double-install when uvicorn already added its handlers.
     if any(isinstance(h, _OurHandler) for h in root.handlers):
         root.setLevel(log_level)
         return
 
     formatter = JsonFormatter() if log_format == "JSON" else _BoundFieldsFormatter()
 
-    # Remove pre-existing StreamHandlers so we don't get duplicate lines in two formats.
     for h in root.handlers[:]:
         if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
             root.removeHandler(h)
@@ -163,7 +160,6 @@ def _configure_root_logger(log_level: int, log_format: str) -> None:
 
     root.setLevel(log_level)
 
-    # Keep chatty libraries at INFO even when we're at DEBUG.
     for lib in ("uvicorn", "uvicorn.access", "gunicorn", "transformers",
                 "urllib3", "filelock", "datasets", "fsspec"):
         lib_logger = logging.getLogger(lib)

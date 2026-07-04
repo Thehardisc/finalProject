@@ -26,7 +26,6 @@ logger = get_logger("trainer")
 
 MODEL_PATH = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl"))
 
-# MELD 7 labels → GoEmotions 28 (direct matches)
 _MELD_TO_GOEMOTION: dict = {
     "anger":    "anger",
     "disgust":  "disgust",
@@ -73,7 +72,7 @@ def _download_meld_raw(out_path: Path, max_rows: int = 3000) -> None:
 
 
 def _meld_build_cdm(
-    history: list,          # list of dicts: {valence, intent_state, speaker, goe_dist}
+    history: list,
     current_valence: float,
     current_intent: int,
     current_speaker: str,
@@ -235,14 +234,12 @@ def extract_meld_features(
             logger.warning(f"[MELD] CSV parse failed: {e} — skipping.")
             return empty, [], []
 
-    # Group and sort by dialogue
     dialogues: dict = {}
     for did, uid, text, emo, spk in raw_rows:
         dialogues.setdefault(did, []).append((uid, text, emo, spk))
     for did in dialogues:
         dialogues[did].sort(key=lambda x: x[0])
 
-    # Flatten to ordered list
     all_rows = []
     for did, utt_list in dialogues.items():
         for uid, text, emo, spk in utt_list:
@@ -296,7 +293,6 @@ def extract_meld_features(
 
         history = conv_history.get(did, [])
 
-        # First utterance in a conversation: no real context yet
         if not history:
             ctx        = np.zeros(CDM_CTX_DIM, dtype=np.float32)
             ctx[intent_st] = 1.0
@@ -319,7 +315,6 @@ def extract_meld_features(
         labels.append(goemo_label)
         has_cdm_list.append(real_ctx)
 
-        # Update history for next utterance
         goe_dist = [float(goe_out.get(e, 0.0)) for e in EMOTION_LABELS]
         conv_history.setdefault(did, []).append({
             "valence":      valence,

@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-"""
-prelabel_sarcasm.py — Rule-based sarcasm prelabeler for conversations.jsonl.
-
-Produces training_data/sarcasm_labels.jsonl compatible with
-train_sarcasm_classifier.py, using pattern matching instead of Claude API.
-"""
+"""prelabel_sarcasm.py — Rule-based sarcasm prelabeler for conversations.jsonl."""
 
 import json
 import re
-import sys
+
 from pathlib import Path
 
 ROOT      = Path(__file__).parent
 INPUT     = ROOT / "training_data" / "conversations.jsonl"
 OUTPUT    = ROOT / "training_data" / "sarcasm_labels.jsonl"
 
-# ── Patterns ─────────────────────────────────────────────────────────────────
 
 _SARCASM = [
     re.compile(r'\boh (great|wonderful|fantastic|perfect|brilliant|amazing|lovely|nice)\b', re.I),
@@ -65,7 +59,6 @@ _IRONY = [
     re.compile(r'\bthat\'?s? (surprising|shocking|unexpected)\b', re.I),
 ]
 
-# Context-aware boost: short dismissive reply after conflict cue
 _CONFLICT_CUES = re.compile(
     r'\b(wrong|stupid|idiot|hate|ridiculous|unbelievable|seriously|why would|stop|don\'t)\b', re.I
 )
@@ -86,7 +79,6 @@ def label_message(text: str, context_texts: list[str]) -> tuple[int, str, str]:
 
     for pat in _PASSIVE_AGG:
         if pat.search(t):
-            # Short dismissive after conflict cue is more reliable
             if _SHORT_DISMISSIVE.match(t):
                 ctx = " ".join(context_texts[-2:])
                 if _CONFLICT_CUES.search(ctx):

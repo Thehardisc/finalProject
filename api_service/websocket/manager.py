@@ -1,6 +1,4 @@
-"""
-api_service/websocket/manager.py — WebSocket connection registry.
-"""
+"""api_service/websocket/manager.py — WebSocket connection registry."""
 from fastapi import WebSocket
 from shared.utils.logger import get_logger
 
@@ -44,5 +42,4 @@ class ConnectionManager:
             logger.info(f"Removed {len(dead)} stale connection(s) for user {user_id}.")
 
 
-# Shared singleton used across the api_service package
 manager = ConnectionManager()

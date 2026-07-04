@@ -15,7 +15,6 @@ logger = get_logger("bert_service")
 
 
 class BasicBertAnalyzer:
-    # bhadresh secondary outputs 6 classes — map to j-hartmann's 7-label space
     _SEC_MAP = {
         "anger": "anger", "fear": "fear", "joy": "joy",
         "love": "joy", "sadness": "sadness", "surprise": "surprise",
@@ -51,22 +50,18 @@ class BasicBertAnalyzer:
     def analyze(self, text: str) -> dict:
         if len(text) > 512:
             text = text[:512]
-        # Run both models in parallel — PyTorch releases GIL during inference
         f_primary   = _INFERENCE_POOL.submit(lambda: {r["label"]: r["score"] for r in self.classifier(text)[0]})
         f_secondary = _INFERENCE_POOL.submit(lambda: {r["label"]: r["score"] for r in self.clf_secondary(text)[0]})
         primary       = f_primary.result()
         secondary_raw = f_secondary.result()
-        # Map secondary 6-class → 7-class label space
         sec = {lbl: 0.0 for lbl in primary}
         for sec_lbl, score in secondary_raw.items():
             target = self._SEC_MAP.get(sec_lbl)
             if target and target in sec:
                 sec[target] += score
-        # Normalize secondary so probabilities sum to 1 after label collapse
         sec_total = sum(sec.values())
         if sec_total > 1e-6:
             sec = {k: v / sec_total for k, v in sec.items()}
-        # 70% primary + 30% secondary, renormalize
         blended = {lbl: 0.70 * primary.get(lbl, 0.0) + 0.30 * sec.get(lbl, 0.0) for lbl in primary}
         total = sum(blended.values())
         if total > 1e-6:

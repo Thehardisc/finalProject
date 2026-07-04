@@ -2,7 +2,7 @@ import asyncio
 import json
 import sys
 import os
-import uuid
+
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
@@ -27,15 +27,7 @@ async def _process_one(
     is_continuation: bool = False,
     burst_fragments: str = None,
 ) -> None:
-    """
-    Clean, demojize, tag, and forward one message to preprocessed_stream.
-
-    is_continuation=True means this message is a rapid-fire fragment of the
-    same thought as the preceding message (same user, same conversation,
-    within DEBOUNCE_WINDOW_MS).  Downstream services — specifically the
-    Context Engine — use this flag to suppress CDM state transitions and
-    velocity spikes for what is semantically a single conversational turn.
-    """
+    """Clean, demojize, tag, and forward one message to preprocessed_stream."""
     try:
         original_text            = data.get("text", "")
         processed_text           = clean_text(original_text)
@@ -88,12 +80,7 @@ async def main():
         items: list,
         flags: list,
     ) -> None:
-        """
-        Process and ACK a flushed burst.
-
-        items : [(record_id, data), ...]
-        flags : [is_continuation, ...]
-        """
+        """Process and ACK a flushed burst."""
         if len(items) > 1:
             user  = items[0][1].get("user_id",          "?")
             conv  = items[0][1].get("conversation_id",  "?")
@@ -106,7 +93,6 @@ async def main():
             combined_text = " ".join(data.get("text", "") for _, data in items)
             fragments_data = [{"message_id": data.get("message_id")} for _, data in items]
 
-            # Use the first item's metadata as the base payload
             first_record_id, first_data = items[0]
             first_data = first_data.copy()
             first_data["text"] = combined_text
@@ -116,7 +102,6 @@ async def main():
                 is_continuation=flags[0],
                 burst_fragments=json.dumps(fragments_data)
             )
-            # ACK all non-first items — their content is folded into the combined burst above.
             for record_id, _ in items[1:]:
                 try:
                     await r.xack(STREAM_KEY, GROUP_NAME, record_id)
@@ -128,10 +113,6 @@ async def main():
 
     while True:
         try:
-            # PEL recovery: reclaim records idle >30 s (crash-before-ACK protection).
-            # Reclaimed messages are treated as fresh turns (is_continuation=False)
-            # because burst context is lost on restart — safe, just slightly
-            # less accurate for the rare mid-burst crash case.
             try:
                 _, stale, _ = await r.xautoclaim(
                     STREAM_KEY, GROUP_NAME, CONSUMER_NAME,
@@ -143,11 +124,6 @@ async def main():
             except Exception:
                 pass
 
-            # count=10: read a full batch so bursts arriving simultaneously
-            # are all added to the debouncer in the same loop iteration.
-            # block=500: short enough that debounce timers fire promptly while
-            # idle; asyncio yields freely during the await, so all in-flight
-            # tasks continue running during the server-side wait.
             messages = await r.xreadgroup(
                 GROUP_NAME, CONSUMER_NAME,
                 {STREAM_KEY: ">"},

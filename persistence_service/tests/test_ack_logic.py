@@ -1,9 +1,9 @@
-import asyncio
+
 import sys
 import os
-import time
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
@@ -26,10 +26,8 @@ async def _run_one_batch(process_fn, xadd_fn):
         session.rollback()
         try:
             await xadd_fn(e)
-            # Only ACK after successful DLQ write
             to_ack.append((stream, message_id))
         except Exception:
-            # DLQ also failed — leave in PEL, do NOT append to to_ack
             pass
     finally:
         session.close()
@@ -86,7 +84,7 @@ class TestPersistenceAckLogic:
             session.commit = MagicMock()
             session.rollback = MagicMock()
             session.close = MagicMock()
-            attempt = MAX   # already at max
+            attempt = MAX
 
             try:
                 await process()
@@ -99,7 +97,7 @@ class TestPersistenceAckLogic:
                         await dlq_fail(Exception("permanent"))
                     except Exception:
                         pass
-                    to_ack.append((stream, message_id))  # always ACK at max
+                    to_ack.append((stream, message_id))
                 else:
                     try:
                         await dlq_fail(Exception("transient"))
@@ -118,9 +116,9 @@ class TestPersistenceAckLogic:
     async def test_multiple_messages_partial_failure(self):
         results = []
         for i, (db_ok, dlq_ok) in enumerate([
-            (True,  True),   # msg 0: success → ACK
-            (False, True),   # msg 1: DB fail, DLQ ok → ACK
-            (False, False),  # msg 2: DB fail, DLQ fail → NOT ACK'd
+            (True,  True),
+            (False, True),
+            (False, False),
         ]):
             process = AsyncMock(return_value=None) if db_ok else AsyncMock(side_effect=Exception("err"))
             xadd    = AsyncMock(return_value=None) if dlq_ok else AsyncMock(side_effect=Exception("dlq"))

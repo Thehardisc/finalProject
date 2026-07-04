@@ -1,9 +1,4 @@
-import React from 'react';
 
-/**
- * PlutchikWheel
- * SVG petal wheel that highlights the core emotion corresponding to the dominant emotion.
- */
 const PLUTCHIK_MAPPING = {
     "admiration": "trust",  "amusement": "joy",    "approval": "trust",
     "caring":     "trust",  "desire":    "anticipation", "excitement": "joy",

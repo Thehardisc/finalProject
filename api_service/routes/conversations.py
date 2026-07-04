@@ -1,6 +1,4 @@
-"""
-api_service/routes/conversations.py — Conversation and message retrieval endpoints.
-"""
+"""api_service/routes/conversations.py — Conversation and message retrieval endpoints."""
 import json
 import time
 import uuid
@@ -88,7 +86,6 @@ async def create_group_conversation(req: CreateGroupRequest,
 
     pool = get_pool()
     async with pool.acquire() as conn:
-        # Validate all provided user IDs exist
         for uid in all_member_ids:
             exists = await conn.fetchval(
                 "SELECT 1 FROM users WHERE user_id = $1 AND is_active = TRUE", uid
@@ -192,7 +189,6 @@ async def my_conversations(user_id: str, current_user: dict = Depends(get_curren
         raise HTTPException(status_code=403, detail="Access denied.")
     pool = get_pool()
     async with pool.acquire() as conn:
-        # Direct conversations
         direct_rows = await conn.fetch(
             """
             SELECT c.conversation_id, c.type, c.created_at,
@@ -212,7 +208,6 @@ async def my_conversations(user_id: str, current_user: dict = Depends(get_curren
             user_id
         )
 
-        # Group conversations
         group_rows = await conn.fetch(
             """
             SELECT c.conversation_id, c.type, c.created_at,
@@ -228,7 +223,6 @@ async def my_conversations(user_id: str, current_user: dict = Depends(get_curren
             user_id
         )
 
-        # Fetch member lists for all groups in one query
         group_members = {}
         if group_rows:
             group_ids = [row["conversation_id"] for row in group_rows]
@@ -249,7 +243,6 @@ async def my_conversations(user_id: str, current_user: dict = Depends(get_curren
 
     all_rows = list(direct_rows) + list(group_rows)
 
-    # Fetch all Redis conversation states in one pipeline instead of one-by-one
     redis_states = {}
     if _redis_client and _redis_client.redis and all_rows:
         pipe = _redis_client.redis.pipeline()
@@ -300,22 +293,7 @@ async def get_conversation_state(conversation_id: str):
 @router.get("/conversation/{conversation_id}/emotional-state",
             dependencies=[Depends(get_current_user)])
 async def get_emotional_state(conversation_id: str):
-    """
-    Bot-readable emotional state for a conversation.
-
-    Returns the narrative mood, emotional trajectory, and recent mood arc
-    computed from the full message history — not just the last message.
-
-    Intended for bots and agents that need to adapt their response tone
-    based on the conversation's emotional context.
-
-    trajectory values:
-      escalating     — conversation is getting more negative
-      de-escalating  — conversation is getting more positive
-      stable         — no significant change
-
-    arc: list of up to 5 recent mood labels, newest first.
-    """
+    """Bot-readable emotional state for a conversation."""
     _EMPTY = {
         "conversation_id":   conversation_id,
         "current_mood":      "neutral",
@@ -389,11 +367,7 @@ def _dominant_from_emotions(emotions: dict) -> str:
 
 
 def _build_chunks(rows: list) -> list:
-    """
-    Group consecutive messages into emotionally coherent chunks.
-    A new chunk starts when the mood label changes.
-    Each row: (message_id, text, timestamp, user_id, emotions_json_str)
-    """
+    """Group consecutive messages into emotionally coherent chunks."""
     chunks, current_chunk, current_mood = [], [], None
 
     for i, (msg_id, text, ts, uid, emo_json) in enumerate(rows):
@@ -427,7 +401,6 @@ def _build_chunks(rows: list) -> list:
 
     result = []
     for chunk_idx, (mood, msgs) in enumerate(chunks):
-        # Average emotion scores across messages in the chunk
         all_keys = set()
         for m in msgs:
             all_keys.update(m["emotions"].keys())
@@ -475,7 +448,6 @@ async def _run_analysis(conversation_id: str, r) -> dict:
     if not chunks:
         return {"status": "no_chunks"}
 
-    # Overall trajectory: compare first chunk mood valence vs last
     first_v = _MOOD_VALENCE.get(chunks[0]["mood"],  0.0)
     last_v  = _MOOD_VALENCE.get(chunks[-1]["mood"], 0.0)
     delta   = last_v - first_v
@@ -486,7 +458,6 @@ async def _run_analysis(conversation_id: str, r) -> dict:
     dominant     = max(last_chunk["emotions"], key=last_chunk["emotions"].get,
                        default="neutral") if last_chunk["emotions"] else "neutral"
 
-    # Write full chunk analysis to Redis
     analysis = {
         "conversation_id": conversation_id,
         "chunks":          json.dumps(chunks),
@@ -500,11 +471,9 @@ async def _run_analysis(conversation_id: str, r) -> dict:
     }
 
     pipe = r.pipeline()
-    # Full analysis key (for training data export + deep inspection)
     pipe.hset(f"conversation:{conversation_id}:analysis",
               mapping={k: str(v) for k, v in analysis.items()})
     pipe.expire(f"conversation:{conversation_id}:analysis", 86400 * 30)
-    # Overwrite emotional_state so bot sees the post-conversation view
     pipe.hset(f"conversation:{conversation_id}:emotional_state", mapping={
         "current_mood":     current_mood,
         "dominant_emotion": dominant,
@@ -533,16 +502,7 @@ async def _run_analysis(conversation_id: str, r) -> dict:
 @router.post("/conversation/{conversation_id}/analyze",
              dependencies=[Depends(get_current_user)])
 async def analyze_conversation(conversation_id: str, background_tasks: BackgroundTasks):
-    """
-    Trigger post-conversation emotional analysis.
-
-    Fetches all messages from DB, groups them into emotionally coherent
-    chunks, and writes the results to Redis so the bot can read the
-    full narrative emotional arc — not just the last message.
-
-    The analysis runs as a background task (returns immediately).
-    Poll GET /conversation/{id}/emotional-state to read the result.
-    """
+    """Trigger post-conversation emotional analysis."""
     if not _redis_client or not _redis_client.redis:
         raise HTTPException(status_code=503, detail="Redis unavailable.")
 
@@ -563,16 +523,7 @@ class SessionRequest(BaseModel):
 @router.post("/conversation/{conversation_id}/session",
              dependencies=[Depends(get_current_user)])
 async def set_conversation_session(conversation_id: str, req: SessionRequest):
-    """
-    Control session continuity after an idle period.
-
-    mode=continue (default): preserve the existing emotional state — the bot
-      remembers the conversation's emotional arc.
-
-    mode=fresh: reset emotional state to neutral — the bot treats the next
-      message as the start of a new emotional context, even within the same
-      conversation thread.
-    """
+    """Control session continuity after an idle period."""
     if not _redis_client or not _redis_client.redis:
         raise HTTPException(status_code=503, detail="Redis unavailable.")
 
@@ -584,7 +535,6 @@ async def set_conversation_session(conversation_id: str, req: SessionRequest):
         pipe.delete(f"conv:{conversation_id}:mood_arc")
         pipe.delete(f"conv:{conversation_id}:valence_hist")
         await pipe.execute()
-        # Delete per-speaker CDM keys (pattern scan — context_engine per-speaker state)
         async for key in r.scan_iter(f"conv:{conversation_id}:spk:*"):
             await r.delete(key)
         logger.info(

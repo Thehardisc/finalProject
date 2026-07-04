@@ -1,19 +1,9 @@
 #!/usr/bin/env python3
-"""
-trajectory_train.py — Train EmotionalDialogueEncoder (EDE).
-
-Data: MELD + EmpatheticDialogues — utterance text run through the REAL GoE model
-      (not synthetic MELD→GoE label maps, which caused 98.8% neutral collapse).
-
-Output: .cache/ede_model.pt + .cache/ede_config.json
-
-Run:
-  python trajectory_train.py [--epochs N] [--lr F] [--hidden N] [--window N]
-"""
+"""trajectory_train.py — Train EmotionalDialogueEncoder (EDE)."""
 
 import argparse
 import json
-import os
+
 import random
 import sys
 from collections import defaultdict
@@ -22,7 +12,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
+
 import torch.nn.functional as F
 
 ROOT  = Path(__file__).parent
@@ -42,7 +32,7 @@ EMOTION_LABELS_28 = [
     "joy", "love", "nervousness", "optimism", "pride", "realization",
     "relief", "remorse", "sadness", "surprise", "neutral",
 ]
-NEUTRAL_IDX = EMOTION_LABELS_28.index("neutral")   # 27
+NEUTRAL_IDX = EMOTION_LABELS_28.index("neutral")
 
 _EMOTION_VALENCE = {
     "anger": -0.80, "annoyance": -0.60, "disapproval": -0.70, "disgust": -0.80,
@@ -91,10 +81,7 @@ def run_goe_model_on_texts(
     cache_path: Optional[Path] = None,
     batch_size: int = 64,
 ) -> List[np.ndarray]:
-    """
-    Run bhadresh-savani/bert-base-go-emotion on a list of utterances.
-    Results are cached to cache_path (.npy) to skip re-inference on subsequent runs.
-    """
+    """Run bhadresh-savani/bert-base-go-emotion on a list of utterances."""
     if cache_path is not None and cache_path.exists():
         arr = np.load(cache_path)
         if arr.shape[0] == len(texts):
@@ -117,7 +104,6 @@ def run_goe_model_on_texts(
     total = len(texts)
     for start in range(0, total, batch_size * 4):
         chunk = texts[start: start + batch_size * 4]
-        # truncation=True: clips texts that exceed BERT's 512 token limit
         preds = goe(chunk, truncation=True, max_length=512)
         for p in preds:
             d = {item["label"]: item["score"] for item in p}
@@ -176,7 +162,6 @@ def load_meld_sequences(path: Path) -> List[Tuple[np.ndarray, np.ndarray, List[f
 
 
 def load_empathetic_sequences(path: Path) -> List[Tuple[np.ndarray, np.ndarray, List[float]]]:
-    # Cache format: [{"conv_id": ..., "utt_idx": int, "utterance": str, "context": str, "speaker_idx": int}]
     with open(path) as f:
         rows = json.load(f)
 
@@ -225,11 +210,7 @@ def build_windows(
     max_window: int,
     neutral_keep_rate: float = 0.40,
 ) -> List[dict]:
-    """
-    Build fixed-window training samples.
-    neutral_keep_rate: fraction of neutral-dominant targets to keep (down-samples
-    over-represented neutral class to prevent collapse).
-    """
+    """Build fixed-window training samples."""
     samples = []
     for X, Y, V in sequences:
         T = len(X)
@@ -237,7 +218,6 @@ def build_windows(
             target  = Y[t]
             is_neutral_dominant = int(target.argmax()) == NEUTRAL_IDX and target[NEUTRAL_IDX] > 0.50
 
-            # Down-sample neutral-dominant examples to prevent mode collapse
             if is_neutral_dominant and random.random() > neutral_keep_rate:
                 continue
 
@@ -303,8 +283,6 @@ def train(
     best_top1  = 0.0
     best_state = None
 
-    # Emotion class weights: upweight non-neutral emotions so the model doesn't collapse
-    # Neutral (idx 27) gets weight 0.5; all others get 1.5 — simple 3× ratio
     emo_weights = torch.ones(28, device=device) * 1.5
     emo_weights[NEUTRAL_IDX] = 0.5
 
@@ -314,9 +292,7 @@ def train(
         P = torch.tensor([s["phase"]             for s in batch],       dtype=torch.long,    device=device)
         M = torch.tensor(np.stack([s["padding_mask"] for s in batch]), dtype=torch.bool,    device=device)
         prior, phase_logits = model(H, padding_mask=M)
-        # Weighted KL: down-weight neutral slot so model is penalised more for
-        # concentrating probability mass on neutral
-        log_prior = torch.log(prior.clamp(min=1e-8))                 # [B, 28]
+        log_prior = torch.log(prior.clamp(min=1e-8))
         weighted_kl = -(T * log_prior * emo_weights.unsqueeze(0)).sum(dim=-1).mean()
         ce_loss = F.cross_entropy(phase_logits, P, weight=phase_w_t)
         loss    = 0.7 * weighted_kl + 0.3 * ce_loss
@@ -367,7 +343,7 @@ def train(
             ph_pred   = torch.cat(all_ph_pred).cpu().numpy()
             ph_true   = torch.cat(all_ph_true).cpu().numpy()
             phase_acc = float((ph_pred == ph_true).mean())
-            neutral_pct = float((all_prior.argmax(dim=-1) == 27).float().mean())   # 27 = neutral
+            neutral_pct = float((all_prior.argmax(dim=-1) == 27).float().mean())
 
             print(
                 f"Epoch {epoch:3d}/{epochs}  "

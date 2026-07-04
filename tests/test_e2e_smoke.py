@@ -1,25 +1,4 @@
-"""
-End-to-end smoke test: prove a message ingested at the front door emerges
-from the central_responder with a meta-learner verdict.
-
-Pipeline exercised:
-    ingestion_service  →  preprocessing  →  vader/bert/goemotions
-                                          →  central_responder (aggregate + predict)
-                                          →  emotion_stream (Redis)
-
-We subscribe to Redis directly rather than the WebSocket so we don't need to
-implement the JWT auth dance — the WebSocket is just a thin bridge over the
-same emotion_stream entries this test reads.
-
-Prerequisites:
-    1. `docker compose up -d` (stack is running)
-    2. `.env` populated; this test reads INTERNAL_API_KEY from the environment
-       (export it before running, e.g. `export $(grep -v '^#' .env | xargs)`).
-    3. `pip install redis requests`
-
-Run:
-    pytest tests/test_e2e_smoke.py -v
-"""
+"""End-to-end smoke test: prove a message ingested at the front door emerges"""
 import os
 import time
 import uuid
@@ -35,7 +14,7 @@ REDIS_PORT    = int(os.environ.get("REDIS_PORT", 6379))
 REDIS_PASS    = os.environ.get("REDIS_PASSWORD") or None
 API_KEY       = os.environ.get("INTERNAL_API_KEY")
 
-WAIT_BUDGET_SEC = 25  # cold-start with model loading can be slow
+WAIT_BUDGET_SEC = 25
 
 
 @pytest.fixture(scope="module")
@@ -55,7 +34,6 @@ def redis_client():
 
 def test_message_flows_through_pipeline(redis_client):
     """POST a message → it emerges from emotion_stream within the budget."""
-    # Capture stream cursor BEFORE posting so we only see fresh entries.
     try:
         latest_entries = redis_client.xrevrange("emotion_stream", count=1)
         last_id = latest_entries[0][0] if latest_entries else "0-0"
@@ -78,7 +56,6 @@ def test_message_flows_through_pipeline(redis_client):
     assert resp.status_code in (200, 202), f"ingestion rejected: {resp.status_code} {resp.text}"
     message_id = resp.json()["message_id"]
 
-    # Poll the stream for our specific message_id.
     deadline = time.time() + WAIT_BUDGET_SEC
     matched_entry = None
     while time.time() < deadline:
@@ -105,8 +82,6 @@ def test_message_flows_through_pipeline(redis_client):
         f"Pipeline broken or starting up slowly?"
     )
 
-    # Contract assertions: the published event has the fields the WebSocket
-    # bridge in api_service expects to forward to the frontend.
     assert "dominant_emotion" in matched_entry,        "missing dominant_emotion"
     assert "emotions"          in matched_entry,       "missing emotions"
     assert "pipeline_log"      in matched_entry,       "missing pipeline_log"

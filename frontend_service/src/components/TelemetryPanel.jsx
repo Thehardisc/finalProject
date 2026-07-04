@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { EmotionPalette } from './EmotionPalette';
 import CDMStateGraph from './CDMStateGraph';
 import PixelFace from './PixelFace';
 
-// Pipeline stage definitions — ordered by execution sequence
 const STAGES = [
   { key: 'vader',       label: 'VADER',          color: '234,179,8',   sub: 'Lexical sentiment · 4-dim',     modelKey: 'vader'       },
   { key: 'bert',        label: 'BERT Ekman',      color: '59,130,246',  sub: 'Transformer · 7 Ekman classes', modelKey: 'basic_bert'  },
@@ -12,7 +11,6 @@ const STAGES = [
   { key: 'meta',        label: 'Meta-Learner',    color: '16,185,129',  sub: 'MLP · 62-dim → final decision', modelKey: null          },
 ];
 
-// Which partial-result model names map to each stage key
 const PARTIAL_MAP = {
   vader:      'vader',
   basic_bert: 'bert',
@@ -20,10 +18,10 @@ const PARTIAL_MAP = {
 };
 
 export default function TelemetryPanel({ processing, lastAnalysis, partialModels = new Set(), dark = false }) {
-  const [tab, setTab] = useState('pipeline'); // 'pipeline' | 'cdm'
+  const [tab, setTab] = useState('pipeline');
 
   const d       = lastAnalysis?.data;
-  const pl      = d ? null : null; // unused — read directly from d
+  const pl      = d ? null : null;
   const logMap  = d?.logic_map    ?? {};
   const conf    = d?.meta_confidence ?? null;
   const snap    = d?.context_snapshot ?? null;
@@ -31,30 +29,23 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
   const domEmo  = d?.final_dominant_emotion;
   const domRgb  = domEmo ? (EmotionPalette[domEmo.toLowerCase()] || EmotionPalette.neutral) : null;
 
-  // Determine stage status: idle | active | done
-  // A stage is 'done' once we have the final analysis.
   // VADER/BERT/GoEmotions can be 'active' when their partial event arrives.
   const stageStatus = (stage) => {
     if (!processing && !d) return 'idle';
-    // final analysis arrived → all done
     if (d) return 'done';
-    // analysis not yet arrived — check partialModels
     if (stage.modelKey && partialModels.has(stage.modelKey)) return 'done';
     if (stage.key === 'context' || stage.key === 'meta') return 'idle';
-    // show "active" while pipeline is running and we haven't seen this model yet
     if (processing) return 'active';
     return 'idle';
   };
 
   const busy = processing || STAGES.some(s => stageStatus(s) === 'active');
 
-  // Compute real latency label from pipeline_log if available
-  const latencyLabel = d ? null : null; // E2E latency not in WS payload, omit
+  const latencyLabel = d ? null : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', padding: '16px 14px' }}>
 
-      {/* ── Header ── */}
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontWeight: 700, fontSize: '0.82rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>Pipeline Telemetry</span>
@@ -75,12 +66,10 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
         </div>
       </div>
 
-      {/* ── Pixel face ── */}
       <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 14, paddingTop: 4 }}>
         <PixelFace emotion={domEmo || 'neutral'} scale={5} showLabel={true} />
       </div>
 
-      {/* ── Tabs ── */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
         {['pipeline', 'cdm'].map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
@@ -96,10 +85,8 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
         ))}
       </div>
 
-      {/* ── Pipeline Tab ── */}
       {tab === 'pipeline' && (
         <>
-          {/* Stage cards */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 16 }}>
             {STAGES.map((stage) => {
               const status = stageStatus(stage);
@@ -150,7 +137,6 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
             })}
           </div>
 
-          {/* Logic Map (real data) */}
           {d && Object.keys(logMap).length > 0 && (
             <div style={{
               background: domRgb ? `rgba(${domRgb},.05)` : (dark ? '#1a1a28' : '#f9fafb'),
@@ -181,7 +167,6 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
             </div>
           )}
 
-          {/* Last inference card */}
           {d && domRgb && (
             <div style={{
               background: `rgba(${domRgb},.06)`,
@@ -218,7 +203,6 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
         </>
       )}
 
-      {/* ── CDM State Machine Tab ── */}
       {tab === 'cdm' && (
         <CDMStateGraph snapshot={snap} />
       )}

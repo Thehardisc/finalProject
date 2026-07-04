@@ -1,7 +1,5 @@
 
 #!/bin/bash
-# start.sh - Universal AI Stack Launcher (Mac & Linux)
-# Automatically detects NVIDIA GPU, launches Docker, waits for readiness, and verifies health.
 
 set -e
 
@@ -11,12 +9,9 @@ echo "    [System]  Emotion Analysis System - Launcher"
 echo "=============================================================="
 echo ""
 
-# Load environment
-# Extract API key for health checks
 API_KEY=$(grep "^INTERNAL_API_KEY=" .env | cut -d'=' -f2 | tr -d '"'\'' ')
 API_KEY=${API_KEY:-dev-secret-key}
 
-# Load and display all config from .env so operators can verify before launch
 MAX_EMPATHETIC_SAMPLES_VAL=$(grep '^MAX_EMPATHETIC_SAMPLES=' .env 2>/dev/null | cut -d'=' -f2)
 MIN_DB_SAMPLES_VAL=$(grep '^MIN_DB_SAMPLES=' .env 2>/dev/null | cut -d'=' -f2)
 RETRAIN_INTERVAL_VAL=$(grep '^RETRAIN_INTERVAL_SECONDS=' .env 2>/dev/null | cut -d'=' -f2)
@@ -38,8 +33,6 @@ echo "   API_KEY                 = ${API_KEY:0:6}...  (redacted)"
 echo "──────────────────────────────────────────────────────────"
 echo ""
 
-# Feature-vector parity is the #1 invariant (CLAUDE.md): inference and trainer must
-# produce identical 116-dim vectors. Catch drift before spending minutes on a build.
 echo "[Invariant] Checking feature-vector parity (inference vs trainer)..."
 if command -v python3 &> /dev/null && python3 -c "import pytest, numpy" &> /dev/null; then
     if python3 -m pytest central_responder_service/training/test_feature_parity.py -q &> /tmp/parity_check.log; then
@@ -73,9 +66,6 @@ else
     COMPOSE_CMD="docker compose up -d --build"
 fi
 
-# Setup logging — create timestamped run directory and the live log dir.
-# logs/live/ is bind-mounted into every Python container so services write
-# directly to host files at write time (zero lag, no pipe, no ANSI codes).
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 LOGDIR="logs/run_${TIMESTAMP}"
 mkdir -p "${LOGDIR}"
@@ -84,7 +74,6 @@ mkdir -p logs/live && find logs/live -maxdepth 1 -type f -delete
 echo ""
 echo "[Launch] ${COMPOSE_CMD}"
 echo ""
-# Capture build/start output directly into init.log while showing it live.
 INIT_LOG="${LOGDIR}/init.log"
 {
     echo "=============================================================="
@@ -124,13 +113,9 @@ echo "[Logs] Run artifacts: ${LOGDIR}/"
 
 LAUNCH_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-# Strip ANSI escape codes (docker compose emits colour/cursor codes even to files)
 _strip_ansi() { sed $'s/\033\\[[0-9;]*[A-Za-z]//g'; }
 
-# Per-service logs are written directly by each container via LOG_DIR=/app/logs
-# bound to ./logs/live/ — no watchdog needed, zero lag.
 
-# Combined aggregate logs — watchdog pattern for all-in-one views
 (
     SINCE="${LAUNCH_TIME}"
     > "${LOGDIR}/important.log"
@@ -168,7 +153,6 @@ _strip_ansi() { sed $'s/\033\\[[0-9;]*[A-Za-z]//g'; }
 ) &
 LOGFILE="${LOGDIR}/all.log"
 
-# Wait for containers
 echo ""
 echo "[Wait] Waiting for all containers to start..."
 
@@ -196,14 +180,12 @@ if [ $ELAPSED -ge $MAX_WAIT ]; then
     exit 1
 fi
 
-# Health checks
 echo ""
 echo "[Health] Running service health checks..."
 PASS=0
 FAIL=0
 FAILED_CHECKS=""   # accumulates the name+reason of every failed check for the init report
 
-# Helper function
 check_service() {
     local name=$1
     local url=$2
@@ -226,7 +208,6 @@ check_service() {
     return 1
 }
 
-# Check Redis
 if docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q "PONG"; then
     echo "   [OK] Redis - PONG"
     PASS=$((PASS + 1))
@@ -236,7 +217,6 @@ else
     FAILED_CHECKS="${FAILED_CHECKS}   - Redis: ping did not return PONG"$'\n'
 fi
 
-# Check PostgreSQL
 if docker compose exec -T db pg_isready -U user -d emotion_db 2>/dev/null | grep -q "accepting"; then
     echo "   [OK] PostgreSQL - accepting connections"
     PASS=$((PASS + 1))
@@ -246,12 +226,10 @@ else
     FAILED_CHECKS="${FAILED_CHECKS}   - PostgreSQL: not accepting connections"$'\n'
 fi
 
-# Check HTTP services
 check_service "Ingestion Service (API :8000)" "http://localhost:8000/health"
 check_service "API Service (WebSocket :8001)" "http://localhost:8001/conversation/conv-1/state"
 check_service "Frontend (UI :5173)" "http://localhost:5173"
 
-# Check Meta-Learner loaded
 if docker compose logs central_responder_service 2>/dev/null | grep -q "Running in META-LEARNER mode"; then
     echo "   [OK] Meta-Learner - loaded and active"
     PASS=$((PASS + 1))
@@ -263,8 +241,6 @@ fi
 
 echo "[Test] Running end-to-end pipeline test..."
 
-# Retry like the other HTTP checks — ingestion can still be warming up right
-# after the container reports "running", so a single shot races the cold start.
 PIPE_RETRIES=10
 PIPE_ATTEMPT=0
 HTTP_CODE=""
@@ -289,7 +265,6 @@ else
     FAILED_CHECKS="${FAILED_CHECKS}   - Pipeline test: POST /messages returned HTTP ${HTTP_CODE:-no-response} (body: ${BODY:-empty})"$'\n'
 fi
 
-# Print summary
 echo ""
 echo "=============================================================="
 if [ $FAIL -eq 0 ]; then
@@ -317,7 +292,6 @@ echo "    Tip: tail -f logs/live/central_responder_service.log"
 echo "    Tip: tail -f ${LOGDIR}/errors.log"
 echo "=============================================================="
 
-# Append health check results to init.log
 {
     echo "[Health Checks]"
     echo "   PASS : ${PASS}"

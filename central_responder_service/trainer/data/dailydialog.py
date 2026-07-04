@@ -1,8 +1,4 @@
-"""
-dair-ai/emotion dataset extractor.
-416K English short texts labeled with 6 emotions (sadness, joy, love, anger, fear, surprise).
-Available as parquet — no dataset script required.
-"""
+"""dair-ai/emotion dataset extractor."""
 import gc
 import os
 import pickle
@@ -11,10 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
-from shared.constants import (
-    EMOTION_LABELS, FEATURE_DIM, CDM_CTX_DIM, PRIOR_DIM,
-    CTX_CURR_VALENCE, CTX_MSG_LENGTH, CTX_HMM_CONF,
-)
+from shared.constants import (FEATURE_DIM, CDM_CTX_DIM, PRIOR_DIM, CTX_CURR_VALENCE, CTX_MSG_LENGTH, CTX_HMM_CONF)
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
 from trainer.utils import _run_parallel_batches

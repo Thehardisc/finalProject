@@ -1,22 +1,9 @@
-"""
-test_dyadic_blocks.py — ניתוח שיחה משלושה גושי טקסט
+"""test_dyadic_blocks.py — ניתוח שיחה משלושה גושי טקסט"""
 
-הרצה:
-  PYTHONPATH=central_responder_service \
-    .venv/bin/python test_dyadic_blocks.py
-
-קלט:
-  BLOCK_A  — גוש טקסט של אדם 1 (כל שורה = הודעה)
-  BLOCK_B  — גוש טקסט של אדם 2 (כל שורה = הודעה)
-  BLOCK_AB — גוש מעורב לפי הסדר הנכון  (כל שורה: "A: ..." או "B: ...")
-             אם ריק — נוצר אוטומטית ע"י סירוג A/B
-"""
-
-import sys, re
+import re
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from transformers import pipeline
 
-# ─────────────────────────────── קלט ────────────────────────────────────────
 
 BLOCK_A = """
 I had such a rough day today.
@@ -30,7 +17,6 @@ You always complain about work but never change anything.
 Fine, tell me, but make it quick.
 """.strip()
 
-# אם BLOCK_AB ריק — מייצרים סירוג אוטומטי A→B→A→B
 BLOCK_AB = ""
 
 # ─────────────────────────────── פיצול ──────────────────────────────────────
@@ -41,13 +27,7 @@ def split_block(text):
 
 
 def parse_mixed_block(text):
-    """
-    פרסר גוש מעורב. תומך בפורמטים:
-      A: טקסט
-      B: טקסט
-      [A] טקסט
-      Person1: טקסט
-    """
+    """פרסר גוש מעורב. תומך בפורמטים:"""
     msgs = []
     for ln in text.splitlines():
         ln = ln.strip()
@@ -56,10 +36,8 @@ def parse_mixed_block(text):
         m = re.match(r'^([A-Za-z0-9_\[\]]+)[\]:][\s]*(.*)', ln)
         if m:
             raw_spk = m.group(1).strip("[]")
-            # נרמל: הצד הראשון שמופיע = A, השני = B
             msgs.append({"speaker": raw_spk, "text": m.group(2).strip()})
         else:
-            # שורה ללא תווית — מוסיף לאחרון
             if msgs:
                 msgs[-1]["text"] += " " + ln
     return msgs
@@ -76,7 +54,6 @@ def interleave(msgs_a, msgs_b):
     return result
 
 
-# ─────────────────────────────── analyzers ───────────────────────────────────
 
 print("Loading models...", flush=True)
 vader_analyzer = SentimentIntensityAnalyzer()
@@ -126,7 +103,6 @@ def analyze(text):
     return g, effective_valence(g, vader_val)
 
 
-# ─────────────────────────────── dynamic classifier ─────────────────────────
 
 SUPPORT  = {"caring", "love", "gratitude", "relief", "approval", "optimism", "admiration"}
 NEGATIVE = {"sadness", "grief", "fear", "anger", "disgust", "disappointment",
@@ -143,28 +119,23 @@ def classify_dynamic(curr_goe, curr_val, other_goe, other_val,
     my_sign    = 1 if curr_val > 0.15 else (-1 if curr_val < -0.15 else 0)
     other_sign = 1 if other_val > 0.15 else (-1 if other_val < -0.15 else 0)
 
-    # empathy: צד שני שלילי, אני מגיב תמיכה
     if other_top in NEGATIVE and my_top in SUPPORT and my_sign >= 0:
         return "empathy"
 
-    # collision: כיוונים הפוכים עם עוצמה
     if my_sign != 0 and other_sign != 0 and my_sign != other_sign:
         return "collision"
 
-    # escalation: שניינו מחריפים לשלילי
     my_trending_neg = (len(my_prev_vals) >= 1 and curr_val < my_prev_vals[-1] - 0.1)
     other_neg       = (other_val is not None and other_val < -0.1)
     if my_trending_neg and other_neg:
         return "escalation"
 
-    # alignment: אותו כיוון
     if my_sign == other_sign and my_sign != 0:
         return "alignment"
 
     return "neutral"
 
 
-# ─────────────────────────────── main ────────────────────────────────────────
 
 msgs_a  = split_block(BLOCK_A)
 msgs_b  = split_block(BLOCK_B)
@@ -173,8 +144,7 @@ combined: list[dict] = (
     else interleave(msgs_a, msgs_b)
 )
 
-# נרמל speakers לA/B (אם BLOCK_AB השתמש בשמות אמיתיים)
-speakers = list(dict.fromkeys(m["speaker"] for m in combined))  # ordered unique
+speakers = list(dict.fromkeys(m["speaker"] for m in combined))
 spk_map  = {speakers[0]: "A", speakers[1]: "B"} if len(speakers) >= 2 else {}
 for m in combined:
     m["speaker"] = spk_map.get(m["speaker"], m["speaker"])
@@ -210,7 +180,6 @@ for i, msg in enumerate(combined):
 
     histories[sp].append({"goe": goe, "val": val})
 
-# סיכום
 print("\n" + "═" * 60)
 print("SUMMARY")
 print("─" * 40)
@@ -228,7 +197,6 @@ for dyn, cnt in sorted(dynamic_counts.items(), key=lambda x: -x[1]):
     bar = "█" * cnt
     print(f"    {dyn:<12s} {bar} ({cnt})")
 
-# זיהוי אירוע מרכזי
 dominant = max(dynamic_counts, key=dynamic_counts.get)
 if dominant == "collision":
     print("\n  ⚠ Dominant pattern: EMOTIONAL COLLISION — misaligned responses")

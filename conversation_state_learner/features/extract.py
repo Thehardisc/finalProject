@@ -1,31 +1,20 @@
-"""
-Feature extraction from enriched conversation JSONL.
-
-Produces two complementary dataset formats:
-  1. Windowed (feedforward baseline)
-     X_windows:  [N, 246]  — flattened 3-message window + derived features
-     y_dist:     [N,  28]  — next message's go_emotions distribution (regression target)
-     y_label:    [N]       — next message's dominant emotion (classification target)
-
-  2. Sequence (LSTM training)
-     sequences:  list of [T, 79] arrays — one per conversation
-     seq_targets:list of [T, 28] arrays — shifted by 1 (predict next step)
-
-Run:
-    python3 -m features.extract
-    python3 -m features.extract --input training_data/conversations.jsonl
-"""
+"""Feature extraction from enriched conversation JSONL."""
 
 import json
 import pickle
 import argparse
 import numpy as np
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional
+from typing import List
 
 from features.schema import (
-    EMOTION_LABELS_28, BERT_LABELS_7, VADER_KEYS_4,
-    MSG_DIM, WINDOW_SIZE, WIN_BASE_DIM, DERIVED_DIM, WINDOW_DIM, N_EMOTIONS,
+    EMOTION_LABELS_28,
+    BERT_LABELS_7,
+    VADER_KEYS_4,
+    MSG_DIM,
+    WINDOW_SIZE,
+    WINDOW_DIM,
+    N_EMOTIONS,
     CDM_CTX_DIM,
 )
 
@@ -36,10 +25,7 @@ DEFAULT_OUT    = Path(__file__).parent.parent / "features"
 # ── Per-message feature vector (79 dims) ──────────────────────────────────────
 
 def msg_to_vec(pipeline: dict) -> np.ndarray:
-    """
-    Convert a single message's pipeline dict to a 79-dim feature vector.
-    Returns zeros if pipeline data is missing.
-    """
+    """Convert a single message's pipeline dict to a 79-dim feature vector."""
     if not pipeline:
         return np.zeros(MSG_DIM, dtype=np.float32)
 
@@ -58,22 +44,18 @@ def msg_to_vec(pipeline: dict) -> np.ndarray:
     if cv_raw and isinstance(cv_raw, list) and len(cv_raw) == CDM_CTX_DIM:
         ce_vec = np.array(cv_raw, dtype=np.float32)
     elif cv_raw and isinstance(cv_raw, list) and len(cv_raw) == 38:
-        # Backward compat: pad old 38-dim vectors to CDM_CTX_DIM with zeros
         ce_vec = np.zeros(CDM_CTX_DIM, dtype=np.float32)
         ce_vec[:38] = cv_raw
     else:
         ce_vec = np.zeros(CDM_CTX_DIM, dtype=np.float32)
 
-    return np.concatenate([go_vec, bert_vec, vader_vec, ce_vec])  # 79
+    return np.concatenate([go_vec, bert_vec, vader_vec, ce_vec])
 
 
 # ── Derived window features (9 dims) ──────────────────────────────────────────
 
 def window_to_derived(window_msgs: List[dict]) -> np.ndarray:
-    """
-    Compute 9 derived features from a list of WINDOW_SIZE message dicts.
-    window_msgs: each dict has a "pipeline" key.
-    """
+    """Compute 9 derived features from a list of WINDOW_SIZE message dicts."""
     valences   = []
     agreements = []
     entropies  = []
@@ -88,15 +70,12 @@ def window_to_derived(window_msgs: List[dict]) -> np.ndarray:
         go       = stages.get("goemotions", {})
         bert     = stages.get("bert", {})
 
-        # Valence
         valences.append(float(vader.get("vader_compound", 0.0)))
 
-        # Model agreement: does go_emotions top label appear in bert top label?
         go_top   = max(go,   key=go.get)   if go   else "neutral"
         bert_top = max(bert, key=bert.get) if bert else "neutral"
         agreements.append(1.0 if go_top == bert_top else 0.0)
 
-        # Shannon entropy of go_emotions distribution
         probs   = np.array([go.get(e, 0.0) for e in EMOTION_LABELS_28], dtype=np.float32)
         s       = probs.sum()
         probs   = probs / s if s > 0 else probs
@@ -105,19 +84,16 @@ def window_to_derived(window_msgs: List[dict]) -> np.ndarray:
 
         dominants.append(decision.get("dominant") or "neutral")
 
-    # Pad to WINDOW_SIZE if fewer messages provided
     while len(valences) < WINDOW_SIZE:
         valences.append(0.0)
         agreements.append(0.0)
         entropies.append(0.0)
         dominants.append("neutral")
 
-    # Valence slope (linear fit over WINDOW_SIZE points)
     x     = np.arange(WINDOW_SIZE, dtype=np.float32)
     slope = float(np.polyfit(x, valences[:WINDOW_SIZE], 1)[0])
     var   = float(np.var(valences[:WINDOW_SIZE]))
 
-    # Number of dominant-emotion changes across window
     shifts = sum(1 for i in range(1, len(dominants)) if dominants[i] != dominants[i - 1])
 
     return np.array(
@@ -126,16 +102,13 @@ def window_to_derived(window_msgs: List[dict]) -> np.ndarray:
         + entropies[:WINDOW_SIZE]
         + [float(shifts)],
         dtype=np.float32,
-    )  # 9 dims
+    )
 
 
 # ── Main extraction ────────────────────────────────────────────────────────────
 
 def extract(jsonl_path: Path) -> dict:
-    """
-    Read conversations.jsonl and produce both windowed and sequence datasets.
-    Returns a dict with all arrays and metadata.
-    """
+    """Read conversations.jsonl and produce both windowed and sequence datasets."""
     conversations = []
     with jsonl_path.open(encoding="utf-8") as fh:
         for line in fh:
@@ -148,12 +121,10 @@ def extract(jsonl_path: Path) -> dict:
 
     print(f"Loaded {len(conversations)} conversations from {jsonl_path.name}")
 
-    # Sequence dataset (variable length — for LSTM)
-    sequences:       List[np.ndarray] = []   # [T, 79] per conv
-    seq_targets:     List[np.ndarray] = []   # [T-1, 28] next-step targets
+    sequences:       List[np.ndarray] = []
+    seq_targets:     List[np.ndarray] = []
     seq_trajectories: List[str]       = []
 
-    # Windowed dataset (fixed size — for baseline / analysis)
     X_win:   List[np.ndarray] = []
     y_dist:  List[np.ndarray] = []
     y_label: List[str]        = []
@@ -167,7 +138,6 @@ def extract(jsonl_path: Path) -> dict:
         conv_id = conv.get("conversation_id", "")
         msgs    = conv.get("messages", [])
 
-        # Keep only messages with real pipeline data
         valid = [
             m for m in msgs
             if m.get("pipeline") and m["pipeline"].get("stages")
@@ -178,30 +148,26 @@ def extract(jsonl_path: Path) -> dict:
             skipped += 1
             continue
 
-        # ── Sequence format ──────────────────────────────────────────────────
-        vecs = np.stack([msg_to_vec(m["pipeline"]) for m in valid])  # [T, 79]
+        vecs = np.stack([msg_to_vec(m["pipeline"]) for m in valid])
 
-        # Targets: next-step go_emotions distribution
-        # For timestep i, target is valid[i+1]'s go_emotions
         tgt_rows = []
         for m in valid[1:]:
             go   = m["pipeline"].get("stages", {}).get("goemotions", {})
             trow = np.array([go.get(e, 0.0) for e in EMOTION_LABELS_28], dtype=np.float32)
             tgt_rows.append(trow)
-        tgt = np.stack(tgt_rows)  # [T-1, 28]
+        tgt = np.stack(tgt_rows)
 
         sequences.append(vecs)
         seq_targets.append(tgt)
         seq_trajectories.append(t_type)
 
-        # ── Window format ────────────────────────────────────────────────────
         for i in range(len(valid) - WINDOW_SIZE):
             window     = valid[i : i + WINDOW_SIZE]
             target_msg = valid[i + WINDOW_SIZE]
 
-            base    = np.concatenate([msg_to_vec(m["pipeline"]) for m in window])  # 237
-            derived = window_to_derived(window)                                     # 9
-            x       = np.concatenate([base, derived])                               # 210
+            base    = np.concatenate([msg_to_vec(m["pipeline"]) for m in window])
+            derived = window_to_derived(window)
+            x       = np.concatenate([base, derived])
 
             go_next  = target_msg["pipeline"].get("stages", {}).get("goemotions", {})
             dist_tgt = np.array([go_next.get(e, 0.0) for e in EMOTION_LABELS_28], dtype=np.float32)
@@ -228,17 +194,14 @@ def extract(jsonl_path: Path) -> dict:
             print(f"    {lbl:<20} {cnt:>4} ({100*cnt/n_win:.1f}%)")
 
     return {
-        # Sequence format
         "sequences":          sequences,
         "seq_targets":        seq_targets,
         "seq_trajectories":   seq_trajectories,
-        # Windowed format
         "X_windows":          np.array(X_win,  dtype=np.float32) if X_win  else np.zeros((0, WINDOW_DIM), dtype=np.float32),
         "y_dist":             np.array(y_dist, dtype=np.float32) if y_dist else np.zeros((0, N_EMOTIONS), dtype=np.float32),
         "y_label":            y_label,
         "trajectory_types":   traj_win,
         "metadata":           meta,
-        # Stats
         "n_conversations":    len(conversations),
         "n_valid":            n_seq,
         "n_windows":          n_win,
@@ -248,11 +211,8 @@ def extract(jsonl_path: Path) -> dict:
 # ── Train / val / test split ───────────────────────────────────────────────────
 
 def split_dataset(data: dict, train: float = 0.70, val: float = 0.15, seed: int = 42) -> dict:
-    """
-    Stratified split by trajectory type.
-    Returns {"train": ..., "val": ..., "test": ...} each with the same keys as data.
-    """
-    from collections import defaultdict
+    """Stratified split by trajectory type."""
+
 
     rng = np.random.default_rng(seed)
     traj_types = np.array(data["trajectory_types"])
@@ -303,7 +263,6 @@ def save_dataset(data: dict, splits: dict, scaler, out_dir: Path):
     """Save all artefacts to out_dir/."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Windowed numpy arrays
     np.savez_compressed(
         out_dir / "dataset.npz",
         X_train=scaler.transform(splits["train"]["X_windows"]),
@@ -314,7 +273,6 @@ def save_dataset(data: dict, splits: dict, scaler, out_dir: Path):
         y_dist_test=splits["test"]["y_dist"],
     )
 
-    # Sequence data (variable length — can't go in .npz)
     with open(out_dir / "sequences.pkl", "wb") as fh:
         pickle.dump({
             "sequences":        data["sequences"],
@@ -322,7 +280,6 @@ def save_dataset(data: dict, splits: dict, scaler, out_dir: Path):
             "seq_trajectories": data["seq_trajectories"],
         }, fh)
 
-    # Label lists and metadata
     with open(out_dir / "labels.json", "w") as fh:
         json.dump({
             "train": {"y_label": splits["train"]["y_label"], "trajectory": splits["train"]["trajectory_types"]},
@@ -331,11 +288,9 @@ def save_dataset(data: dict, splits: dict, scaler, out_dir: Path):
             "emotion_labels": EMOTION_LABELS_28,
         }, fh, indent=2)
 
-    # Scaler
     with open(out_dir / "scaler.pkl", "wb") as fh:
         pickle.dump(scaler, fh)
 
-    # Stats
     stats = {
         "n_conversations":  data["n_conversations"],
         "n_valid":          data["n_valid"],

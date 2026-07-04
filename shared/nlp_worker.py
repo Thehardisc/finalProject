@@ -1,17 +1,4 @@
-"""
-shared/nlp_worker.py — Generic Redis consumer loop for NLP analyzer services.
-
-Usage:
-    asyncio.run(run_nlp_worker(
-        model_name   = "vader",
-        group_name   = "vader_group",
-        consumer_name= "vader_worker_1",
-        analyzer     = MyAnalyzer(),        # must have .analyze(text: str) -> dict
-        get_text     = lambda d: d.get("text", ""),
-        format_stats = lambda d, scores, ms: {...},  # optional
-        logger       = get_logger("vader_service"),  # optional
-    ))
-"""
+"""shared/nlp_worker.py — Generic Redis consumer loop for NLP analyzer services."""
 
 import asyncio
 import time
@@ -51,7 +38,6 @@ async def run_nlp_worker(
 
     while True:
         try:
-            # PEL recovery: reclaim messages idle >30s (handles crash-before-ACK)
             try:
                 _, stale, _ = await r.xautoclaim(
                     STREAM_KEY, group_name, consumer_name,

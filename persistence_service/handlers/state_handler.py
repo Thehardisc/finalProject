@@ -1,6 +1,4 @@
-"""
-persistence_service/handlers/state_handler.py — Persist conversation state and escalation score.
-"""
+"""persistence_service/handlers/state_handler.py — Persist conversation state and escalation score."""
 import json
 
 from shared.utils.logger import get_logger
@@ -12,10 +10,7 @@ TENSION_LABELS = ['anger', 'annoyance', 'sadness', 'grief', 'disgust', 'fear']
 
 
 def calculate_sentiment_velocity(session, conversation_id: str, limit: int = 5) -> float:
-    """
-    Compute a scalar escalation score from the recent sentiment trend.
-    Returns a value in [0.0, 1.0].
-    """
+    """Compute a scalar escalation score from the recent sentiment trend."""
     try:
         results = (
             session.query(EmotionAnalysis.emotions_json)

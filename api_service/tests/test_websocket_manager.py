@@ -1,4 +1,4 @@
-import sys, os, pytest, types, importlib
+import sys, os, pytest, types
 from unittest.mock import AsyncMock, MagicMock
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -32,7 +32,7 @@ sys.modules["shared.constants"].EMOTION_LABELS = []
 
 from api_service.websocket.manager import ConnectionManager as WsConnectionManager
 
-import ast as _ast, inspect as _inspect
+import ast as _ast
 _main_src = open(os.path.join(_ROOT, "api_service", "main.py")).read()
 _globs: dict = {
     "WebSocket": object,

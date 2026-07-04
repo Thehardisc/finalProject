@@ -84,7 +84,6 @@ async def main():
                                     extra={"event": "emotions_parse_failed", "error": str(e)},
                                 )
 
-                            # vader_compound is in the "vader" key, not in "emotions" (pure 28-class GoE)
                             try:
                                 vader_parsed = json.loads(data.get("vader", "{}"))
                                 emotions_map["vader_compound"] = float(vader_parsed.get("vader_compound", 0.0))

@@ -1,12 +1,12 @@
 from typing import Optional
 import situation_encoder as _SIT
 
-MIN_CONFIDENCE     = 0.52   # return None below this (keep neutral)
-MULTI_MATCH_BOOST  = 0.07   # per extra phrase hit above the first (diminishing)
-CONTEXT_WEIGHT     = 0.75   # history phrases contribute at this fraction of direct score
-NARRATIVE_BOOST    = 0.06   # added to top emotion when a narrative marker fires
-MAX_NARRATIVE      = 0.12   # hard cap on total narrative boost
-NEGATION_PENALTY   = 0.30   # multiplied on score when negation before emotion word detected
+MIN_CONFIDENCE     = 0.52
+MULTI_MATCH_BOOST  = 0.07
+CONTEXT_WEIGHT     = 0.75
+NARRATIVE_BOOST    = 0.06
+MAX_NARRATIVE      = 0.12
+NEGATION_PENALTY   = 0.30
 
 _NARRATIVE_MARKERS = [
     "ended up", "turned out", "only to", "only to find", "only to discover",
@@ -58,7 +58,6 @@ _EMO_KEYWORDS: dict[str, list[str]] = {
 
 _RULES: list[tuple[list[str], str, float]] = [
 
-    # Joy / Happiness
     (["they picked me", "i got in", "i got accepted", "i got the job",
       "i start monday", "i start next week", "i got the call",
       "they said yes", "i passed", "we won", "it worked out",
@@ -69,7 +68,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "worked out perfectly", "it all worked out"],
      "joy", 0.73),
 
-    # ── Excitement ────────────────────────────────────────────────────────────
     (["can't wait until", "can't wait —", "can't wait,",
       "we're finally taking", "finally taking the trip",
       "planned for two years", "planned for years",
@@ -80,7 +78,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "finally happening", "it's actually happening"],
      "excitement", 0.70),
 
-    # ── Sadness ───────────────────────────────────────────────────────────────
     (["never showed up", "didn't show up", "never came", "never arrived",
       "table is still set", "chair is still empty", "place is still set",
       "still waiting for", "she left me", "he left me", "they left",
@@ -95,7 +92,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "nobody left", "there is no one"],
      "sadness", 0.73),
 
-    # ── Grief ─────────────────────────────────────────────────────────────────
     (["passed away", "passed this morning", "passed last night",
       "didn't make it", "they're gone", "she's gone now", "he's gone now",
       "the funeral is", "we said goodbye", "final goodbye",
@@ -104,7 +100,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "still can't believe they're gone", "still feels unreal"],
      "grief", 0.80),
 
-    # ── Disappointment ────────────────────────────────────────────────────────
     (["studied for weeks", "studied every night", "worked so hard for",
       "practiced for months", "practiced for years", "prepared for months", "got cancelled", "was cancelled",
       "got canceled", "was canceled", "all for nothing", "wasted my time",
@@ -118,7 +113,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "never even replied", "still no response"],
      "disappointment", 0.73),
 
-    # ── Remorse / Regret ──────────────────────────────────────────────────────
     (["wish i had", "wish i hadn't", "should have said",
       "should have told", "should have been there",
       "the last thing i said", "last words i said",
@@ -129,7 +123,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "i let them down", "i wasn't there for"],
      "remorse", 0.72),
 
-    # ── Embarrassment ─────────────────────────────────────────────────────────
     (["called the teacher mom", "called my teacher mom", "called her mom",
       "called him dad", "called the prof", "in front of the whole class",
       "in front of everyone", "everyone heard me", "she heard me",
@@ -144,7 +137,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "forgot the words", "forgot my lines"],
      "embarrassment", 0.73),
 
-    # ── Amusement ─────────────────────────────────────────────────────────────
     (["walked straight into the glass", "walked into the glass door",
       "walked into a glass", "walked into the wall",
       "fell off the chair", "tripped in front of",
@@ -158,7 +150,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "ran into a lamp post", "ran into a pole"],
      "amusement", 0.71),
 
-    # ── Gratitude ─────────────────────────────────────────────────────────────
     (["you didn't have to", "you really didn't have to", "didn't need to do that",
       "means so much to me", "means the world to me",
       "that was so kind", "you have no idea what",
@@ -172,7 +163,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "i owe you so much", "i owe you one"],
      "gratitude", 0.74),
 
-    # ── Fear / Dread ──────────────────────────────────────────────────────────
     (["run more tests", "more tests", "wouldn't tell me why", "didn't tell me why",
       "waiting for results", "waiting to hear back", "could be serious",
       "something might be wrong", "what if it's", "i don't know what's wrong",
@@ -189,7 +179,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "no one's heard from", "phone keeps going to voicemail"],
      "fear", 0.71),
 
-    # ── Nervousness / Anxiety ─────────────────────────────────────────────────
     (["my hands are shaking", "hands won't stop shaking",
       "heart is pounding", "heart was racing",
       "dry mouth", "couldn't sleep last night",
@@ -202,7 +191,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "going live in", "going on stage"],
      "nervousness", 0.70),
 
-    # ── Anger ─────────────────────────────────────────────────────────────────
     (["they just changed", "raised the price again", "increased the price",
       "without any warning", "without notice", "no notice",
       "behind my back", "without asking me",
@@ -216,7 +204,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "left me on read", "ignored me again"],
      "anger", 0.70),
 
-    # ── Annoyance ─────────────────────────────────────────────────────────────
     (["raised the price again", "increased the price again",
       "did it again without", "no warning whatsoever",
       "no explanation whatsoever", "zero notice", "no notice at all",
@@ -230,7 +217,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "right in the middle of", "keeps interrupting"],
      "annoyance", 0.66),
 
-    # ── Disgust ───────────────────────────────────────────────────────────────
     (["found out they had been", "turns out they were",
       "it was all fake", "it was a scam", "none of it was real",
       "they never cared", "they were just using",
@@ -244,7 +230,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "couldn't even look"],
      "disgust", 0.68),
 
-    # ── Disapproval ───────────────────────────────────────────────────────────
     (["they shouldn't have", "that was wrong", "that was not okay",
       "that's not how you", "that's not how anyone should",
       "the way they handled", "how they dealt with",
@@ -253,7 +238,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "that's unacceptable", "that's inexcusable"],
      "disapproval", 0.66),
 
-    # ── Surprise ──────────────────────────────────────────────────────────────
     (["was already there", "already arrived", "left at the same time",
       "got there before me", "arrived before", "we literally left together",
       "wait — already", "wait, already",
@@ -266,7 +250,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "all of a sudden", "just like that"],
      "surprise", 0.66),
 
-    # ── Love / Caring ─────────────────────────────────────────────────────────
     (["been thinking about you all day", "been thinking about you",
       "can't stop thinking about you", "thinking of you",
       "you mean everything to me", "you mean the world to me",
@@ -277,7 +260,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "can't imagine without you", "the day feels different without"],
      "love", 0.74),
 
-    # ── Admiration ────────────────────────────────────────────────────────────
     (["couldn't have done it without", "she did it alone",
       "he figured it out on his own", "without any help",
       "raised all those kids by herself", "raised them alone",
@@ -288,7 +270,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "inspiring the whole team", "set the standard"],
      "admiration", 0.70),
 
-    # ── Pride ─────────────────────────────────────────────────────────────────
     (["first in my family", "first in the family",
       "nobody else managed to", "never been done before",
       "youngest ever to", "first woman to", "first man to",
@@ -300,7 +281,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "graduated today", "just graduated"],
      "pride", 0.71),
 
-    # ── Curiosity ─────────────────────────────────────────────────────────────
     (["how does that even work", "how does that work", "how does it work",
       "can you explain", "explain it again", "i don't understand how",
       "what does that mean exactly", "wait, explain",
@@ -311,7 +291,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "what's the story behind", "where does that come from"],
      "curiosity", 0.70),
 
-    # ── Confusion ─────────────────────────────────────────────────────────────
     (["don't understand what happened", "don't know what happened",
       "makes no sense", "doesn't add up",
       "what just happened", "one minute", "first it was",
@@ -322,7 +301,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "everyone else seems to get it", "am i the only one"],
      "confusion", 0.67),
 
-    # ── Relief ────────────────────────────────────────────────────────────────
     (["finally over", "it's finally done", "finally behind me",
       "test came back clear", "results came back normal",
       "all clear", "nothing serious", "benign",
@@ -335,7 +313,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "turned out to be nothing"],
      "relief", 0.72),
 
-    # ── Optimism ──────────────────────────────────────────────────────────────
     (["can't wait to try", "really want to try", "excited to start",
       "looking forward to", "hope it goes well", "fingers crossed",
       "hopefully this time", "this time will be different",
@@ -345,7 +322,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "getting there", "making progress"],
      "optimism", 0.64),
 
-    # ── Realization ───────────────────────────────────────────────────────────
     (["only just realised", "just realised", "just realized", "only now realised",
       "clicked for me", "it hit me", "dawned on me",
       "look back and see", "looking back i can see",
@@ -356,7 +332,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "it makes sense now", "it all makes sense now"],
      "realization", 0.68),
 
-    # ── Approval ──────────────────────────────────────────────────────────────
     (["totally the right call", "right decision",
       "exactly what needed to happen", "handled it well",
       "couldn't have done better", "impressed by how",
@@ -365,7 +340,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "earned that", "well deserved"],
      "approval", 0.65),
 
-    # ── Desire ────────────────────────────────────────────────────────────────
     (["can't stop thinking about", "keep imagining what it would be like",
       "dreamed about this", "dreamed of this",
       "all i want right now", "all i want is",
@@ -374,7 +348,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "if only i had", "if only there was"],
      "desire", 0.65),
 
-    # ── Caring ────────────────────────────────────────────────────────────────
     (["check in on them", "check on her", "check on him",
       "make sure they're okay", "making sure she's alright",
       "stayed with her all night", "stayed with him all night",
@@ -384,7 +357,6 @@ _RULES: list[tuple[list[str], str, float]] = [
       "covered for them", "took their shift"],
      "caring", 0.68),
 
-    # ── Nervousness (second cluster: performance) ─────────────────────────────
     (["stomach is in knots", "can't eat", "too nervous to eat",
       "palms are sweaty", "going over my lines",
       "rehearsed a hundred times", "practiced in the mirror",
@@ -427,7 +399,7 @@ def _score_rules(text: str) -> dict[str, float]:
         hits = sum(1 for p in phrases if p in text_lower)
         if hits == 0:
             continue
-        boost = MULTI_MATCH_BOOST * (hits - 1) * (0.8 ** max(0, hits - 2))  # diminishing returns
+        boost = MULTI_MATCH_BOOST * (hits - 1) * (0.8 ** max(0, hits - 2))
         conf  = min(0.95, base_conf + boost)
         if emotion not in scores or conf > scores[emotion]:
             scores[emotion] = conf
@@ -436,23 +408,13 @@ def _score_rules(text: str) -> dict[str, float]:
 
 
 def _fuse(rule_scores: dict[str, float], sit_scores: dict[str, float]) -> tuple[dict[str, float], str]:
-    """
-    Fuse phrase-rule scores (Layer 1) with situation-encoder scores (Layer 2).
-
-    Strategy:
-    - If a situation archetype was detected, its top emotion becomes the anchor.
-    - Rule scores can override if they are significantly higher.
-    - Both signals are merged with weighted averaging where both fire.
-
-    Returns (merged_scores, method_label).
-    """
+    """Fuse phrase-rule scores (Layer 1) with situation-encoder scores (Layer 2)."""
     if not sit_scores:
         return rule_scores, "rule-based-v2"
 
     if not rule_scores:
         return sit_scores, "situation-encoder"
 
-    # Determine which signal wins for the top emotion
     top_rule = max(rule_scores.values()) if rule_scores else 0.0
     top_sit  = max(sit_scores.values())  if sit_scores  else 0.0
 
@@ -464,13 +426,10 @@ def _fuse(rule_scores: dict[str, float], sit_scores: dict[str, float]) -> tuple[
         s = sit_scores.get(emo, 0.0)
 
         if r > 0 and s > 0:
-            # Both fired: weighted blend — situation has slight structural authority
             merged[emo] = round(0.45 * r + 0.55 * s, 3)
         elif r > 0:
-            # Only rules fired: apply at reduced weight when situation anchors elsewhere
             merged[emo] = round(r * 0.85, 3)
         else:
-            # Only situation fired
             merged[emo] = round(s, 3)
 
     method = "situation+rules" if (top_rule >= MIN_CONFIDENCE and top_sit >= MIN_CONFIDENCE) else (
@@ -479,42 +438,28 @@ def _fuse(rule_scores: dict[str, float], sit_scores: dict[str, float]) -> tuple[
 
 
 def detect(text: str, history: list) -> Optional[dict]:
-    """
-    Stage 2 implicit emotion detection.
-
-    Args:
-        text    — current message text
-        history — list of recent message texts (last ≤3, oldest first)
-
-    Returns:
-        {"emotion": str, "confidence": float, "scores": dict, "method": str}
-        or None if no signal fires above MIN_CONFIDENCE.
-    """
+    """Stage 2 implicit emotion detection."""
     text_lower = text.lower()
 
-    # Layer 1: phrase-rule scoring (direct text)
     rule_scores = _score_rules(text)
+    sit_scores  = _SIT.encode(text) or {}
 
-    # Layer 1b: rule scoring on history context at reduced weight
+    # History may only REINFORCE emotions the current message itself evidences —
+    # never author them, or the previous message's emotion bleeds into this one.
     if history:
         context = " ".join(h for h in history[-2:] if h != text)
         ctx_scores = _score_rules(context)
         for emo, conf in ctx_scores.items():
-            rule_scores[emo] = max(rule_scores.get(emo, 0.0), conf * CONTEXT_WEIGHT)
+            if rule_scores.get(emo, 0.0) > 0 or sit_scores.get(emo, 0.0) > 0:
+                rule_scores[emo] = max(rule_scores.get(emo, 0.0), conf * CONTEXT_WEIGHT)
 
-    # Layer 2: situation-encoder scoring
-    sit_scores = _SIT.encode(text) or {}
-
-    # Fuse the two signals
     merged, method = _fuse(rule_scores, sit_scores)
 
     if not merged:
         return None
 
-    # Layer 3: negation guard
     merged = _apply_negation(text_lower, merged)
 
-    # Layer 4: narrative boost on top emotion
     ranked = sorted(merged.items(), key=lambda x: x[1], reverse=True)
     if not ranked or ranked[0][1] < MIN_CONFIDENCE:
         return None
@@ -529,7 +474,6 @@ def detect(text: str, history: list) -> Optional[dict]:
 
     top_emotion_label, top_conf = ranked[0]
 
-    # Build soft score distribution
     scores: dict[str, float] = {"neutral": round(max(0.0, 1.0 - top_conf), 3)}
     for emo, conf in ranked[:5]:
         scores[emo] = round(conf, 3)

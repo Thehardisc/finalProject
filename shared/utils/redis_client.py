@@ -10,14 +10,14 @@ class RedisClient:
     def __init__(self):
         self.host     = os.getenv("REDIS_HOST",     "localhost")
         self.port     = int(os.getenv("REDIS_PORT", 6379))
-        self.password = os.getenv("REDIS_PASSWORD", None)  # D1: optional auth
+        self.password = os.getenv("REDIS_PASSWORD", None)
         self.redis    = None
 
     async def connect(self):
         pool = ConnectionPool(
             host=self.host,
             port=self.port,
-            password=self.password,      # D1: passed through; None = no auth
+            password=self.password,
             decode_responses=True,
             max_connections=20,
         )
@@ -35,7 +35,6 @@ class RedisClient:
             else:
                 prepared_data[k] = v
 
-        # D6: cap stream length so memory never grows unbounded
         await self.redis.xadd(stream_key, prepared_data, maxlen=STREAM_MAXLEN, approximate=True)
 
     async def close(self):

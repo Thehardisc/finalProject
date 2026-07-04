@@ -1,47 +1,47 @@
-import json                                                    # load the message data file
-import os                                                      # path to the data file
+import json
+import os
 
-import pytest                                                  # test framework
+import pytest
 
-from corpora import FAMILY, LABEL_FAMILY                       # emotion -> family mappings
-import thresholds as T                                         # the edge accuracy gate
+from corpora import FAMILY, LABEL_FAMILY
+import thresholds as T
 
-_DATA = os.path.join(os.path.dirname(__file__), "data", "edge_messages.json")  # authored messages file
-with open(_DATA, encoding="utf-8") as _f:                      # open it
-    MESSAGES = json.load(_f)["messages"]                       # list of {text, emotion, edge, strict}
+_DATA = os.path.join(os.path.dirname(__file__), "data", "edge_messages.json")
+with open(_DATA, encoding="utf-8") as _f:
+    MESSAGES = json.load(_f)["messages"]
 
-STRICT = [m for m in MESSAGES if m.get("strict")]              # only the strict-tagged subset
-
-
-def _family_of(emotion):                                       # acceptable family set for an emotion
-    return FAMILY[LABEL_FAMILY[emotion]]                       # via LABEL_FAMILY then FAMILY
+STRICT = [m for m in MESSAGES if m.get("strict")]
 
 
-@pytest.mark.parametrize("msg", STRICT,                        # one test per strict message
+def _family_of(emotion):
+    return FAMILY[LABEL_FAMILY[emotion]]
+
+
+@pytest.mark.parametrize("msg", STRICT,
                          ids=[f'{m["edge"]}:{m["text"][:18]}' for m in STRICT])
-def test_strict_edge_message(io, msg):                         # strict -> predicted family must match
-    fam = _family_of(msg["emotion"])                           # expected family
-    r, ok = io(msg["text"], family=fam)                        # analyze + record expected/verdict
-    assert ok, (                                               # must land in the right family
+def test_strict_edge_message(io, msg):
+    fam = _family_of(msg["emotion"])
+    r, ok = io(msg["text"], family=fam)
+    assert ok, (
         f'{msg["text"]!r} [{msg["edge"]}] → {r["final_label"]}; expected {msg["emotion"]} (family {sorted(fam)})')
 
 
-@pytest.mark.slow                                              # heavy: runs every message
-def test_edge_aggregate_accuracy(io):                          # aggregate family-accuracy gate over ALL messages
-    from collections import defaultdict                        # per-edge tally
-    by_edge = defaultdict(lambda: [0, 0])                      # edge -> [hits, total]
-    hits, misses = 0, []                                       # global hits + miss report
-    for m in MESSAGES:                                         # each authored message
-        r, ok = io(m["text"], family=_family_of(m["emotion"]))  # analyze + record expected/verdict
-        hits += ok                                             # tally global
-        by_edge[m["edge"]][0] += ok                            # tally per-edge hit
-        by_edge[m["edge"]][1] += 1                             # tally per-edge total
-        if not ok:                                             # record misses
+@pytest.mark.slow
+def test_edge_aggregate_accuracy(io):
+    from collections import defaultdict
+    by_edge = defaultdict(lambda: [0, 0])
+    hits, misses = 0, []
+    for m in MESSAGES:
+        r, ok = io(m["text"], family=_family_of(m["emotion"]))
+        hits += ok
+        by_edge[m["edge"]][0] += ok
+        by_edge[m["edge"]][1] += 1
+        if not ok:
             misses.append(f'  {m["edge"]:<14} {m["text"][:34]!r:<36} → {r["final_label"]} (want {m["emotion"]})')
-    acc = hits / len(MESSAGES)                                 # overall family accuracy
-    print(f"\n[edge] family-accuracy={acc:.3f} ({hits}/{len(MESSAGES)})")  # report
-    for edge, (h, t) in sorted(by_edge.items()):               # per-edge breakdown
+    acc = hits / len(MESSAGES)
+    print(f"\n[edge] family-accuracy={acc:.3f} ({hits}/{len(MESSAGES)})")
+    for edge, (h, t) in sorted(by_edge.items()):
         print(f"  {edge:<16} {h}/{t} = {h/t:.2f}")
-    if misses:                                                 # list the misses
+    if misses:
         print("misses:\n" + "\n".join(misses))
-    assert acc >= T.EDGE_FAMILY_GATE, f"edge family accuracy {acc:.3f} < gate {T.EDGE_FAMILY_GATE}"  # gate
+    assert acc >= T.EDGE_FAMILY_GATE, f"edge family accuracy {acc:.3f} < gate {T.EDGE_FAMILY_GATE}"

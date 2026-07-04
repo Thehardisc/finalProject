@@ -1,39 +1,39 @@
-import json                                                    # read the JSONL sample
-import os                                                      # path + existence check
+import json
+import os
 
-import pytest                                                  # test framework
+import pytest
 
-from corpora import FAMILY, LABEL_FAMILY                       # family mapping
-from shared.constants import EMOTION_LABELS                    # the 28 valid labels
-import thresholds as T                                         # the real-data gate
+from corpora import LABEL_FAMILY
+from shared.constants import EMOTION_LABELS
+import thresholds as T
 
-pytestmark = pytest.mark.slow                                  # heavy (2000 messages) -> opt-in
+pytestmark = pytest.mark.slow
 
-_DATA = os.path.join(os.path.dirname(__file__), "data", "goemotions_sample.jsonl")  # real-data sample
+_DATA = os.path.join(os.path.dirname(__file__), "data", "goemotions_sample.jsonl")
 
 
-def _load():                                                   # load the JSONL rows
-    if not os.path.exists(_DATA):                              # built by build_goemotions_corpus.py
+def _load():
+    if not os.path.exists(_DATA):
         pytest.skip(f"{_DATA} missing — run `python qa_suite/build_goemotions_corpus.py`")
-    with open(_DATA, encoding="utf-8") as f:                   # open it
-        return [json.loads(line) for line in f if line.strip()]  # one dict per line
+    with open(_DATA, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
-def test_goemotions_benchmark(analyze):                        # benchmark vs human gold labels
-    rows = _load()                                             # 2000 real messages
-    top1 = fam = 0                                             # exact + family hit counters
-    invalid = set()                                            # any non-canonical predictions
-    for r in rows:                                             # each message
-        pred = analyze(r["text"])["final_label"]              # predicted emotion
-        if pred not in EMOTION_LABELS:                        # validity guard
+def test_goemotions_benchmark(analyze):
+    rows = _load()
+    top1 = fam = 0
+    invalid = set()
+    for r in rows:
+        pred = analyze(r["text"])["final_label"]
+        if pred not in EMOTION_LABELS:
             invalid.add(pred)
-        gold = set(r["labels"])                               # human gold labels (multi-label)
-        gold_fams = {LABEL_FAMILY[g] for g in gold if g in LABEL_FAMILY}  # their families
-        top1 += pred in gold                                  # exact match against any gold
-        fam += LABEL_FAMILY.get(pred) in gold_fams           # family match against any gold
-    n = len(rows)                                             # total
-    print(f"\n[goemotions] n={n}  top1-exact={top1/n:.3f}  family-accuracy={fam/n:.3f}  "  # report
+        gold = set(r["labels"])
+        gold_fams = {LABEL_FAMILY[g] for g in gold if g in LABEL_FAMILY}
+        top1 += pred in gold
+        fam += LABEL_FAMILY.get(pred) in gold_fams
+    n = len(rows)
+    print(f"\n[goemotions] n={n}  top1-exact={top1/n:.3f}  family-accuracy={fam/n:.3f}  "
           f"(gate {T.GOEMOTIONS_FAMILY_GATE})")
-    assert not invalid, f"non-canonical labels emitted: {invalid}"  # all predictions valid
-    assert fam / n >= T.GOEMOTIONS_FAMILY_GATE, (             # honest real-data gate
+    assert not invalid, f"non-canonical labels emitted: {invalid}"
+    assert fam / n >= T.GOEMOTIONS_FAMILY_GATE, (
         f"real-data family accuracy {fam/n:.3f} < gate {T.GOEMOTIONS_FAMILY_GATE}")

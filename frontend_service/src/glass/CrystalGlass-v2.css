@@ -1,6 +1,4 @@
-/* Crystal Glass Design System v2 — Warm Wellness */
 
-/* ── Reset & Canvas ──────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 
 body {
@@ -12,7 +10,6 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── CSS Custom Properties ───────────────────────────────────────────────── */
 :root {
   --canvas:            #FAF9F6;
   --glass-bg:          #FFFFFF;
@@ -23,12 +20,11 @@ body {
   --glass-blur-strong: none;
   --glass-blur-emotion:none;
   --glass-shadow:      0 2px 12px rgba(0, 0, 0, 0.06), 0 0 0 1px rgba(0, 0, 0, 0.05);
-  --bubble-rgb:        91, 138, 106;   /* sage green */
+  --bubble-rgb:        91, 138, 106;
   --spring:            cubic-bezier(0.34, 1.2, 0.64, 1);
   --page-pad:          28px;
 }
 
-/* ── Keyframes ───────────────────────────────────────────────────────────── */
 @keyframes crystalDrop {
   0%   { transform: translateY(-24px) scaleY(0.85); opacity: 0; }
   55%  { transform: translateY(4px)   scaleY(1.03); opacity: 1; }
@@ -65,7 +61,6 @@ body {
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ── Card / Panel base ───────────────────────────────────────────────────── */
 .glass-panel {
   background: #FFFFFF;
   border: 1px solid rgba(0, 0, 0, 0.07);
@@ -83,7 +78,6 @@ body {
   transition: box-shadow 0.6s var(--spring), border-color 0.6s;
 }
 
-/* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn-prism {
   background: rgba(var(--bubble-rgb), 0.08);
   border: 1.5px solid rgba(var(--bubble-rgb), 0.24);
@@ -152,7 +146,6 @@ body {
 }
 .btn-sweep:active { transform: scale(0.97); }
 
-/* ── Scrollbars ──────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
@@ -161,7 +154,6 @@ body {
 }
 ::-webkit-scrollbar-thumb:hover { background: rgba(0, 0, 0, 0.22); }
 
-/* ── Page Shell ──────────────────────────────────────────────────────────── */
 .crystal-shell {
   width: 100vw;
   height: 100vh;
@@ -170,7 +162,6 @@ body {
   overflow: hidden;
 }
 
-/* Soft ambient orbs — sage and terracotta on cream */
 .crystal-shell::before,
 .crystal-shell::after {
   content: '';
@@ -192,7 +183,6 @@ body {
   animation-delay: -10s;
 }
 
-/* ── Loading Gate ────────────────────────────────────────────────────────── */
 .crystal-gate {
   position: fixed;
   inset: 0;
@@ -217,7 +207,6 @@ body {
 }
 .crystal-gate-check.ready { color: #3D9B6E; font-weight: 600; }
 
-/* ── Training Banner ─────────────────────────────────────────────────────── */
 .training-banner {
   position: fixed; top: 0; left: 0; right: 0; z-index: 500;
   background: linear-gradient(90deg,
@@ -236,7 +225,6 @@ body {
   color: #FFFFFF;
 }
 
-/* ── Conversation Card ───────────────────────────────────────────────────── */
 .conv-card {
   background: #FFFFFF;
   border: 1px solid rgba(0, 0, 0, 0.07);
@@ -258,7 +246,6 @@ body {
   box-shadow: 0 2px 10px rgba(var(--bubble-rgb, 91,138,106), 0.10);
 }
 
-/* ── Analytics Layer Card ────────────────────────────────────────────────── */
 .analytics-layer {
   background: #FFFFFF;
   border: 1px solid rgba(0, 0, 0, 0.07);
@@ -268,7 +255,6 @@ body {
   animation: fadeUp 0.36s var(--spring) both;
 }
 
-/* ── Stat Bar ────────────────────────────────────────────────────────────── */
 .stat-bar-track {
   height: 6px; border-radius: 99px;
   background: rgba(var(--bubble-rgb), 0.10);
@@ -280,7 +266,6 @@ body {
   transition: width 0.6s var(--spring);
 }
 
-/* ── Mobile ───────────────────────────────────────────────────────────────── */
 @media (max-width: 768px) {
   .crystal-shell::before {
     width: 100vw; height: 100vw;

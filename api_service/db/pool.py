@@ -1,6 +1,4 @@
-"""
-api_service/db/pool.py — asyncpg connection pool lifecycle management.
-"""
+"""api_service/db/pool.py — asyncpg connection pool lifecycle management."""
 import os
 import asyncio
 

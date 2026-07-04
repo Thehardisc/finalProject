@@ -4,7 +4,6 @@ import os
 import json
 import time
 
-# Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
@@ -104,14 +103,12 @@ class RuleBasedExplainer:
 
         return " ".join(insights[:2])
 
-# --- Main Service Logic ---
 redis_client = RedisClient()
 STREAM_KEY = "conversation_update_stream"
 GROUP_NAME = "reasoning_group"
 CONSUMER_NAME = "reasoning_worker_1"
 REASONING_UPDATE_KEY = "reasoning_update_stream"
 
-# Implicit emotion request stream (Stage 0)
 IMPLICIT_STREAM      = "implicit_emotion_requests"
 IMPLICIT_GROUP       = "implicit_reasoning_group"
 IMPLICIT_CONSUMER    = "implicit_worker_1"
@@ -230,9 +227,7 @@ async def run_implicit_loop(r):
                                 f"(conf={result['confidence']:.2f}, method={result['method']})"
                             )
 
-                            # LPUSH so the BLPOP in central_responder unblocks
                             await r.lpush(response_key, json.dumps(result))
-                            # Short TTL — if BLPOP already timed out the key should not linger
                             await r.expire(response_key, 5)
                             await r.xack(IMPLICIT_STREAM, IMPLICIT_GROUP, entry_id)
 

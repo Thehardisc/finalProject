@@ -1,20 +1,4 @@
-"""
-migrate_and_train.py — one-shot LSTM retraining after CDM_CTX_DIM 38→40 change.
-
-What this does:
-  1. Pads existing sequences.pkl from 77-dim to 79-dim (zeros at positions [77:79])
-  2. Updates models/checkpoints/model_config.json
-  3. Retrains ConversationLSTM with input_dim=79
-  4. Deploys trajectory_lstm.pt + trajectory_config.json to
-     central_responder_service/models/
-
-Run inside the trainer_service container (or any env with PyTorch):
-    cd /app
-    python conversation_state_learner/migrate_and_train.py
-
-Or from project root:
-    docker compose run --rm trainer_service python conversation_state_learner/migrate_and_train.py
-"""
+"""migrate_and_train.py — one-shot LSTM retraining after CDM_CTX_DIM 38→40 change."""
 import sys, os, json, pickle, shutil
 import numpy as np
 from pathlib import Path
@@ -25,15 +9,12 @@ sys.path.insert(0, str(_HERE.parent))
 
 FEATURES_DIR = _HERE / "features"
 CKPT_DIR     = _HERE / "models" / "checkpoints"
-# The bind mount in docker-compose maps host ./central_responder_service/models → /app/models
-# Write directly to /app/models so the host sees the new files immediately.
 _env_model_path = os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")
 DEPLOY_DIR   = Path(_env_model_path).parent
 
-OLD_DIM = 77   # 28+7+4+38
-NEW_DIM = 79   # 28+7+4+40
+OLD_DIM = 77
+NEW_DIM = 79
 
-# ── Step 1: migrate sequences.pkl ─────────────────────────────────────────────
 
 print("=== Step 1: Migrate sequences 77-dim → 79-dim ===")
 
@@ -60,7 +41,6 @@ if needs_migration:
             print(f"  WARNING: unexpected dim {s.shape[1]}, skipping")
             migrated.append(s)
     data["sequences"] = migrated
-    # keep a backup
     backup = seqs_path.with_suffix(".pkl.bak77")
     shutil.copy(seqs_path, backup)
     pickle.dump(data, open(seqs_path, "wb"))
@@ -71,7 +51,6 @@ else:
 
 print()
 
-# ── Step 2: train ─────────────────────────────────────────────────────────────
 
 print("=== Step 2: Retrain ConversationLSTM (input_dim=79) ===\n")
 
@@ -90,11 +69,10 @@ n_val   = len(val_ds)   if val_ds   else 0
 n_test  = len(test_ds)  if test_ds  else 0
 print(f"  Live pipeline sequences — Train: {n_train}  Val: {n_val}  Test: {n_test}")
 
-# ── Augment with MELD (1,433 dialogues from Friends TV) ───────────────────────
 print("\n  Loading NLP models for MELD extraction...")
 import os as _os
 _os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-_os.environ.setdefault("HF_DATASETS_OFFLINE",  "0")   # MELD needs network on first run
+_os.environ.setdefault("HF_DATASETS_OFFLINE",  "0")
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer as _VSA
 from transformers import pipeline as _hfpipe
 import torch as _torch
@@ -129,20 +107,17 @@ meld_seqs, meld_tgts = load_meld_sequences(
     vader_fn=_vader_fn,
     bert_fn=_bert_fn,
     goe_fn=_goe_fn,
-    max_dialogues=1200,   # train+val splits → ~1,000 dialogues
+    max_dialogues=1200,
 )
 
-# Free models before training
 del _bert, _goe, _vader
 import gc; gc.collect()
 print(f"  MELD sequences: {len(meld_seqs)} dialogues loaded")
 
-# Merge: first 80 % of MELD into train, remainder into val
 _meld_split = int(len(meld_seqs) * 0.8)
 meld_train_seqs, meld_train_tgts = meld_seqs[:_meld_split],  meld_tgts[:_meld_split]
 meld_val_seqs,   meld_val_tgts   = meld_seqs[_meld_split:],  meld_tgts[_meld_split:]
 
-# Wrap in ConversationDataset and merge with live-pipeline data
 from torch.utils.data import ConcatDataset
 
 if meld_train_seqs:
@@ -216,7 +191,6 @@ history = train(
     device="cpu",
 )
 
-# ── Step 3: evaluate ──────────────────────────────────────────────────────────
 
 best_ckpt = CKPT_DIR / "best_model.pt"
 if test_loader and best_ckpt.exists():
@@ -240,7 +214,6 @@ if test_loader and best_ckpt.exists():
 with open(CKPT_DIR / "model_config.json", "w") as fh:
     json.dump(config, fh, indent=2)
 
-# ── Step 4: deploy ─────────────────────────────────────────────────────────────
 
 print("\n=== Step 4: Deploy to central_responder_service/models/ ===")
 

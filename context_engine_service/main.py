@@ -13,13 +13,29 @@ import train_cdm_hmm
 from appraisal import compute_appraisal
 from shared.module_registry import register_module
 from shared.constants import (
-    CDM_CTX_DIM, N_CDM_STATES as _N,
+    CDM_CTX_DIM,
     CTX_CDM_PROBS,
-    CTX_HIST_POS, CTX_HIST_NEU, CTX_HIST_NEG, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
-    CTX_RESIDENCY, CTX_TRANSITION, CTX_ABRUPTNESS, CTX_COHERENCE,
-    CTX_ENTROPY, CTX_SPK_DIVERGENCE, CTX_VELOCITY, CTX_ACCELERATION,
-    CTX_MSG_LENGTH, CTX_LATENCY_MS,
-    CTX_HMM_CONF, CTX_HMM_ENTROPY, CTX_HMM_EMISSION, CTX_HMM_NEXT3, CTX_INTENT_STAB,
+    CTX_HIST_POS,
+    CTX_HIST_NEU,
+    CTX_HIST_NEG,
+    CTX_RESONANCE,
+    CTX_VOLATILITY,
+    CTX_CURR_VALENCE,
+    CTX_RESIDENCY,
+    CTX_TRANSITION,
+    CTX_ABRUPTNESS,
+    CTX_COHERENCE,
+    CTX_ENTROPY,
+    CTX_SPK_DIVERGENCE,
+    CTX_VELOCITY,
+    CTX_ACCELERATION,
+    CTX_MSG_LENGTH,
+    CTX_LATENCY_MS,
+    CTX_HMM_CONF,
+    CTX_HMM_ENTROPY,
+    CTX_HMM_EMISSION,
+    CTX_HMM_NEXT3,
+    CTX_INTENT_STAB,
 )
 
 from fastapi import FastAPI
@@ -44,7 +60,7 @@ _GOEMOTION_LABELS = [
     'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization',
     'relief', 'remorse', 'sadness', 'surprise', 'neutral'
 ]
-_N_GOEMO = len(_GOEMOTION_LABELS)  # 28
+_N_GOEMO = len(_GOEMOTION_LABELS)
 
 
 def _emotion_entropy(emotions: Dict) -> float:
@@ -121,7 +137,7 @@ class ContextEngineService:
         self.qdrant = AsyncQdrantClient(url=qdrant_url)
         self.collection_name = "episodic_memory"
         
-        self.embedder              = None  # lazy-loaded at startup
+        self.embedder              = None
         self.vector_size           = 384
         self.decay_factor          = 0.95
         self.window_size_seconds   = 3600
@@ -132,7 +148,6 @@ class ContextEngineService:
     async def initialize(self):
         try:
             from sentence_transformers import SentenceTransformer
-            # Load embedder synchronously here but within the startup hook to not block module parse
             self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
             
             collections = await self.qdrant.get_collections()
@@ -189,7 +204,7 @@ class ContextEngineService:
                     ),
                     limit=5,
                 ),
-                timeout=1.5,  # Increased from 0.5s to 1.5s
+                timeout=1.5,
             )
 
             if not search_result:
@@ -237,7 +252,7 @@ class ContextEngineService:
         state_key      = f"context:user:{user_id}:state"
 
         try:
-            _valence = float(current_valence)  # numpy 2.0 scalars are not JSON-serialisable
+            _valence = float(current_valence)
             async with self.redis.pipeline(transaction=True) as pipe:
                 pipe.zremrangebyscore(valence_key,    "-inf", window_cutoff)
                 pipe.zremrangebyscore(linguistic_key, "-inf", window_cutoff)
@@ -256,7 +271,7 @@ class ContextEngineService:
             new_volatility   = float(self.decay_factor * prev_volatility + (1 - self.decay_factor) * current_variance)
             baseline_valence = float(np.mean(recent_valences)) if recent_valences else _valence
 
-            _USER_TTL = 86400  # 24-hour expiry on user working-memory keys
+            _USER_TTL = 86400
             async with self.redis.pipeline(transaction=True) as pipe2:
                 pipe2.hset(state_key, mapping={
                     "current_volatility": new_volatility,
@@ -306,7 +321,6 @@ class ContextEngineService:
         hmm_alpha_key   = f"{_spk}:hmm_alpha"
         intent_stab_key = f"{_spk}:intent_stab"
 
-        # Batch all 7 independent Redis reads into one round-trip
         (
             state, spk_seq_raw, last_embed_json,
             raw_prev, hmm_raw, stab_raw, state_hist_raw
@@ -320,7 +334,6 @@ class ContextEngineService:
             self.redis.lrange(state_hist_key, 0, 2),
         )
 
-        # Derived values — all computed from the gathered results above
         spk_seq      = json.loads(spk_seq_raw) if spk_seq_raw else []
         velocity     = float(spk_seq[-1] - spk_seq[-2]) if len(spk_seq) >= 2 else 0.0
         acceleration = float((spk_seq[-1] - spk_seq[-2]) - (spk_seq[-2] - spk_seq[-3])) if len(spk_seq) >= 3 else 0.0
@@ -531,7 +544,7 @@ class ContextEngineService:
                                 "timestamp":        time.time(),
                                 "valence":          float(valence),
                                 "dominant_emotion": dominant_emotion,
-                                "text":             text[:500],  # cap to avoid large payloads
+                                "text":             text[:500],
                             }
                         )
                     ]
@@ -583,8 +596,6 @@ async def startup_event():
 async def _dlq_drainer():
     dlq_name   = "preprocessed_stream_dlq"
     group_name = "context_engine_dlq_group"
-    # Fixed consumer name: avoids leaking dead consumers into the group on restarts.
-    # xautoclaim reclaims any PEL from a prior run of this same consumer name.
     client_id  = "dlq_drainer_1"
 
     try:
@@ -713,10 +724,6 @@ async def redis_listener():
 
                             top_emotion = max(last_emotions, key=last_emotions.get) if last_emotions else "neutral"
 
-                            # Read T-1's embedding BEFORE build_context_vector queues
-                            # the write of T's embedding.  This guarantees we get T-1's
-                            # vector to pair with T-1's emotional labels in Qdrant.
-                            # Per-speaker: only this user's last embed, not the other speaker's.
                             _prev_embed_raw = await context_engine.redis.get(
                                 f"conv:{conversation_id}:spk:{user_id}:last_embed"
                             )
@@ -743,16 +750,11 @@ async def redis_listener():
                                 )
                                 context_vector = [0.0] * CDM_CTX_DIM
 
-                            # Episodic memory: save T-1's embedding with T-1's emotional
-                            # outcome.  Saving T's embedding with T-1's labels (the
-                            # original bug) caused Qdrant to store mismatched text↔emotion
-                            # pairs, corrupting hist_pos/hist_neg for future queries.
-                            # Skip on the first message (no previous embedding yet).
                             if _prev_embed_raw:
                                 try:
                                     context_engine.qdrant_write_queue.put_nowait({
                                         "user_id":          user_id,
-                                        "text":             "",   # T-1's text not recoverable here
+                                        "text":             "",
                                         "valence":          prev_valence,
                                         "embedding":        json.loads(_prev_embed_raw),
                                         "dominant_emotion": prev_emotion,

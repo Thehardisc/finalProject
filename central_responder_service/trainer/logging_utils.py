@@ -34,11 +34,10 @@ class _StderrToLogger:
 
     def write(self, data):
         self._buf += data
-        # tqdm uses \r to overwrite lines — treat both \r and \n as line ends
         for chunk in re.split(r'[\r\n]', self._buf):
-            pass  # iterate to last segment
+            pass
         lines = re.split(r'[\r\n]', self._buf)
-        self._buf = lines[-1]  # keep incomplete last segment
+        self._buf = lines[-1]
         for line in lines[:-1]:
             line = self._ANSI.sub('', line).strip()
             if line:

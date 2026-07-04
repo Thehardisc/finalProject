@@ -13,40 +13,39 @@ from shared.utils.logger import get_logger
 from shared.constants import EMOTION_LABELS
 from vad_lexicon import compute_vad
 
-# Shared pool: 3 workers for clf_primary / clf_secondary / semantic in parallel
 _INFERENCE_POOL = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="goe_inf")
 
 logger = get_logger("goemotions_service")
 
 _PROTO_SENTENCES = [
-    "I truly admire and respect this person, it is deeply impressive",    # admiration
-    "This is hilarious and funny, I cannot stop laughing",                 # amusement
-    "I am furious and extremely angry, this enrages me",                   # anger
-    "This is so annoying and irritating to deal with",                     # annoyance
-    "I approve of this decision and think it is the right choice",         # approval
-    "I care deeply about this and want to help and support",               # caring
-    "I am confused and do not understand what is happening here",          # confusion
-    "I am curious and want to explore and learn more about this",          # curiosity
-    "I want this so badly and desire it deeply",                           # desire
-    "I am deeply disappointed and let down by what happened",              # disappointment
-    "I strongly disapprove of this and think it is wrong",                 # disapproval
-    "This disgusts me and makes me feel revolted and sick",                # disgust
-    "I feel embarrassed and ashamed about what occurred",                  # embarrassment
-    "I am incredibly excited and thrilled, this is amazing",               # excitement
-    "I am terrified and scared, this fills me with fear and dread",        # fear
-    "I am very grateful and thankful for this kindness",                   # gratitude
-    "I am overwhelmed with grief and deep sorrow and loss",                # grief
-    "I feel joyful and happy, this fills me with pure happiness",          # joy
-    "I feel deep love and affection for this person",                      # love
-    "I feel nervous and anxious and worried about what might happen",      # nervousness
-    "I feel optimistic and hopeful that things will work out well",        # optimism
-    "I feel proud of this great achievement and accomplishment",           # pride
-    "I just realized something important that I had not noticed before",   # realization
-    "I feel such relief that this difficult situation resolved well",       # relief
-    "I feel deep remorse and regret for what I said or did",               # remorse
-    "I feel very sad and melancholy, my heart is heavy with sorrow",       # sadness
-    "I am completely surprised and shocked by this unexpected event",      # surprise
-    "This is a normal everyday situation with no particular emotional response",  # neutral
+    "I truly admire and respect this person, it is deeply impressive",
+    "This is hilarious and funny, I cannot stop laughing",
+    "I am furious and extremely angry, this enrages me",
+    "This is so annoying and irritating to deal with",
+    "I approve of this decision and think it is the right choice",
+    "I care deeply about this and want to help and support",
+    "I am confused and do not understand what is happening here",
+    "I am curious and want to explore and learn more about this",
+    "I want this so badly and desire it deeply",
+    "I am deeply disappointed and let down by what happened",
+    "I strongly disapprove of this and think it is wrong",
+    "This disgusts me and makes me feel revolted and sick",
+    "I feel embarrassed and ashamed about what occurred",
+    "I am incredibly excited and thrilled, this is amazing",
+    "I am terrified and scared, this fills me with fear and dread",
+    "I am very grateful and thankful for this kindness",
+    "I am overwhelmed with grief and deep sorrow and loss",
+    "I feel joyful and happy, this fills me with pure happiness",
+    "I feel deep love and affection for this person",
+    "I feel nervous and anxious and worried about what might happen",
+    "I feel optimistic and hopeful that things will work out well",
+    "I feel proud of this great achievement and accomplishment",
+    "I just realized something important that I had not noticed before",
+    "I feel such relief that this difficult situation resolved well",
+    "I feel deep remorse and regret for what I said or did",
+    "I feel very sad and melancholy, my heart is heavy with sorrow",
+    "I am completely surprised and shocked by this unexpected event",
+    "This is a normal everyday situation with no particular emotional response",
 ]
 
 
@@ -81,16 +80,15 @@ class GoEmotionsAnalyzer:
         logger.info("Loading sentence transformer for semantic NLI (all-MiniLM-L6-v2)...")
         from sentence_transformers import SentenceTransformer
         self._sent_model = SentenceTransformer("all-MiniLM-L6-v2")
-        proto_embs = self._sent_model.encode(_PROTO_SENTENCES, convert_to_numpy=True)  # [28, 384]
+        proto_embs = self._sent_model.encode(_PROTO_SENTENCES, convert_to_numpy=True)
         norms = np.linalg.norm(proto_embs, axis=1, keepdims=True) + 1e-8
-        self._proto_norm = proto_embs / norms                                            # [28, 384]
+        self._proto_norm = proto_embs / norms
         logger.info("All GoEmotions models + semantic NLI loaded — 3-model blend active.")
 
     def _semantic_scores(self, text: str) -> dict:
-        emb = self._sent_model.encode([text], convert_to_numpy=True)[0]  # [384]
+        emb = self._sent_model.encode([text], convert_to_numpy=True)[0]
         emb_norm = emb / (np.linalg.norm(emb) + 1e-8)
-        sims = self._proto_norm @ emb_norm              # [28] cosine similarities
-        # Softmax with temperature 5 — sharpens distribution without losing signal
+        sims = self._proto_norm @ emb_norm
         exp_s = np.exp((sims - sims.max()) * 5.0)
         probs = exp_s / exp_s.sum()
         return {e: float(probs[i]) for i, e in enumerate(EMOTION_LABELS)}
@@ -98,7 +96,6 @@ class GoEmotionsAnalyzer:
     def analyze(self, text: str) -> dict:
         if len(text) > 512:
             text = text[:512]
-        # Run 3 models in parallel — each releases the GIL during PyTorch inference
         f_primary   = _INFERENCE_POOL.submit(lambda: {r["label"]: r["score"] for r in self.clf_primary(text)[0]})
         f_secondary = _INFERENCE_POOL.submit(lambda: {r["label"]: r["score"] for r in self.clf_secondary(text)[0]})
         f_semantic  = _INFERENCE_POOL.submit(self._semantic_scores, text)

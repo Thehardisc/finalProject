@@ -1,18 +1,4 @@
-"""
-local_generator.py — Generates realistic conversation data WITHOUT any API call.
-
-Uses parameterized templates with random variation across:
-  - Subjects (work, relationship, friendship, family, personal growth)
-  - Intensities (mild → severe)
-  - Writing styles (casual, emotional, formal)
-
-Produces the same JSON format as generator.py so collect.py --phase run works unchanged.
-
-Usage:
-    python3 -m data.local_generator              # generate all trajectories
-    python3 -m data.local_generator --count 5    # 5 per trajectory
-    python3 -m data.local_generator --type escalating_conflict
-"""
+"""local_generator.py — Generates realistic conversation data WITHOUT any API call."""
 
 import json
 import random
@@ -20,13 +6,12 @@ import argparse
 from pathlib import Path
 from typing import List
 
-from data.trajectories import TRAJECTORIES
+
 
 RAW_DIR = Path(__file__).parent.parent / "raw_conversations"
-random.seed()   # new seed each run for variety
+random.seed()
 
 
-# ── Shared vocabulary pools ───────────────────────────────────────────────────
 
 SUBJECTS = [
     ("a project at work",     "my manager",       "the deadline"),
@@ -55,7 +40,6 @@ INTENSIFIERS = ["really", "honestly", "seriously", "genuinely", "actually"]
 SOFTENERS    = ["I think", "I feel like", "it seems", "I guess", "maybe"]
 
 
-# ── Trajectory-specific message pools ────────────────────────────────────────
 
 TRAJECTORY_POOLS = {
 
@@ -428,10 +412,7 @@ def _fill(template: str) -> str:
 
 
 def generate_local(trajectory_type: str, count: int) -> List[List[str]]:
-    """
-    Generate `count` conversations for the given trajectory type.
-    Each conversation is a list of message strings.
-    """
+    """Generate `count` conversations for the given trajectory type."""
     pool = TRAJECTORY_POOLS.get(trajectory_type)
     if not pool:
         raise ValueError(f"No local templates for trajectory '{trajectory_type}'")
@@ -475,7 +456,6 @@ def main():
 
     total = 0
     for t_type, convs in targets.items():
-        # Figure out starting index (don't overwrite existing files)
         existing = sorted(out_dir.glob(f"{t_type}_*.json"))
         start    = len(existing)
         for i, messages in enumerate(convs):

@@ -1,6 +1,6 @@
 import os
 import pickle
-import time
+
 from collections import Counter
 from pathlib import Path
 
@@ -38,36 +38,35 @@ _EMPATHETIC_TO_GOEMOTION: dict = {
     'apprehensive':'nervousness',  'touched':      'caring',
 }
 
-# GoEmotions label → primary CDM intent state (primary values from synthetic._LABEL_TO_INTENT)
 _GOEMO_TO_CDM_STATE: dict = {
-    'admiration':    2,   # PRAISE
-    'amusement':     4,   # HUMOR
-    'anger':         6,   # CONFLICT
-    'annoyance':     5,   # TENSION
-    'approval':     14,   # AGREEMENT
-    'caring':       12,   # EMPATHY
-    'confusion':    11,   # ASSERTIVENESS
-    'curiosity':    10,   # CURIOSITY
-    'desire':        1,   # WARMTH
-    'disappointment':8,   # WITHDRAWAL
-    'disapproval':   5,   # TENSION
-    'disgust':       6,   # CONFLICT
-    'embarrassment': 8,   # WITHDRAWAL
-    'excitement':    2,   # PRAISE
-    'fear':          3,   # HELP_REQUEST
-    'gratitude':    14,   # AGREEMENT
-    'grief':         8,   # WITHDRAWAL
-    'joy':           1,   # WARMTH
-    'love':          1,   # WARMTH
-    'nervousness':   3,   # HELP_REQUEST
-    'optimism':     14,   # AGREEMENT
-    'pride':         2,   # PRAISE
-    'realization':   0,   # NEUTRAL
-    'relief':        9,   # RECONCILIATION
-    'remorse':       9,   # RECONCILIATION
-    'sadness':       8,   # WITHDRAWAL
-    'surprise':      4,   # HUMOR
-    'neutral':       0,   # NEUTRAL
+    'admiration':    2,
+    'amusement':     4,
+    'anger':         6,
+    'annoyance':     5,
+    'approval':     14,
+    'caring':       12,
+    'confusion':    11,
+    'curiosity':    10,
+    'desire':        1,
+    'disappointment':8,
+    'disapproval':   5,
+    'disgust':       6,
+    'embarrassment': 8,
+    'excitement':    2,
+    'fear':          3,
+    'gratitude':    14,
+    'grief':         8,
+    'joy':           1,
+    'love':          1,
+    'nervousness':   3,
+    'optimism':     14,
+    'pride':         2,
+    'realization':   0,
+    'relief':        9,
+    'remorse':       9,
+    'sadness':       8,
+    'surprise':      4,
+    'neutral':       0,
 }
 
 
@@ -150,7 +149,6 @@ def extract_empathetic_dialogues_features(
         logger.warning(f"EmpatheticDialogues: no data for {split} split — skipping.")
         return empty, [], []
 
-    # Group rows by conversation, preserving only mappable emotions
     convs: dict = {}
     skipped_labels: Counter = Counter()
     for row in rows_raw:
@@ -174,8 +172,7 @@ def extract_empathetic_dialogues_features(
     for conv in convs.values():
         conv["turns"].sort(key=lambda x: x["utterance_idx"])
 
-    # Flatten to utterance list, capping at `cap` total
-    all_rows = []  # (cid, turn_pos, text, goemo_label, speaker_idx)
+    all_rows = []
     for cid, conv in convs.items():
         for t_pos, turn in enumerate(conv["turns"]):
             all_rows.append((cid, t_pos, turn["utterance"], conv["label"], turn["speaker_idx"]))
@@ -191,7 +188,6 @@ def extract_empathetic_dialogues_features(
     if not all_rows:
         return np.empty((0, FEATURE_DIM), dtype=np.float32), [], []
 
-    # Batch NLP on all utterances at once
     texts = [r[2] for r in all_rows]
     vader_outs, bert_outs, goe_outs = _run_parallel_batches(
         bert_analyzer, goe_analyzer, texts,
@@ -199,9 +195,8 @@ def extract_empathetic_dialogues_features(
         batch_size=batch_size, label_prefix=f"Empathetic/{split}",
     )
 
-    # Build CDM vectors by replaying each conversation in order
     from trainer.data.meld import _meld_build_cdm
-    conv_history: dict = {}  # cid → [{valence, intent_state, speaker, goe_dist}, ...]
+    conv_history: dict = {}
     features, labels, has_cdm_list = [], [], []
 
     for (cid, t_pos, text, goemo_label, speaker_idx), v_out, b_out, g_out in zip(

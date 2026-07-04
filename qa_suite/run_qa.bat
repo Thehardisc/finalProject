@@ -1,23 +1,10 @@
 @echo off
-REM run_qa.bat - run the emotion-engine QA suite (Windows).
-REM
-REM Usage:
-REM   qa_suite\run_qa.bat              fast offline tests (no docker stack needed)
-REM   qa_suite\run_qa.bat offline      same as default
-REM   qa_suite\run_qa.bat slow         big batteries: per-emotion corpus + ~950 fuzz
-REM   qa_suite\run_qa.bat live         live @e2e tests (needs stack up + .env)
-REM   qa_suite\run_qa.bat all          offline + live, excluding slow batteries
-REM   qa_suite\run_qa.bat full         EVERYTHING: offline + slow + live (~1000 cases)
-REM   qa_suite\run_qa.bat calibrate    derive/refresh thresholds from the battery
-REM
-REM Extra pytest args pass through, e.g.:  qa_suite\run_qa.bat offline -k emoji -v
 setlocal enabledelayedexpansion
 
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "ROOT=%%~fI"
 cd /d "%ROOT%"
 
-REM Prefer the project venv if present.
 if exist "%ROOT%\.venv\Scripts\python.exe" (
     set "PY=%ROOT%\.venv\Scripts\python.exe"
 ) else (
@@ -87,8 +74,6 @@ echo [run_qa] FULL suite - offline + slow + live ^(~1000 cases^)
 goto :end
 
 :ensure_model
-REM Fetch the trained meta-learner from the container if the host lacks it,
-REM so the 3 model-gated invariants run instead of skip. Silent fallback otherwise.
 set "MODELPKL=%ROOT%\central_responder_service\models\meta_weights.pkl"
 if exist "%MODELPKL%" goto :eof
 for /f %%i in ('docker compose ps -q central_responder_service 2^>nul') do set "CID=%%i"

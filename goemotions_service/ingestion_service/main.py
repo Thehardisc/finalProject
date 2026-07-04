@@ -6,7 +6,6 @@ import os
 import time
 import uuid
 
-# Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
@@ -53,7 +52,6 @@ async def shutdown_event():
 
 @app.post("/messages")
 async def ingest_message(msg: MessageInput, api_key: str = Depends(validate_api_key)):
-    # rate limit by api_key instead of spoofable user_id
     if not await rate_limiter.is_allowed(api_key):
         logger.warning(f"Rate limit exceeded for api_key: {api_key[:8]}..., conv={msg.conversation_id}")
         raise HTTPException(status_code=429, detail="Too Many Requests: Rate limit exceeded")

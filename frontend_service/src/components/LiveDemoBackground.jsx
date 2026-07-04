@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { EmotionPalette } from './EmotionPalette';
 
 const MOCK_MESSAGES = [
