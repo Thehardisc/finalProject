@@ -15,6 +15,7 @@ from meta_learner import (
     calculate_feature_impacts,
     apply_context_correction,
     _GOE_TO_EKMAN,
+    SARCASM_INVERSION_THRESHOLD,
 )
 
 from trainer import start_trainer_thread
@@ -324,7 +325,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     _bert_top_lbl = max(bert_scores, key=bert_scores.get) if bert_scores else None
     _vader_cmp0   = float(model_outputs.get("vader", {}).get("vader_compound", 0.0))
     _consensus_contra = False
-    if _goe_top_lbl and float(sarcasm_score) < 0.5 and meta_confidence < 0.20:
+    if _goe_top_lbl and float(sarcasm_score) < SARCASM_INVERSION_THRESHOLD and meta_confidence < 0.20:
         _pos_consensus = (_goe_top_lbl in _POS_EMOTIONS
                           and (_bert_top_lbl == "joy" or _vader_cmp0 >= 0.20))
         _neg_consensus = (_goe_top_lbl in _NEG_EMOTIONS
@@ -386,12 +387,12 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         # clearly positive VADER needs sarcasm evidence — genuine sarcasm is exactly
         # that pattern, playful banter is not.
         if (dominant_emotion in _NEG_EMOTIONS and _prev_dominant not in _NEG_EMOTIONS
-                and _vader_cmp >= 0.30 and float(sarcasm_score) < 0.5):
+                and _vader_cmp >= 0.30 and float(sarcasm_score) < SARCASM_INVERSION_THRESHOLD):
             decision_trace.append({
                 "step": "Anomaly fallback", "status": "suppressed",
                 "detail": (f"{', '.join(anomaly_reason)} — blend wanted '{dominant_emotion}', but a "
                            f"positive→negative flip against VADER {_vader_cmp:+.2f} needs sarcasm evidence "
-                           f"(combined {float(sarcasm_score):.2f} < 0.50) — meta verdict kept"),
+                           f"(combined {float(sarcasm_score):.2f} < {SARCASM_INVERSION_THRESHOLD:.2f}) — meta verdict kept"),
                 "label": _prev_dominant, "confidence": round(float(meta_confidence), 4),
             })
             dominant_emotion = _prev_dominant
@@ -547,7 +548,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "ctx_weight_pct":        round(float(logic_map.get("Context", 0.0)), 4),
         "gate_weights_alpha":    gate_alpha,
         "sarcasm_score":         float(sarcasm_score),
-        "inversion_applied":     (sarcasm_score > 0.5),
+        "inversion_applied":     (sarcasm_score > SARCASM_INVERSION_THRESHOLD),
         "conflict":              conflict_desc,
         "decision_trace":        decision_trace,
         "trajectory":            trajectory,

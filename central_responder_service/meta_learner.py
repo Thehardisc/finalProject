@@ -46,6 +46,11 @@ DROPOUT = 0.25
 # a model trained on honest context features (real verified samples) justifies more.
 CTX_WEIGHT_CAP = float(os.environ.get("CTX_WEIGHT_CAP", "0.20"))
 
+# Decision boundary for the combined sarcasm evidence: scores above it fire the
+# inversion (and mark the verdict sarcasm-backed downstream). The no-neg-cue cap
+# below pins capped scores AT this boundary so they can never invert.
+SARCASM_INVERSION_THRESHOLD = float(os.environ.get("SARCASM_INVERSION_THRESHOLD", "0.40"))
+
 # CDM/HMM state features are masked out of the model input (train AND inference).
 # In every bootstrap dataset these were synthesized FROM the gold label
 # (trainer/data/empathetic.py:_GOEMO_TO_CDM_STATE → ctx one-hot), so a model can
@@ -509,20 +514,22 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
                 # worst false-positive mode is sincere affection ("i love you"
                 # scores 0.93); without any negative GoE trace an inversion can
                 # only do harm.
-                sarcasm_score = min(sarcasm_score, 0.50)
+                sarcasm_score = min(sarcasm_score, SARCASM_INVERSION_THRESHOLD)
         if heuristic_sarcasm > 0 or learned_sarcasm > 0:
             _t(trace, "Sarcasm evidence", "info",
                f"classifier {learned_sarcasm:.2f} · heuristic {heuristic_sarcasm:.2f} "
-               f"· neg-cue {neg_cue:.2f} → combined {sarcasm_score:.2f} (inversion needs > 0.50)")
+               f"· neg-cue {neg_cue:.2f} → combined {sarcasm_score:.2f} "
+               f"(inversion needs > {SARCASM_INVERSION_THRESHOLD:.2f})")
         if conflict_desc is None and guard_conflict:
             conflict_desc = guard_conflict
         if conflict_desc:
             _t(trace, "Conflict detector", "info", conflict_desc)
 
-        if sarcasm_score > 0.5:
+        if sarcasm_score > SARCASM_INVERSION_THRESHOLD:
             _POS = [EMOTION_LABELS.index(e) for e in ("joy","amusement","admiration","approval","excitement","love","optimism","pride","caring","gratitude") if e in EMOTION_LABELS]
             _NEG = [EMOTION_LABELS.index(e) for e in ("annoyance","disappointment","anger","disapproval","disgust","grief","remorse","sadness") if e in EMOTION_LABELS]
-            inv  = min((sarcasm_score - 0.5) * 2.0, 1.0) * 0.6
+            inv  = min((sarcasm_score - SARCASM_INVERSION_THRESHOLD)
+                       / (1.0 - SARCASM_INVERSION_THRESHOLD), 1.0) * 0.6
             probs = np.array([all_scores.get(e, 0.0) for e in EMOTION_LABELS], dtype=np.float32)
             for pos, neg in zip(_POS, _NEG):
                 t = probs[pos] * inv
@@ -536,11 +543,11 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
             pred_label = max(all_scores, key=all_scores.get)
             confidence = all_scores[pred_label]
             _t(trace, "Sarcasm inversion", "applied",
-               f"Sarcasm score {sarcasm_score:.2f} > 0.5 — shifted {inv:.0%} of positive mass onto paired negatives ('{_prev}' → '{pred_label}')",
+               f"Sarcasm score {sarcasm_score:.2f} > {SARCASM_INVERSION_THRESHOLD:.2f} — shifted {inv:.0%} of positive mass onto paired negatives ('{_prev}' → '{pred_label}')",
                pred_label, confidence)
         else:
             _t(trace, "Sarcasm inversion", "skipped",
-               f"conflict score {sarcasm_score:.2f} ≤ 0.50 — scores unchanged")
+               f"conflict score {sarcasm_score:.2f} ≤ {SARCASM_INVERSION_THRESHOLD:.2f} — scores unchanged")
 
         all_scores["ekman_group"] = _GOE_TO_EKMAN.get(pred_label, "neutral")
         return pred_label, confidence, all_scores, sarcasm_score, conflict_desc, gate_alpha
