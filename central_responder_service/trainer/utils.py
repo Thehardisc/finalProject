@@ -300,7 +300,6 @@ def _run_parallel_batches(
         _, goe_results  = _run_hf(goe_model, goe_label)
     else:
         logger.info(f"  [{label_prefix}] CPU detected — Running concurrently via threads.")
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=2) as pool:
             futures = {
                 pool.submit(_run_hf, bert_model, bert_label): bert_label,

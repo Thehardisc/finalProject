@@ -25,7 +25,10 @@ from shared.utils.progress import TrainingProgress
 
 logger = get_logger("sarcasm_train")
 
-DATA_FILE  = ROOT / "training_data" / "sarcasm_labels.jsonl"
+DATA_FILE    = ROOT / "training_data" / "sarcasm_labels.jsonl"
+# Sincere positive-surface negatives (train-only) — counters the tweet_eval bias
+# where clean enthusiastic positives read as irony. See qa_suite/test_sarcasm.py.
+AUGMENT_FILE = ROOT / "training_data" / "sarcasm_sincere_augment.jsonl"
 MODELS_DIR = ROOT.parent / "central_responder_service" / "models"
 MODEL_OUT  = MODELS_DIR / "sarcasm_clf.pt"
 CONFIG_OUT = MODELS_DIR / "sarcasm_clf_config.json"
@@ -293,6 +296,11 @@ def main() -> None:
 
     tokenizer = DistilBertTokenizerFast.from_pretrained(BASE_MODEL)
     train_recs, val_recs = conversation_split(records, val_frac=args.val_frac)
+
+    if AUGMENT_FILE.exists():
+        aug = load_records(AUGMENT_FILE)
+        train_recs = train_recs + aug
+        print(f"Augment: +{len(aug)} sincere-domain negatives (train only; val stays pure)")
 
     n_pos   = sum(r["is_sarcastic"] for r in train_recs)
     n_neg   = len(train_recs) - n_pos

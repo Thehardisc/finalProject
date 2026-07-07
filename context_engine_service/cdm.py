@@ -11,22 +11,6 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("cdm")
 
-NEUTRAL        =  0
-WARMTH         =  1
-PRAISE         =  2
-HELP_REQUEST   =  3
-HUMOR          =  4
-TENSION        =  5
-CONFLICT       =  6
-ARGUMENT       =  7
-WITHDRAWAL     =  8
-RECONCILIATION =  9
-CURIOSITY      = 10
-ASSERTIVENESS  = 11
-EMPATHY        = 12
-FRUSTRATION    = 13
-AGREEMENT      = 14
-
 N_CDM_STATES = 15
 
 _STATE_NAMES: List[str] = [
@@ -139,25 +123,6 @@ def _emotion_to_idx(emotion: str) -> int:
     return _GOEMO_TO_IDX.get(emotion.lower().strip(), 0)
 
 
-_STATE_PRIORS: List[Dict[str, float]] = [
-    {"sarcasm": 1.0, "negative": 1.0, "positive": 1.0, "conflict": 1.0, "complexity": 1.0},
-    {"sarcasm": 0.9, "negative": 1.3, "positive": 0.8, "conflict": 1.3, "complexity": 0.9},
-    {"sarcasm": 1.2, "negative": 1.4, "positive": 0.7, "conflict": 1.4, "complexity": 0.9},
-    {"sarcasm": 0.9, "negative": 1.1, "positive": 0.9, "conflict": 1.1, "complexity": 1.3},
-    {"sarcasm": 1.7, "negative": 1.2, "positive": 0.8, "conflict": 1.2, "complexity": 0.8},
-    {"sarcasm": 1.3, "negative": 0.8, "positive": 1.3, "conflict": 0.7, "complexity": 1.1},
-    {"sarcasm": 1.2, "negative": 0.7, "positive": 1.4, "conflict": 0.7, "complexity": 1.0},
-    {"sarcasm": 1.3, "negative": 0.75, "positive": 1.3, "conflict": 0.7, "complexity": 1.2},
-    {"sarcasm": 1.1, "negative": 0.9, "positive": 1.2, "conflict": 1.0, "complexity": 0.9},
-    {"sarcasm": 1.1, "negative": 1.2, "positive": 0.9, "conflict": 1.2, "complexity": 1.0},
-    {"sarcasm": 1.0, "negative": 1.1, "positive": 0.9, "conflict": 1.1, "complexity": 1.3},
-    {"sarcasm": 1.1, "negative": 1.1, "positive": 1.0, "conflict": 1.0, "complexity": 1.1},
-    {"sarcasm": 0.9, "negative": 1.3, "positive": 0.8, "conflict": 1.3, "complexity": 0.9},
-    {"sarcasm": 1.4, "negative": 0.8, "positive": 1.3, "conflict": 0.8, "complexity": 1.1},
-    {"sarcasm": 1.0, "negative": 1.3, "positive": 0.8, "conflict": 1.3, "complexity": 0.9},
-]
-
-
 @dataclass
 class StateDiagnostics:
     current_state:          int
@@ -181,7 +146,6 @@ class IntentStateMachine:
         current_state:   int,
         velocity:        float,
         entropy:         float,
-        speaker_delta:   float,
         topic_coherence: float,
         hmm_alpha:       Optional[np.ndarray] = None,
         top_emotion:     str = "neutral",
@@ -248,10 +212,6 @@ class IntentStateMachine:
     @staticmethod
     def entry_abruptness(state_prev: int, state_next: int) -> float:
         return abs(state_next - state_prev) / float(N_CDM_STATES - 1)
-
-    @staticmethod
-    def get_state_prior(state_idx: int) -> Dict[str, float]:
-        return dict(_STATE_PRIORS[int(state_idx) % N_CDM_STATES])
 
     @staticmethod
     def get_next_probs(state_idx: int) -> List[float]:

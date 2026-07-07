@@ -1,0 +1,19 @@
+{
+  "base_model": "distilbert-base-uncased",
+  "max_length": 256,
+  "hidden_size": 768,
+  "dropout": 0.3,
+  "threshold": 0.30000000000000004,
+  "trained_at": "2026-07-07T09:33:29.691119",
+  "epochs_run": 6,
+  "val_f1": 0.7389,
+  "val_auc": 0.7873,
+  "val_precision": 0.6257,
+  "val_recall": 0.9021,
+  "n_train": 3054,
+  "n_val": 763,
+  "positive_rate": 0.4987,
+  "pos_weight_used": 1.0053,
+  "lr": 2e-05,
+  "batch_size": 16
+}

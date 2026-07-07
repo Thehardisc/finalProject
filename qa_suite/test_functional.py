@@ -1,6 +1,6 @@
 import pytest
 
-from training.eval_sentences import SENTENCE_BATTERY
+from tools.eval_sentences import SENTENCE_BATTERY
 import thresholds as T
 
 

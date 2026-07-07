@@ -101,8 +101,8 @@ class UiUxAgent(BaseAgent):
 
     def _take_screenshot(self) -> str:
         """Run screenshot.js via puppeteer and return base64 or description string."""
-        script = PROJECT_ROOT / "screenshot.js"
-        out_path = PROJECT_ROOT / "frontend_screenshot.png"
+        script = PROJECT_ROOT / "scripts" / "screenshot.js"
+        out_path = PROJECT_ROOT / "docs" / "frontend_screenshot.png"
         if not script.exists():
             return ""
         try:

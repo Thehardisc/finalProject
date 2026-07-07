@@ -10,7 +10,7 @@ for _p in (_ROOT, _SVC):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-from training.eval_sentences import (
+from tools.eval_sentences import (
     evaluate, _load_analyzers, DEFAULT_GOE_MODEL, DEFAULT_BERT_MODEL, DEFAULT_MODEL_PATH,
 )
 from meta_learner import load_meta_learner

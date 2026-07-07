@@ -39,7 +39,7 @@ class HeadAgent:
             _status = results[name].get("findings", "")[:80].replace("\n", " ")
             print(f"  ◀ {name}_agent: {_status}...")
 
-        results = self._resolve_cross(task, results, active)
+        results = self._resolve_cross(task, results)
 
         summary = self._synthesise(task, results)
         print(f"\n{'='*60}\n[HEAD] Done.\n{'='*60}\n")
@@ -86,9 +86,7 @@ class HeadAgent:
                 pass
         return list(self.agents.keys())
 
-    def _resolve_cross(
-        self, task: str, results: dict, already_run: list
-    ) -> dict:
+    def _resolve_cross(self, task: str, results: dict) -> dict:
         """Satisfy NEEDS_HELP requests by running the target agents with cross-context."""
         pending: list[dict] = []
         for from_name, res in results.items():

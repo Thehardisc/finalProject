@@ -35,7 +35,7 @@ echo ""
 
 echo "[Invariant] Checking feature-vector parity (inference vs trainer)..."
 if command -v python3 &> /dev/null && python3 -c "import pytest, numpy" &> /dev/null; then
-    if python3 -m pytest central_responder_service/training/test_feature_parity.py -q &> /tmp/parity_check.log; then
+    if python3 -m pytest qa_suite/unit/test_feature_parity.py -q &> /tmp/parity_check.log; then
         echo "   [OK] Feature-vector parity holds."
     else
         echo "   [FAIL] Feature-vector parity VIOLATION — inference and trainer disagree."
@@ -72,13 +72,30 @@ else
 fi
 echo ""
 
+echo "[Models] Syncing trained artifacts to .cache/ (what you train is what you run)..."
+SARC_SRC="central_responder_service/models/sarcasm_clf.pt"
+SARC_DST=".cache/sarcasm_clf.pt"
+if [ -f "${SARC_SRC}" ] && { [ ! -f "${SARC_DST}" ] || [ "${SARC_SRC}" -nt "${SARC_DST}" ]; }; then
+    mkdir -p .cache
+    cp "${SARC_SRC}" "${SARC_DST}"
+    [ -f "central_responder_service/models/sarcasm_clf_config.json" ] && \
+        cp "central_responder_service/models/sarcasm_clf_config.json" ".cache/sarcasm_clf_config.json"
+    echo "   [OK] sarcasm_clf.pt → .cache/ (newer model deployed; service loads it on start)"
+elif [ -f "${SARC_DST}" ]; then
+    echo "   [OK] sarcasm classifier in .cache/ is up to date."
+else
+    echo "   [SKIP] no sarcasm_clf.pt trained yet — sarcasm_score stays 0.0"
+    echo "          (train with: python3 conversation_state_learner/train_sarcasm_classifier.py)"
+fi
+echo ""
+
 echo "[Search] Detecting host environment..."
 
 if command -v uname &> /dev/null && [ "$(uname -s)" = "Darwin" ]; then
-    if [ ! -f "models/meta_weights.pkl" ] && [ -f "train.sh" ]; then
+    if [ ! -f ".cache/meta_weights.pkl" ] && [ -f "scripts/train.sh" ]; then
         echo "   [INFO] No meta_weights.pkl found on Mac host."
         echo "   [INFO] Running local MPS-accelerated trainer before starting services..."
-        ./train.sh
+        ./scripts/train.sh
     fi
 fi
 

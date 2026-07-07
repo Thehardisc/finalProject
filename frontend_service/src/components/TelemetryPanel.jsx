@@ -17,7 +17,7 @@ const PARTIAL_MAP = {
   go_emotions:'goemotions',
 };
 
-export default function TelemetryPanel({ processing, lastAnalysis, partialModels = new Set(), dark = false }) {
+export default function TelemetryPanel({ processing, lastAnalysis, partialModels = new Set() }) {
   const [tab, setTab] = useState('pipeline');
 
   const d       = lastAnalysis?.data;
@@ -48,7 +48,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
 
       <div style={{ marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontWeight: 700, fontSize: '0.82rem', color: dark ? '#e0e0e0' : '#1c1c2e' }}>Pipeline Telemetry</span>
+          <span style={{ fontWeight: 700, fontSize: '0.82rem', color: 'var(--ig-txt)' }}>Pipeline Telemetry</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{
               display: 'inline-block', width: 7, height: 7, borderRadius: '50%',
@@ -61,7 +61,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
             </span>
           </div>
         </div>
-        <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 3 }}>
+        <div style={{ fontSize: '0.67rem', color: 'var(--ig-txt3)', marginTop: 3 }}>
           4-model multimodal NLP + CDM context
         </div>
       </div>
@@ -74,9 +74,9 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
         {['pipeline', 'cdm'].map(t => (
           <button key={t} onClick={() => setTab(t)} style={{
             flex: 1, padding: '5px 0', borderRadius: 7, cursor: 'pointer',
-            background: tab === t ? 'rgba(88,86,214,.10)' : 'transparent',
-            border: `1px solid ${tab === t ? 'rgba(88,86,214,.30)' : 'rgba(0,0,0,.08)'}`,
-            color: tab === t ? '#4f46e5' : '#6b7280',
+            background: tab === t ? 'rgba(139,92,246,.10)' : 'transparent',
+            border: `1px solid ${tab === t ? 'rgba(139,92,246,.30)' : 'rgba(var(--ig-ink-rgb),.08)'}`,
+            color: tab === t ? 'rgb(139,92,246)' : 'var(--ig-txt2)',
             fontSize: '0.70rem', fontWeight: 600,
             transition: 'all .15s',
           }}>
@@ -95,8 +95,8 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
               const { color } = stage;
               return (
                 <div key={stage.key} style={{
-                  background: active ? `rgba(${color},.07)` : (dark ? '#1a1a28' : '#fafafa'),
-                  border: `1px solid ${active ? `rgba(${color},.22)` : done ? `rgba(${color},.15)` : (dark ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.06)')}`,
+                  background: active ? `rgba(${color},.07)` : 'var(--ig-surf2)',
+                  border: `1px solid ${active ? `rgba(${color},.22)` : done ? `rgba(${color},.15)` : 'rgba(var(--ig-ink-rgb),.06)'}`,
                   borderRadius: 9, padding: '8px 11px',
                   transition: 'background .2s, border-color .2s',
                 }}>
@@ -104,12 +104,12 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                       <div style={{
                         width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                        background: active ? `rgb(${color})` : done ? `rgba(${color},.60)` : 'rgba(0,0,0,.14)',
+                        background: active ? `rgb(${color})` : done ? `rgba(${color},.60)` : 'rgba(var(--ig-ink-rgb),.14)',
                         boxShadow: active ? `0 0 7px rgba(${color},.75)` : 'none',
                         animation: active ? 'tp-pulse .65s ease-in-out infinite' : 'none',
                         transition: 'background .15s',
                       }} />
-                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: active ? `rgb(${color})` : (dark ? '#c0c0c0' : '#374151') }}>
+                      <span style={{ fontSize: '0.78rem', fontWeight: 600, color: active ? `rgb(${color})` : 'rgba(var(--ig-ink-rgb),.80)' }}>
                         {stage.label}
                       </span>
                     </div>
@@ -122,7 +122,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
                       </span>
                     )}
                   </div>
-                  <div style={{ height: 3, borderRadius: 2, background: dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.07)', overflow: 'hidden' }}>
+                  <div style={{ height: 3, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),.08)', overflow: 'hidden' }}>
                     <div style={{
                       height: '100%',
                       width: active ? '65%' : done ? '100%' : '0%',
@@ -131,7 +131,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
                       transition: active ? 'width .18s linear' : 'width .12s ease',
                     }} />
                   </div>
-                  <div style={{ fontSize: '0.62rem', color: '#9ca3af', marginTop: 4 }}>{stage.sub}</div>
+                  <div style={{ fontSize: '0.62rem', color: 'var(--ig-txt3)', marginTop: 4 }}>{stage.sub}</div>
                 </div>
               );
             })}
@@ -139,22 +139,22 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
 
           {d && Object.keys(logMap).length > 0 && (
             <div style={{
-              background: domRgb ? `rgba(${domRgb},.05)` : (dark ? '#1a1a28' : '#f9fafb'),
-              border: `1px solid ${domRgb ? `rgba(${domRgb},.15)` : (dark ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.07)')}`,
+              background: domRgb ? `rgba(${domRgb},.05)` : 'var(--ig-surf2)',
+              border: `1px solid ${domRgb ? `rgba(${domRgb},.15)` : 'rgba(var(--ig-ink-rgb),.07)'}`,
               borderRadius: 10, padding: '11px 13px', marginBottom: 14,
             }}>
-              <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 9 }}>
+              <div style={{ fontSize: '0.63rem', color: 'var(--ig-txt3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 9 }}>
                 Feature Attribution
               </div>
               {Object.entries(logMap).map(([block, v]) => (
                 <div key={block} style={{ marginBottom: 6 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <span style={{ fontSize: '0.63rem', color: '#6b7280' }}>{block}</span>
+                    <span style={{ fontSize: '0.63rem', color: 'var(--ig-txt2)' }}>{block}</span>
                     <span style={{ fontSize: '0.63rem', fontWeight: 700, color: `rgb(${domRgb || '88,86,214'})` }}>
                       {(Math.abs(v) * 100).toFixed(0)}%
                     </span>
                   </div>
-                  <div style={{ height: 2, background: 'rgba(0,0,0,.08)', borderRadius: 1 }}>
+                  <div style={{ height: 2, background: 'rgba(var(--ig-ink-rgb),.08)', borderRadius: 1 }}>
                     <div style={{
                       height: '100%',
                       width: `${Math.min(Math.abs(v) * 100, 100)}%`,
@@ -173,19 +173,19 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
               border: `1px solid rgba(${domRgb},.18)`,
               borderRadius: 10, padding: '11px 13px',
             }}>
-              <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 7 }}>
+              <div style={{ fontSize: '0.63rem', color: 'var(--ig-txt3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 7 }}>
                 Last Inference
               </div>
               <div style={{ fontSize: '0.92rem', fontWeight: 800, color: `rgb(${domRgb})`, textTransform: 'capitalize', marginBottom: 2 }}>
                 {domEmo}
               </div>
               {conf != null && (
-                <div style={{ fontSize: '0.73rem', color: '#6b7280', marginBottom: traj ? 8 : 0 }}>
+                <div style={{ fontSize: '0.73rem', color: 'var(--ig-txt2)', marginBottom: traj ? 8 : 0 }}>
                   {(conf * 100).toFixed(0)}% confidence
                 </div>
               )}
               {traj?.top_predicted && (
-                <div style={{ fontSize: '0.68rem', color: '#9ca3af', marginTop: 4 }}>
+                <div style={{ fontSize: '0.68rem', color: 'var(--ig-txt3)', marginTop: 4 }}>
                   Next predicted:{' '}
                   <span style={{ color: `rgb(${domRgb})`, fontWeight: 700, textTransform: 'capitalize' }}>
                     {traj.top_predicted}
@@ -196,7 +196,7 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
           )}
 
           {!d && (
-            <div style={{ textAlign: 'center', padding: '20px 0', color: '#9ca3af', fontSize: '0.8rem' }}>
+            <div style={{ textAlign: 'center', padding: '20px 0', color: 'var(--ig-txt3)', fontSize: '0.8rem' }}>
               Send a message to see<br />live model activations
             </div>
           )}

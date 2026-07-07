@@ -72,66 +72,6 @@ def _emotion_entropy(emotions: Dict) -> float:
 
 
 class ContextEngineService:
-    LUA_VOLATILITY = """
-    local valence_key = KEYS[1]
-    local linguistic_key = KEYS[2]
-    local state_key = KEYS[3]
-    
-    local cutoff = tonumber(ARGV[1])
-    local now = tonumber(ARGV[2])
-    local current_valence = tonumber(ARGV[3])
-    local decay_factor = tonumber(ARGV[4])
-    local uuid_str = ARGV[5]
-    local ling_json = ARGV[6]
-    
-    redis.call("ZREMRANGEBYSCORE", valence_key, "-inf", cutoff)
-    redis.call("ZREMRANGEBYSCORE", linguistic_key, "-inf", cutoff)
-    
-    local v_json = '{"valence": ' .. current_valence .. ', "id": "' .. uuid_str .. '"}'
-    redis.call("ZADD", valence_key, now, v_json)
-    redis.call("ZADD", linguistic_key, now, ling_json)
-    
-    local history_raw = redis.call("ZRANGE", valence_key, 0, -1)
-    local prev_volatility = tonumber(redis.call("HGET", state_key, "current_volatility")) or 0.0
-    
-    local sum = 0
-    local count = 0
-    for i, v in ipairs(history_raw) do
-        local decoded = cjson.decode(v)
-        if decoded and decoded["valence"] then
-            sum = sum + decoded["valence"]
-            count = count + 1
-        end
-    end
-    
-    local mean = 0
-    local current_variance = 0
-    if count > 0 then
-        mean = sum / count
-        if count > 1 then
-            local sum_sq = 0
-            for i, v in ipairs(history_raw) do
-                local decoded = cjson.decode(v)
-                if decoded and decoded["valence"] then
-                    local val = decoded["valence"]
-                    sum_sq = sum_sq + (val - mean) * (val - mean)
-                end
-            end
-            current_variance = sum_sq / count
-        end
-    else
-        mean = current_valence
-    end
-    
-    local new_volatility = (decay_factor * prev_volatility) + ((1 - decay_factor) * current_variance)
-    
-    redis.call("HSET", state_key, "current_volatility", tostring(new_volatility))
-    redis.call("HSET", state_key, "last_message_ts", tostring(now))
-    redis.call("HSET", state_key, "baseline_valence", tostring(mean))
-    
-    return tostring(new_volatility)
-    """
-
     def __init__(self, redis_url: str, qdrant_url: str):
         self.redis  = aioredis.from_url(redis_url, decode_responses=True)
         self.qdrant = AsyncQdrantClient(url=qdrant_url)
@@ -369,7 +309,7 @@ class ContextEngineService:
         state_hist      = [int(x) for x in state_hist_raw]
 
         diag = CDM.transition(
-            prev_state_idx, velocity, emotion_entropy, speaker_divergence, topic_coherence,
+            prev_state_idx, velocity, emotion_entropy, topic_coherence,
             hmm_alpha=hmm_alpha,
             top_emotion=top_emotion,
             message_text=message_text,

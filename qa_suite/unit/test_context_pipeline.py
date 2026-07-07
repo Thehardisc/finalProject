@@ -8,22 +8,22 @@ from unittest.mock import AsyncMock, MagicMock
 
 _HERE = os.path.dirname(__file__)
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
-_CE   = os.path.abspath(os.path.join(_HERE, ".."))
+_CE   = os.path.join(_ROOT, "context_engine_service")
 for p in (_ROOT, _CE):
     if p not in sys.path:
         sys.path.insert(0, p)
+
+_CE_MAIN = None  # module cache — loaded by file path to dodge bare-name "main" collisions
 
 from shared.constants import (
     CDM_CTX_DIM, N_CDM_STATES, CTX_RESIDENCY, CTX_VELOCITY, CTX_ACCELERATION,
     CTX_CURR_VALENCE, CTX_LATENCY_MS, CTX_VOLATILITY, CTX_HMM_CONF, CTX_INTENT_STAB,
 )
 
-REDIS_URL = os.environ.get("REDIS_TEST_URL", "")
-needs_redis = pytest.mark.skipif(not REDIS_URL, reason="REDIS_TEST_URL not set")
 
 
 def _make_service(redis_mock=None):
-    import importlib, types
+    import types
 
     stubs = [
         "fastapi", "fastapi.responses",
@@ -72,16 +72,18 @@ def _make_service(redis_mock=None):
     cdm_cls.get_next_probs = lambda s: [0.1, 0.1, 0.1]
     cdm_stub.CDM = cdm_cls
 
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "context_engine_main",
-        os.path.join(_CE, "main.py"),
-    )
-
     fastapi_stub = sys.modules["fastapi"]
     fastapi_stub.FastAPI = MagicMock(return_value=MagicMock())
 
-    from main import ContextEngineService
+    # Several services expose a top-level "main" module; import this one by
+    # file path so whichever "main" is already in sys.modules cannot shadow it.
+    global _CE_MAIN
+    if _CE_MAIN is None:
+        import importlib.util
+        _spec = importlib.util.spec_from_file_location("context_engine_main", os.path.join(_CE, "main.py"))
+        _CE_MAIN = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(_CE_MAIN)
+    ContextEngineService = _CE_MAIN.ContextEngineService
 
     svc = ContextEngineService.__new__(ContextEngineService)
     svc.decay_factor        = 0.95
@@ -125,7 +127,7 @@ class TestUpdateWorkingMemory:
         redis_mock = AsyncMock()
         redis_mock.pipeline = MagicMock(return_value=pipe)
 
-        pipe2 = AsyncMock()
+        pipe2 = MagicMock()
         pipe2.__aenter__ = AsyncMock(return_value=pipe2)
         pipe2.__aexit__  = AsyncMock(return_value=False)
         pipe2.execute    = AsyncMock(return_value=[True])
@@ -142,7 +144,7 @@ class TestUpdateWorkingMemory:
             zrange_result=[],
             hgetall_result={"current_volatility": "0.2"},
         )
-        pipe2 = AsyncMock()
+        pipe2 = MagicMock()
         pipe2.__aenter__ = AsyncMock(return_value=pipe2)
         pipe2.__aexit__  = AsyncMock(return_value=False)
         pipe2.execute    = AsyncMock(return_value=[True])
@@ -199,10 +201,13 @@ class TestBuildContextVector:
         r.lrange = _lrange_side_effect
 
         r.get = AsyncMock(side_effect=lambda k: {
-            f"conv:c1:cdm_state":   cdm_state,
-            f"conv:c1:hmm_alpha":   hmm_alpha or json.dumps([1/N_CDM_STATES]*N_CDM_STATES),
-            f"conv:c1:intent_stab": intent_stab,
-            f"conv:c1:last_embed":  None,
+            "conv:c1:spk:u1:cdm_state":   cdm_state,
+            "conv:c1:spk:u1:hmm_alpha":   hmm_alpha or json.dumps([1/N_CDM_STATES]*N_CDM_STATES),
+            "conv:c1:spk:u1:intent_stab": intent_stab,
+            "conv:c1:spk:u1:last_embed":  None,
+            # velocity/acceleration read the per-speaker valence sequence
+            # (oldest → newest); valence_hist arrives newest-first.
+            "conv:c1:spk:u1:valence_seq": json.dumps([float(x) for x in reversed(_valence_hist)]),
         }.get(k))
 
         wm_pipe  = self._make_pipe([
@@ -225,7 +230,7 @@ class TestBuildContextVector:
         assert len(ctx) == CDM_CTX_DIM, f"Expected {CDM_CTX_DIM}, got {len(ctx)}"
 
     @pytest.mark.asyncio
-    async def test_velocity_uses_valence_hist(self):
+    async def test_velocity_uses_speaker_valence_seq(self):
         r = self._mock_redis_for_build(valence_hist=["0.8", "0.3", "0.1"])
         svc = _make_service(r)
         ctx = await svc.build_context_vector(
@@ -245,18 +250,18 @@ class TestBuildContextVector:
             f"conv:c1:intent_stab":  "3",
             f"conv:c1:last_embed":   None,
         }.get(k))
-        pipe = AsyncMock()
+        pipe = MagicMock()
         pipe.__aenter__ = AsyncMock(return_value=pipe)
         pipe.__aexit__  = AsyncMock(return_value=False)
         pipe.execute    = AsyncMock(return_value=[None]*6)
-        wm_p = AsyncMock(); wm_p.__aenter__ = AsyncMock(return_value=wm_p)
+        wm_p = MagicMock(); wm_p.__aenter__ = AsyncMock(return_value=wm_p)
         wm_p.__aexit__ = AsyncMock(return_value=False)
         wm_p.execute = AsyncMock(return_value=[
             None, None, None, None,
             [json.dumps({"valence": 0.3, "id": "x"})],
             {"current_volatility": "0.0"},
         ])
-        wm_p2 = AsyncMock(); wm_p2.__aenter__ = AsyncMock(return_value=wm_p2)
+        wm_p2 = MagicMock(); wm_p2.__aenter__ = AsyncMock(return_value=wm_p2)
         wm_p2.__aexit__ = AsyncMock(return_value=False)
         wm_p2.execute = AsyncMock(return_value=[True])
         r.pipeline = MagicMock(side_effect=[wm_p, wm_p2, pipe])
@@ -277,7 +282,7 @@ class TestBuildContextVector:
             "dominant_emotion": "neutral",
             "last_updated": str(last_ts),
         })
-        svc = _make_service(r)
+        _make_service(r)
 
         import time as _t
         _now = _t.time()
@@ -289,9 +294,9 @@ class TestBuildContextVector:
     async def test_continuation_vector_has_zero_velocity(self):
         r = AsyncMock()
         r.get    = AsyncMock(side_effect=lambda k: {
-            f"conv:c1:cdm_state":    "2",
-            f"conv:c1:hmm_alpha":    json.dumps([1/N_CDM_STATES]*N_CDM_STATES),
-            f"conv:c1:intent_stab":  "1",
+            "conv:c1:spk:u1:cdm_state":   "2",
+            "conv:c1:spk:u1:hmm_alpha":   json.dumps([1/N_CDM_STATES]*N_CDM_STATES),
+            "conv:c1:spk:u1:intent_stab": "1",
         }.get(k))
         r.lrange  = AsyncMock(return_value=["2", "2"])
         r.hgetall = AsyncMock(return_value={"average_valence": "0.4"})
@@ -367,7 +372,7 @@ class TestCDMStateAtomicity:
     async def test_cdm_state_uses_pipeline_transaction(self):
         pipeline_calls = []
 
-        pipe = AsyncMock()
+        pipe = MagicMock()
         pipe.__aenter__ = AsyncMock(return_value=pipe)
         pipe.__aexit__  = AsyncMock(return_value=False)
         pipe.set   = MagicMock(side_effect=lambda *a, **kw: pipeline_calls.append(("set",   a)))
@@ -382,7 +387,7 @@ class TestCDMStateAtomicity:
         r.get      = AsyncMock(return_value=None)
         r.hgetall  = AsyncMock(return_value={})
 
-        wm_pipe = AsyncMock()
+        wm_pipe = MagicMock()
         wm_pipe.__aenter__ = AsyncMock(return_value=wm_pipe)
         wm_pipe.__aexit__  = AsyncMock(return_value=False)
         wm_pipe.execute = AsyncMock(return_value=[
@@ -390,7 +395,7 @@ class TestCDMStateAtomicity:
             [json.dumps({"valence": 0.0, "id": "x"})],
             {"current_volatility": "0.0"},
         ])
-        wm_pipe2 = AsyncMock()
+        wm_pipe2 = MagicMock()
         wm_pipe2.__aenter__ = AsyncMock(return_value=wm_pipe2)
         wm_pipe2.__aexit__  = AsyncMock(return_value=False)
         wm_pipe2.execute = AsyncMock(return_value=[True])

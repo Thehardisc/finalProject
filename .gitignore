@@ -21,6 +21,7 @@ frontend_service/node_modules/
 *.pkl
 *.pt
 *.safetensors
+*.md
 
 # ── Runtime logs ───────────────────────────────
 logs/

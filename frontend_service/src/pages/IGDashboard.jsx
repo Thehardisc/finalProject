@@ -7,6 +7,7 @@ import PixelFace from '../components/PixelFace';
 import EmotionArcChart from '../components/EmotionArcChart';
 import CDMStateGraph from '../components/CDMStateGraph';
 import AmbientOrb from '../components/AmbientOrb';
+import EmotionBackground from '../components/EmotionBackground';
 import TelemetryPanel from '../components/TelemetryPanel';
 import PlutchikWheel from '../visualizations/PlutchikWheel';
 import '../styles/ig-theme.css';
@@ -455,16 +456,16 @@ function AnalysisWaiting() {
   );
 }
 
-// Processing state — TelemetryPanel from git (dark mode)
-function AnalysisProcessing({ partialModels = new Set(), lastAnalysis, dark = false }) {
+// Processing state — pipeline telemetry while models run
+function AnalysisProcessing({ partialModels = new Set(), lastAnalysis }) {
   return (
     <div style={{ padding: '12px 10px' }}>
-      <TelemetryPanel processing={true} lastAnalysis={lastAnalysis} partialModels={partialModels} dark={dark} />
+      <TelemetryPanel processing={true} lastAnalysis={lastAnalysis} partialModels={partialModels} />
     </div>
   );
 }
 
-function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Set(), messages = [], dark = false, settings = {} }) {
+function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Set(), messages = [], settings = {} }) {
   const showTrajectory  = settings.showTrajectory ?? true;
   const pipelineVerbose = settings.pipelineVerbose ?? false;
   const showOrb         = settings.ambientOrb ?? true;
@@ -513,7 +514,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
   const DIVIDER = { borderTop: '1px solid rgba(var(--ig-ink-rgb),0.07)', margin: '12px 0' };
 
   if (!data && !processing) return <AnalysisWaiting />;
-  if (processing && !data)  return <AnalysisProcessing partialModels={partialModels} lastAnalysis={currentAnalysis} dark={dark} />;
+  if (processing && !data)  return <AnalysisProcessing partialModels={partialModels} lastAnalysis={currentAnalysis} />;
 
   const confPct = Math.round(confidence * 100);
 
@@ -619,8 +620,7 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
 
       {snap && (
         <>
-          <style>{`.cdm-dark span[style*="374151"]{color:rgba(var(--ig-ink-rgb),.55)!important}.cdm-dark div[style*="rgba(0,0,0,.07)"]{background:rgba(var(--ig-ink-rgb),.08)!important}`}</style>
-          <div className="cdm-dark" style={{ marginBottom: 10 }}>
+          <div style={{ marginBottom: 10 }}>
             <CDMStateGraph snapshot={snap} />
           </div>
           <div style={DIVIDER} />
@@ -846,10 +846,14 @@ export default function IGDashboard({
 
   return (
     <div data-ig-theme={igTheme} style={{
-      display: 'flex', height: '100vh', overflow: 'hidden',
+      display: 'flex', height: '100vh', overflow: 'hidden', position: 'relative',
       background: 'var(--ig-bg)', color: 'var(--ig-txt)',
       fontFamily: '-apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif',
     }}>
+
+      {(settings.emotionBackdrop ?? true) && (
+        <EmotionBackground emotion={currentAnalysis?.data?.final_dominant_emotion || 'neutral'} />
+      )}
 
       <AnimatePresence>
       {showCompose && (
@@ -963,6 +967,7 @@ export default function IGDashboard({
                 { key: 'showTimestamps',    label: 'Message timestamps', sub: 'Display send time below each message', default: false },
                 { key: 'showConfidence',    label: 'Confidence scores', sub: 'Show meta-learner confidence % on each message', default: true },
                 { key: 'ambientOrb',        label: 'Ambient orb', sub: 'Emotion-reactive background color in the analysis panel', default: true },
+                { key: 'emotionBackdrop',   label: 'Emotion backdrop', sub: 'Animated backdrop tinted by the live dominant emotion', default: true },
                 ...(currentUser?.role === 'admin'
                   ? [{ key: 'demoMode', label: 'Demo mode', sub: 'Show the AI demo launcher in the chat header (admin only)', default: false }]
                   : []),
@@ -1015,7 +1020,7 @@ export default function IGDashboard({
       )}
       </AnimatePresence>
 
-      <div style={{ width: 320, borderRight: '1px solid var(--ig-bord)', display: 'flex', flexDirection: 'column', background: 'var(--ig-surf)', flexShrink: 0 }}>
+      <div style={{ width: 320, borderRight: '1px solid var(--ig-bord)', display: 'flex', flexDirection: 'column', background: 'var(--ig-surf)', flexShrink: 0, position: 'relative' }}>
 
         <div style={{ padding: '18px 16px 10px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div ref={profileMenuRef} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', position: 'relative' }}
@@ -1413,7 +1418,7 @@ export default function IGDashboard({
                 border: `1px solid ${dominantRgb ? `rgba(${dominantRgb},.30)` : 'var(--ig-bord2)'}`,
                 borderRadius: 26, padding: '4px 6px 4px 14px',
                 transition: 'border-color .4s, background .4s',
-                background: dominantRgb ? `rgba(${dominantRgb},0.04)` : '#f9fafb',
+                background: dominantRgb ? `rgba(${dominantRgb},0.04)` : 'var(--ig-surf3)',
               }}>
                 <textarea
                   ref={inputRef} rows={1}
@@ -1423,7 +1428,7 @@ export default function IGDashboard({
                   onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); } }}
                   style={{ flex: 1, background: 'none', border: 'none', outline: 'none', resize: 'none', fontSize: '0.93rem', color: 'var(--ig-txt)', fontFamily: 'inherit', padding: '8px 0', lineHeight: 1.4, maxHeight: 100, overflowY: 'auto' }}
                 />
-                {inputValue.trim() ? (
+                {inputValue.trim() && (
                   <motion.button
                     onClick={onSend}
                     whileHover={{ scale: 1.05 }}
@@ -1431,14 +1436,6 @@ export default function IGDashboard({
                     transition={{ type: 'spring', stiffness: 500, damping: 22 }}
                     style={{ background: 'linear-gradient(135deg,#5b21b6,#6d28d9)', border: 'none', cursor: 'pointer', fontWeight: 700, fontSize: '0.82rem', color: '#fff', padding: '8px 16px', borderRadius: 20, flexShrink: 0, boxShadow: '0 3px 12px rgba(109,40,217,.35)' }}
                   >Send</motion.button>
-                ) : (
-                  <motion.button
-                    onClick={() => { setInputValue('❤️'); setTimeout(() => onSend(), 50); }}
-                    whileTap={{ scale: 1.40 }}
-                    whileHover={{ scale: 1.15 }}
-                    transition={{ type: 'spring', stiffness: 500, damping: 18 }}
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '1.3rem', padding: '4px 6px', flexShrink: 0 }}
-                  >❤️</motion.button>
                 )}
               </div>
             </div>
@@ -1489,7 +1486,6 @@ export default function IGDashboard({
                 processing={processing}
                 partialModels={partialModels}
                 messages={messages}
-                dark={igTheme === 'dark'}
                 settings={settings}
               />
             )}

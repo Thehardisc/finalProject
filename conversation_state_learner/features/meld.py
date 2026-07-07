@@ -42,7 +42,6 @@ _MELD_VALENCE: Dict[str, float] = {
 
 def _utterance_to_vec(
     text: str,
-    meld_emotion: str,
     vader_fn: Callable,
     bert_fn:  Callable,
     goe_fn:   Callable,
@@ -107,7 +106,7 @@ def load_meld_sequences(
             text = str(turn.get("Utterance", "")).strip()
             if not text:
                 continue
-            vec = _utterance_to_vec(text, turn.get("Emotion", "neutral"), vader_fn, bert_fn, goe_fn)
+            vec = _utterance_to_vec(text, vader_fn, bert_fn, goe_fn)
             vecs.append(vec)
 
         if len(vecs) < 2:
@@ -127,39 +126,3 @@ def load_meld_sequences(
     return sequences, targets
 
 
-def load_meld_flat(
-    vader_fn:      Callable,
-    bert_fn:       Callable,
-    goe_fn:        Callable,
-    max_dialogues: int = 1000,
-    splits:        Tuple[str, ...] = ("train",),
-) -> Tuple[np.ndarray, List[str]]:
-    """Load MELD as a flat feature matrix for meta-learner training."""
-    try:
-        from datasets import load_dataset
-        meld = load_dataset("declare-lab/MELD")
-    except Exception as e:
-        logger.warning(f"MELD load failed: {e} — skipping.")
-        return np.empty((0, MSG_DIM), dtype=np.float32), []
-
-    rows_X, rows_y = [], []
-    total = 0
-
-    for split in splits:
-        if split not in meld:
-            continue
-        split_data = list(meld[split])
-        utterance_cap = max_dialogues * 10
-        for row in split_data[:utterance_cap]:
-            text = str(row.get("Utterance", "")).strip()
-            if not text:
-                continue
-            goemo_label = _MELD_TO_GOEMOTION.get(row.get("Emotion", "neutral").lower(), "neutral")
-            vec = _utterance_to_vec(text, goemo_label, vader_fn, bert_fn, goe_fn)
-            rows_X.append(vec)
-            rows_y.append(goemo_label)
-            total += 1
-
-    logger.info(f"  [MELD flat] {total} utterances extracted from {splits}")
-    X = np.stack(rows_X) if rows_X else np.empty((0, MSG_DIM), dtype=np.float32)
-    return X, rows_y

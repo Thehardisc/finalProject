@@ -119,7 +119,6 @@ def train_gating_network(
     weights  = (weights / weights.mean()).clip(0.25, 4.0)
     cw_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
 
-    use_gpu   = device in ("cuda", "mps") or (isinstance(device, int) and device >= 0)
     pin_mem   = device == "cuda"
     n_workers = 2 if len(X_tr_s) > 5000 else 0
     ds     = TensorDataset(

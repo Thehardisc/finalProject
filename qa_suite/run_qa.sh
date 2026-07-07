@@ -24,6 +24,14 @@ load_env() {
 
 ensure_model() {
     local m="$ROOT/central_responder_service/models/meta_weights.pkl"
+    local live="$ROOT/.cache/meta_weights.pkl"
+    # The stack serves .cache/ (bind-mounted) — sync the QA copy whenever the
+    # live model is newer, so offline QA validates what is actually deployed.
+    if [ -f "$live" ] && { [ ! -f "$m" ] || [ "$live" -nt "$m" ]; }; then
+        cp "$live" "$m"
+        [ -f "${live%.pkl}_meta.json" ] && cp "${live%.pkl}_meta.json" "${m%.pkl}_meta.json"
+        echo "[run_qa] synced meta_weights.pkl from .cache (live model)"
+    fi
     [ -f "$m" ] && return 0
     local cid
     cid="$(docker compose ps -q central_responder_service 2>/dev/null)"

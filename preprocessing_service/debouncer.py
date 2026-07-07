@@ -8,8 +8,6 @@ BURST_WINDOW_MS     = float(os.environ.get("BURST_WINDOW_MS",     "500"))
 DEBOUNCE_MAX_BURST  = int(os.environ.get("DEBOUNCE_MAX_BURST",    "5"))
 DEBOUNCE_MAX_AGE_MS = float(os.environ.get("DEBOUNCE_MAX_AGE_MS", "10000"))
 
-DEBOUNCE_WINDOW_MS = FAST_DISPATCH_MS
-
 
 class MessageDebouncer:
     def __init__(
@@ -56,13 +54,6 @@ class MessageDebouncer:
 
         window = self._burst_ms if is_burst else self._fast_ms
         buf["task"] = asyncio.create_task(self._flush_after(key, on_flush, window))
-
-    async def flush_all(
-        self,
-        on_flush: Callable[[List[Tuple[str, dict]], List[bool]], Awaitable[None]],
-    ) -> None:
-        for key in list(self._buffers.keys()):
-            await self._flush(key, on_flush)
 
     @staticmethod
     def _buf_key(data: dict) -> str:

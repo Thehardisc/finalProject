@@ -15,7 +15,7 @@ import torch
 
 import torch.nn.functional as F
 
-ROOT  = Path(__file__).parent
+ROOT  = Path(__file__).parent.parent
 CACHE = ROOT / ".cache"
 sys.path.insert(0, str(ROOT / "central_responder_service"))
 from trajectory.model import EmotionalDialogueEncoder, PHASES, N_PHASES, PHASE_IDX

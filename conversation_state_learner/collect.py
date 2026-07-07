@@ -55,10 +55,6 @@ def _append_training(record: dict):
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _trajectory_by_type(t_type: str) -> Optional[dict]:
-    return next((t for t in TRAJECTORIES if t["type"] == t_type), None)
-
-
 # ── Phase 1: Generate ─────────────────────────────────────────────────────────
 
 def phase_generate(

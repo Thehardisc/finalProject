@@ -69,19 +69,3 @@ class ConversationLSTM(nn.Module):
         predictions = self.output_head(lstm_out)
 
         return predictions, (h_n, c_n)
-
-    def get_trajectory_embedding(self, h_n: torch.Tensor) -> torch.Tensor:
-        """Collapse the multi-layer hidden state into a single trajectory vector."""
-        return h_n[-1]
-
-    def predict_next(
-        self,
-        x: torch.Tensor,
-        hidden: Optional[Tuple] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, Tuple]:
-        """Single-step inference — feed one message, get prediction + updated state."""
-        with torch.no_grad():
-            preds, (h_n, c_n) = self.forward(x, hidden=hidden)
-        next_emotions     = preds[0, 0]
-        trajectory_vector = self.get_trajectory_embedding(h_n)[0]
-        return next_emotions, trajectory_vector, (h_n, c_n)

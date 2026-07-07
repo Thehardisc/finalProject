@@ -47,6 +47,3 @@ def demojize_text(text: str) -> str:
         text = text.replace(':', ' ').replace('_', ' ')
     return re.sub(r'\s+', ' ', text).strip()
 
-def preprocess_message(text: str) -> str:
-    text = clean_text(text)
-    return text

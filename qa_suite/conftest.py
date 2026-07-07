@@ -133,7 +133,7 @@ def analyzers():
 def analyze(analyzers, meta_model):
     from shared.constants import EMOTION_LABELS, ML_DIM, VAD_DIM
     from meta_learner import build_feature_vector, predict_with_meta_learner
-    from training.eval_sentences import _entropy_norm
+    from tools.eval_sentences import _entropy_norm
     vader, bert, goe = analyzers
     _vad0 = ML_DIM - VAD_DIM
 

@@ -13,7 +13,7 @@
   --ig-knob:    #ffffff;
 
   --ig-ink-rgb: 28, 28, 46;
-  --ig-rail-bg: #f7f8fa;
+  --ig-rail-bg: var(--ig-surf3);
   --ig-surf-rgb: 255, 255, 255;
 }
 
@@ -31,7 +31,7 @@
   --ig-knob:    #e9ebf2;
 
   --ig-ink-rgb: 230, 232, 240;
-  --ig-rail-bg: #0e0b20;
+  --ig-rail-bg: var(--ig-surf);
   --ig-surf-rgb: 20, 23, 31;
 }
 

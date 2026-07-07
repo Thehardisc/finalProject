@@ -8,19 +8,35 @@ import requests
 import redis
 
 
+pytestmark = pytest.mark.e2e  # needs the running docker stack
+
 INGESTION_URL = os.environ.get("INGESTION_URL", "http://localhost:8000")
 REDIS_HOST    = os.environ.get("REDIS_HOST", "localhost")
 REDIS_PORT    = int(os.environ.get("REDIS_PORT", 6379))
 REDIS_PASS    = os.environ.get("REDIS_PASSWORD") or None
-API_KEY       = os.environ.get("INTERNAL_API_KEY")
+def _key_from_dotenv():
+    """Fall back to the repo .env so the smoke actually runs by default."""
+    env_path = os.path.join(os.path.dirname(__file__), "..", ".env")
+    try:
+        with open(env_path) as fh:
+            for line in fh:
+                if line.startswith("INTERNAL_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'") or None
+    except OSError:
+        pass
+    return None
 
-WAIT_BUDGET_SEC = 25
+
+API_KEY       = os.environ.get("INTERNAL_API_KEY") or _key_from_dotenv()
+
+# First message after the stack has idled can take >25s (model warm-up paths).
+WAIT_BUDGET_SEC = 60
 
 
 @pytest.fixture(scope="module")
 def redis_client():
     if not API_KEY:
-        pytest.skip("INTERNAL_API_KEY not set in environment.")
+        pytest.skip("INTERNAL_API_KEY not set in environment or .env.")
     try:
         c = redis.Redis(
             host=REDIS_HOST, port=REDIS_PORT, password=REDIS_PASS,

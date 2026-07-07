@@ -216,7 +216,6 @@ def split_dataset(data: dict, train: float = 0.70, val: float = 0.15, seed: int 
 
     rng = np.random.default_rng(seed)
     traj_types = np.array(data["trajectory_types"])
-    n = len(traj_types)
 
     train_idx, val_idx, test_idx = [], [], []
 

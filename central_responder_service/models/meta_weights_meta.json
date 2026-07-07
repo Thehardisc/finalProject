@@ -1,22 +1,22 @@
 {
-  "trained_at": "2026-06-27T22:50:02.493379Z",
+  "trained_at": "2026-07-07T17:04:45.922418Z",
   "model_version": "v2-gating-ensemble",
   "training_mode": "bootstrap",
-  "training_samples": 63147,
-  "filtered_samples": 5705,
-  "validation_accuracy": 0.6333,
-  "validation_f1_macro": 0.6065,
-  "test_accuracy": 0.6479,
-  "test_f1_macro": 0.6011,
-  "previous_accuracy": 0.5508,
-  "improvement": 0.0971,
+  "training_samples": 41961,
+  "filtered_samples": 5468,
+  "validation_accuracy": 0.772,
+  "validation_f1_macro": 0.7411,
+  "test_accuracy": 0.7408,
+  "test_f1_macro": 0.7124,
+  "previous_accuracy": 0,
+  "improvement": 0.7408,
   "accuracy_gate": 0.25,
-  "calibration_temperature": 0.832,
+  "calibration_temperature": 0.9216,
   "gate_weights_mean": {
-    "vader": 0.1481,
-    "bert": 0.1602,
-    "goe": 0.2458,
-    "vad": 0.1197,
-    "context": 0.3262
+    "vader": 0.0669,
+    "bert": 0.1563,
+    "goe": 0.461,
+    "vad": 0.2452,
+    "context": 0.0706
   }
 }

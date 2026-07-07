@@ -88,7 +88,7 @@ def main():
     with open(CKPT_DIR / "model_config.json", "w") as fh:
         json.dump(config, fh, indent=2)
 
-    history = train(
+    train(
         model=model,
         train_loader=train_loader,
         val_loader=val_loader or train_loader,

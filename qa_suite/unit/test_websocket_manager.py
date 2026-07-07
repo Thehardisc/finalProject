@@ -5,6 +5,11 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+# Stub ONLY modules that are not already imported — decorating a module that is
+# already in sys.modules would mutate the real package for the whole pytest
+# session (this once emptied the real shared.constants.EMOTION_LABELS and broke
+# unrelated suites collected in the same run).
+_stubbed = set()
 for _mod in ["fastapi", "fastapi.middleware", "fastapi.middleware.cors",
              "fastapi.staticfiles", "fastapi.responses",
              "pydantic", "pydantic.fields",
@@ -15,22 +20,31 @@ for _mod in ["fastapi", "fastapi.middleware", "fastapi.middleware.cors",
              "api_service.routes.conversations", "api_service.routes.messages"]:
     if _mod not in sys.modules:
         sys.modules[_mod] = types.ModuleType(_mod)
+        _stubbed.add(_mod)
 
-fa = sys.modules["fastapi"]
-fa.FastAPI           = MagicMock(return_value=MagicMock())
-fa.WebSocket         = object
-fa.WebSocketDisconnect = Exception
-fa.HTTPException     = Exception
-fa.Depends           = lambda x: x
-fa.Query             = MagicMock()
-fa.status            = MagicMock()
-fa.Response          = MagicMock()
+if "fastapi" in _stubbed:
+    fa = sys.modules["fastapi"]
+    fa.FastAPI           = MagicMock(return_value=MagicMock())
+    fa.WebSocket         = object
+    fa.WebSocketDisconnect = Exception
+    fa.HTTPException     = Exception
+    fa.Depends           = lambda x: x
+    fa.Query             = MagicMock()
+    fa.status            = MagicMock()
+    fa.Response          = MagicMock()
 
-sys.modules["shared.utils.logger"].get_logger = lambda name: MagicMock()
-sys.modules["shared.utils.logger"].sanitize_email = lambda x: x
-sys.modules["shared.constants"].EMOTION_LABELS = []
+if "shared.utils.logger" in _stubbed:
+    sys.modules["shared.utils.logger"].get_logger = lambda name: MagicMock()
+    sys.modules["shared.utils.logger"].sanitize_email = lambda x: x
+if "shared.constants" in _stubbed:
+    sys.modules["shared.constants"].EMOTION_LABELS = []
 
 from api_service.websocket.manager import ConnectionManager as WsConnectionManager
+
+# The import above holds its own references — drop our stubs so any module
+# collected later in the session imports the real packages.
+for _mod in _stubbed:
+    sys.modules.pop(_mod, None)
 
 import ast as _ast
 _main_src = open(os.path.join(_ROOT, "api_service", "main.py")).read()

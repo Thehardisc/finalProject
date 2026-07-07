@@ -54,7 +54,7 @@ where python >nul 2>&1
 if %ERRORLEVEL% equ 0 (
     python -c "import pytest, numpy" >nul 2>&1
     if !ERRORLEVEL! equ 0 (
-        python -m pytest central_responder_service/training/test_feature_parity.py -q > "%TEMP%\parity_check.log" 2>&1
+        python -m pytest qa_suite/unit/test_feature_parity.py -q > "%TEMP%\parity_check.log" 2>&1
         if !ERRORLEVEL! equ 0 (
             echo    [OK] Feature-vector parity holds.
         ) else (

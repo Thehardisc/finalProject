@@ -92,7 +92,7 @@ async def update_conversation_state(
     ema_valence = float(current_state.get("ema_valence", 0.0))
     prev_mood   = current_state.get("overall_mood", "Neutral")
 
-    override_trigger, override_meaning = await handle_dynamic_rules(
+    _, override_meaning = await handle_dynamic_rules(
         conversation_id, original_text, r
     )
 

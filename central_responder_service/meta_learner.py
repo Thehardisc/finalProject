@@ -559,9 +559,9 @@ def detect_emotional_conflicts(vec):
         neg_emo = max(float(v[11 + 3]), float(v[11 + 10]), float(v[11 + 11]))
         pos_text = (v_pos + bert_joy) / 2.0
         if pos_text > 0.6 and neg_emo > 0.4:
-            return min(pos_text, neg_emo) * 1.2, "Cognitive Dissonance: positive text with dismissive cues."
+            return min(1.0, min(pos_text, neg_emo) * 1.2), "Cognitive Dissonance: positive text with dismissive cues."
         if v_cmp > 0.8 and neg_emo > 0.2:
-            return 0.5 + neg_emo, "Sarcasm detected: semantic praise contradicts frustration."
+            return min(1.0, 0.5 + neg_emo), "Sarcasm detected: semantic praise contradicts frustration."
         if bert_neutral > 0.7 and neg_emo > 0.1:
             return 0.4, "Passive-aggression: formal neutral text with underlying tension."
         # Hyperbole (inverse sarcasm): negative wording, positive intent. Score stays

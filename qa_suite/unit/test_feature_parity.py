@@ -5,7 +5,7 @@ import pytest
 
 _HERE         = os.path.dirname(__file__)
 _PROJECT_ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
-_SVC_ROOT     = os.path.abspath(os.path.join(_HERE, ".."))
+_SVC_ROOT     = os.path.join(_PROJECT_ROOT, "central_responder_service")
 for p in (_PROJECT_ROOT, _SVC_ROOT):
     if p not in sys.path:
         sys.path.insert(0, p)

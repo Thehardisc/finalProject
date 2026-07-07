@@ -139,7 +139,7 @@ The trainer is a **package** (`central_responder_service/trainer/`) and runs in 
 - **External (default, `TRAINER_EXTERNAL=true`)**: the separate `trainer_service` container runs `python -m trainer` (→ `trainer/__main__.py` → `trainer/cycle.py:run_one_cycle`). On a new accepted model it publishes to Redis channel `model_reload_signal` (`RELOAD_CHANNEL`); `central_responder_service.main` subscribes and hot-reloads.
 - **In-process (`TRAINER_EXTERNAL=false`)**: `trainer.start_trainer_thread(on_model_reload)` runs the same cycle as a background thread inside `central_responder_service`.
 
-- **Feature building**: `trainer/cycle.py` (must match inference in `meta_learner.py` exactly); derived-feature helpers in `central_responder_service/ml/features.py`.
+- **Feature building**: `trainer/cycle.py` (must match inference in `meta_learner.py` exactly).
 - **Data**: PostgreSQL message history + cached open datasets (EmpatheticDialogues, MELD, GoEmotions) under `.cache/`.
 - **Output**: `meta_weights.pkl` (+ `_meta.json`, `.ready`) written to `/app/models` (host `./.cache/`).
 - **Gate**: new model only hot-reloaded if test accuracy ≥ `ACCURACY_GATE` (default 0.40).
@@ -154,12 +154,11 @@ Key invariant: `trainer/cycle.py` feature building and `meta_learner.py:build_fe
 
 `main.py` bootstraps the meta-learner, wires hot-reload (subscribes to `model_reload_signal` when `TRAINER_EXTERNAL=true`, else starts the in-process trainer thread), starts the Prometheus metrics server (:9090), loads the trajectory EDE + sarcasm classifier, and runs the Redis consumer loop inline.
 
-- **`meta_learner.py`** — all ML logic: `build_feature_vector`, `predict_with_meta_learner`, `calculate_feature_impacts`, `apply_context_correction`, `load_meta_learner`, `GatingNetworkWrapper`.
+- **`meta_learner.py`** — all ML logic: `build_feature_vector`, `predict_with_meta_learner`, `calculate_feature_impacts`, `apply_context_correction`, `load_meta_learner`, `detect_emotional_conflicts`, `GatingNetworkWrapper` (the former `ml/` helper package was inlined here).
 - **`trainer/`** (package) — retraining: `cycle.py:run_one_cycle`, `__main__.py` (container entry), `finetune_goe.py`, `models.py`, `utils.py`. `start_trainer_thread` exposed for in-process mode.
 - **`trajectory/inference.py`** + **`trajectory/model.py`** — EmotionalDialogueEncoder (EDE) step; reads `input_dim`/window from config.
 - **`sarcasm_classifier.py`** — DistilBERT sarcasm/passive-aggression head (config `sarcasm_clf_config.json`); feature slot [110].
 - **`implicit_emotion.py`** — implicit-emotion routing (`is_implicit_candidate`, `should_override`) for understated/indirect inputs.
-- **`ml/conflict_detector.py`**, **`ml/loader.py`**, **`ml/features.py`** — conflict detection, model loading, derived-feature helpers (entropy/margin/agreement).
 - **`shared/module_registry.py`** — dynamic registry of required/optional stream modules; enables the context engine to be optional without code changes.
 
 **Aggregation flow**:
@@ -187,10 +186,10 @@ Key invariant: `trainer/cycle.py` feature building and `meta_learner.py:build_fe
 ## Frontend
 
 - **Framework**: React (Vite build, served by Nginx in Docker)
-- **Entry point**: `frontend_service/src/main.jsx` — imports, in order, `styles/tailwind.css`, `styles/design-system.css`, `styles/emotionBubbles.css`, then `index-v2.css` (NOT `index.css`, which is unimported/dead)
+- **Entry point**: `frontend_service/src/main.jsx` — imports, in order, `styles/tailwind.css`, `styles/design-system.css`, `styles/emotionBubbles.css`, then `index-v2.css`
 - **Tailwind v4**: enabled via the `@tailwindcss/vite` plugin (`vite.config.js`); `styles/tailwind.css` is the entry — `@theme` design tokens + a `dark:` variant keyed to the `data-ig-theme` attribute. Preflight (global reset) is intentionally deferred to the end of the migration (the app is still heavily inline-styled).
 - **CSS**: `index-v2.css` + `styles/design-system.css` + `styles/emotionBubbles.css` (base styles, via `main.jsx`); `App.jsx` separately imports `glass/CrystalGlass-v2.css` (design system, provides `.crystal-shell`)
-- **Chat theming**: `src/pages/IGDashboard.jsx` imports `styles/ig-theme.css` — light/dark tokens scoped to the chat subtree via the `data-ig-theme` attribute (also consumed by `AnalyticsPage.jsx`)
+- **Chat theming**: `src/pages/IGDashboard.jsx` imports `styles/ig-theme.css` — light/dark tokens scoped to the chat subtree via the `data-ig-theme` attribute
 - **Main app shell**: `App.jsx` wraps everything in `<div className="crystal-shell">`
 - **Main view**: `src/pages/IGDashboard.jsx` — Instagram-style layout with sidebar + chat area
 - **Scroll rule**: body and `.crystal-shell` are `overflow: hidden`. Only the messages container (`ref={messagesContainerRef}`) scrolls. Use `el.scrollTop = el.scrollHeight` to scroll to bottom — do NOT use `scrollIntoView` (it picks the wrong scroll ancestor).
@@ -281,8 +280,11 @@ Self-contained pytest suite that exercises the emotion engine in-process (it imp
 - **`conversation_state_learner/`** — offline pipeline for the trajectory/context models: `collect.py`
   (generate conversations via Claude API + run them through the live stack), `train.py`,
   `train_sarcasm_classifier.py`, `migrate_and_train.py`; `data/runner.py:PipelineRunner` drives the WS.
-- **`central_responder_service/training/`** — `eval_sentences.py` (offline sentence battery),
-  `test_feature_parity.py`, `test_hard_cases.py`.
+- **All tests live under `qa_suite/`** — `qa_suite/unit/` holds the service unit tests
+  (`test_feature_parity.py`, `test_hard_cases.py`, `test_context_pipeline.py`,
+  `test_websocket_manager.py`, `test_ack_logic.py`); `qa_suite/test_e2e_smoke.py` is the
+  `@e2e` pipeline smoke; `qa_suite/tools/eval_sentences.py` is the offline sentence battery.
+  `pytest.ini` testpaths = `qa_suite`, so `python -m pytest` runs everything.
 
 ## Key Invariants & Gotchas
 
@@ -291,7 +293,7 @@ Self-contained pytest suite that exercises the emotion engine in-process (it imp
 - **Trajectory prior Redis key**: `trajectory:{conv_id}:prior` — 28-dim JSON list, feature slot [82:110]. Written by `trajectory/inference.py`, read by `aggregate_and_publish` in `central_responder/main.py`. Missing key → zeros (safe).
 - **GoEmotions gate cap**: `GatingEnsembleNet.forward()` hard-caps GoEmotions gate weight at ≤0.50 via `.clamp(max=0.50)`. Enforced regardless of training data distribution.
 - **Gate weights format**: `gate_weights_alpha` in WebSocket payload is [vader, bert, goe, vad, ctx] (5 elements). UI displays only first 3.
-- **CSS import**: `main.jsx` imports `styles/tailwind.css`, `styles/design-system.css`, `styles/emotionBubbles.css`, and `index-v2.css` (in that order) — NOT `index.css`. `App.jsx` additionally imports `glass/CrystalGlass-v2.css`. Edits to `index.css` (unimported) have no effect on the running app.
+- **CSS import**: `main.jsx` imports `styles/tailwind.css`, `styles/design-system.css`, `styles/emotionBubbles.css`, and `index-v2.css` (in that order). `App.jsx` additionally imports `glass/CrystalGlass-v2.css`.
 - **Model files on host**: `./.cache/` is bind-mounted to `/app/models` in `central_responder_service` and `trainer_service`. Models the trainer writes there (`meta_weights.pkl`, `samlowe_finetuned/`, `cdm_hmm.pkl`, dataset caches) are visible to the running services without a rebuild. (The `qa_suite` offline tests instead read `central_responder_service/models/meta_weights.pkl` — `run_qa.sh` copies it out of the container on demand.)
 - **Frontend rebuild required**: CSS and JSX changes require `docker compose up --build frontend_service -d` — the container serves a static Vite build.
 - **Absolute imports in central_responder**: `main.py` runs as a top-level script (CWD = service dir), so imports use absolute paths rooted at the service dir (`from meta_learner import ...`, `from trainer import ...`). Relative imports break under `python main.py`.

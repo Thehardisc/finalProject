@@ -17,8 +17,6 @@ BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surpris
 # Every other label — including Plutchik dyads (love, optimism, pride, remorse,
 # disapproval) and relief — is its OWN group: resolve with
 # GOE_TO_PLUTCHIK.get(label, label).
-PLUTCHIK_PETALS = ['joy', 'trust', 'fear', 'surprise',
-                   'sadness', 'disgust', 'anger', 'anticipation']
 GOE_TO_PLUTCHIK = {
     'joy':         'joy',
     'admiration':  'trust',

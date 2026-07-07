@@ -78,7 +78,7 @@ function buildBoxShadow(ekman) {
   ].join(', ');
 }
 
-export function toEkman(emotion) {
+function toEkman(emotion) {
   return TO_EKMAN[emotion?.toLowerCase()] ?? 'neutral';
 }
 

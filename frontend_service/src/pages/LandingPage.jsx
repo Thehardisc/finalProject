@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import EmotionBackground from '../components/EmotionBackground';
 
 const DEMO_MESSAGES = [
   { text: "Sure, totally fine with that 🙄", emotion: 'annoyance',  tokens: [{ w: 'Sure',   role: 'hedge' }, { w: ', totally fine with that 🙄', role: 'default' }] },
@@ -91,20 +92,6 @@ const STATS = [
 ];
 
 const INJECTED_CSS = `
-@keyframes lp-orb1 {
-  0%,100% { transform: translate(0,0) scale(1); }
-  33% { transform: translate(80px,-60px) scale(1.10); }
-  66% { transform: translate(-50px,70px) scale(0.92); }
-}
-@keyframes lp-orb2 {
-  0%,100% { transform: translate(0,0) scale(1); }
-  40% { transform: translate(-70px,60px) scale(1.06); }
-  75% { transform: translate(60px,-40px) scale(0.95); }
-}
-@keyframes lp-orb3 {
-  0%,100% { transform: translate(0,0) scale(1); }
-  50% { transform: translate(40px,50px) scale(1.08); }
-}
 @keyframes lp-fadeUp {
   from { opacity:0; transform:translateY(28px); }
   to   { opacity:1; transform:translateY(0); }
@@ -247,9 +234,7 @@ export default function LandingPage({ onSignIn }) {
       <style>{INJECTED_CSS}</style>
 
       <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0 }}>
-        <div style={{ position: 'absolute', width: 800, height: 800, borderRadius: '50%', top: -300, left: -250, background: 'radial-gradient(circle, rgba(79,40,210,0.42) 0%, transparent 70%)', filter: 'blur(100px)', animation: 'lp-orb1 22s ease-in-out infinite' }} />
-        <div style={{ position: 'absolute', width: 700, height: 700, borderRadius: '50%', bottom: -200, right: -200, background: 'radial-gradient(circle, rgba(46,16,130,0.55) 0%, transparent 70%)', filter: 'blur(90px)', animation: 'lp-orb2 28s ease-in-out infinite' }} />
-        <div style={{ position: 'absolute', width: 500, height: 500, borderRadius: '50%', top: '40%', right: '20%', background: 'radial-gradient(circle, rgba(109,40,217,0.18) 0%, transparent 70%)', filter: 'blur(80px)', animation: 'lp-orb3 18s ease-in-out infinite' }} />
+        <EmotionBackground emotion="neutral" />
       </div>
 
       <nav style={{

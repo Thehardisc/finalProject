@@ -70,9 +70,6 @@ class SarcasmInference:
             logger.warning(f"Sarcasm inference error: {e}")
             return 0.0
 
-    def is_sarcastic(self, text: str, context: Optional[List[str]] = None) -> bool:
-        return self.predict(text, context) >= self.threshold
-
 
 def load_sarcasm_model(model_path: str, config_path: str) -> Optional[SarcasmInference]:
     if not os.path.exists(model_path):

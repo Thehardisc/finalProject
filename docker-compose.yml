@@ -35,7 +35,7 @@ services:
   ingestion_service:
     build:
       context: .
-      dockerfile: goemotions_service/ingestion_service/Dockerfile
+      dockerfile: ingestion_service/Dockerfile
     ports:
       - "8000:8000"
     depends_on:

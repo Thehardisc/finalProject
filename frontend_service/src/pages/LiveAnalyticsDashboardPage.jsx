@@ -195,14 +195,21 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
   };
 
   return (
-    <div data-ig-theme={igTheme} style={{
-      minHeight: '100vh',
+    <div data-ig-theme={igTheme} className="la-scroll" style={{
+      height: '100vh', overflowY: 'auto',
+      scrollbarWidth: 'thin', scrollbarColor: 'rgba(var(--ig-ink-rgb),0.28) transparent',
       background: dark
         ? 'linear-gradient(135deg,#0a0c12 0%,#10121c 60%,#150f18 100%)'
         : 'linear-gradient(135deg,#f0f4ff 0%,#faf8ff 60%,#fff0f8 100%)',
       color: 'var(--ig-txt)',
       fontFamily: "'Inter', -apple-system, sans-serif",
     }}>
+      <style>{`
+        .la-scroll::-webkit-scrollbar         { width: 8px; }
+        .la-scroll::-webkit-scrollbar-track   { background: transparent; }
+        .la-scroll::-webkit-scrollbar-thumb   { background: rgba(var(--ig-ink-rgb),0.18); border-radius: 99px; }
+        .la-scroll::-webkit-scrollbar-thumb:hover { background: rgba(var(--ig-ink-rgb),0.32); }
+      `}</style>
 
       <header style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',

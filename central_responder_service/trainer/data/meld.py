@@ -1,4 +1,3 @@
-import gc
 import json
 import os
 import pickle
@@ -45,30 +44,6 @@ _MELD_VALENCE: dict = {
     "fear":    -0.65,
     "sadness": -0.70,
 }
-
-
-def _download_meld_raw(out_path: Path, max_rows: int = 3000) -> None:
-    try:
-        from datasets import load_dataset
-        slice_size = min(max_rows * 2, 4000)
-        logger.info(f"[MELD] Pre-downloading raw data (train[:{slice_size}]) — no NLP models in memory yet...")
-        ds = load_dataset("declare-lab/MELD", split=f"train[:{slice_size}]")
-        rows = []
-        for row in ds:
-            rows.append({
-                "d": str(row.get("Dialogue_ID", "")),
-                "u": int(row.get("Utterance_ID", 0)),
-                "t": str(row.get("Utterance", "")).strip(),
-                "e": str(row.get("Emotion",   "neutral")).lower(),
-                "s": str(row.get("Speaker",   "")).strip(),
-            })
-        del ds
-        gc.collect()
-        with open(out_path, "w") as f:
-            json.dump(rows, f)
-        logger.info(f"[MELD] Raw cache saved → {out_path} ({len(rows)} rows)")
-    except Exception as e:
-        logger.warning(f"[MELD] Pre-download failed: {e} — MELD will be skipped.")
 
 
 def _meld_build_cdm(

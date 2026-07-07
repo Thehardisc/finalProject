@@ -1,7 +1,5 @@
 import AdminDashboard from '../components/AdminDashboard';
 
-const ACCENT = '217, 119, 6';
-
 export default function AdminDashboardPage({ currentUser, onBack }) {
   const igTheme = (() => {
     try { return JSON.parse(localStorage.getItem('ig_settings') || '{}').theme === 'dark' ? 'dark' : 'light'; }
@@ -9,7 +7,13 @@ export default function AdminDashboardPage({ currentUser, onBack }) {
   })();
 
   return (
-    <div data-ig-theme={igTheme} style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--ig-bg)', color: 'var(--ig-txt)' }}>
+    <div data-ig-theme={igTheme} className="admin-scroll" style={{ height: '100vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', background: 'var(--ig-bg)', color: 'var(--ig-txt)', scrollbarWidth: 'thin', scrollbarColor: 'rgba(var(--ig-ink-rgb),0.28) transparent' }}>
+      <style>{`
+        .admin-scroll::-webkit-scrollbar         { width: 8px; }
+        .admin-scroll::-webkit-scrollbar-track   { background: transparent; }
+        .admin-scroll::-webkit-scrollbar-thumb   { background: rgba(var(--ig-ink-rgb),0.18); border-radius: 99px; }
+        .admin-scroll::-webkit-scrollbar-thumb:hover { background: rgba(var(--ig-ink-rgb),0.32); }
+      `}</style>
       <header style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '18px 32px',
@@ -31,15 +35,13 @@ export default function AdminDashboardPage({ currentUser, onBack }) {
             Admin
           </h1>
           <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--ig-txt3)' }}>
-            User management
+            Accounts, roles, and access
           </p>
         </div>
       </header>
 
-      <main style={{ flex: 1, padding: '28px 32px 48px' }}>
-        <div className="analytics-layer" style={{ '--bubble-rgb': ACCENT }}>
-          <AdminDashboard currentUser={currentUser} />
-        </div>
+      <main style={{ flex: 1, padding: '24px 32px 48px', width: '100%', maxWidth: 1120, margin: '0 auto', boxSizing: 'border-box' }}>
+        <AdminDashboard currentUser={currentUser} />
       </main>
     </div>
   );

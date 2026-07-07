@@ -22,7 +22,6 @@ from trainer import start_trainer_thread
 from trajectory.inference import load_trajectory_model, run_trajectory_step
 from sarcasm_classifier import load_sarcasm_model
 
-import metrics as METRICS
 from prometheus_client import start_http_server as _start_metrics_server
 
 from shared.utils.redis_client import RedisClient
@@ -62,7 +61,6 @@ GROUP_NAME    = "central_responder_group"
 CONSUMER_NAME = "responder_1"
 OUTPUT_STREAM = "emotion_stream"
 
-AGGREGATION_TIMEOUT_MS = 5000
 OPTIONAL_TIMEOUT_MS    = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "1000"))
 TRAINER_EXTERNAL       = os.environ.get("TRAINER_EXTERNAL", "false").lower() == "true"
 
