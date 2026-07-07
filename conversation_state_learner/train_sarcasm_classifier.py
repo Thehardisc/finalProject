@@ -25,7 +25,15 @@ from shared.utils.progress import TrainingProgress
 
 logger = get_logger("sarcasm_train")
 
-DATA_FILE  = ROOT / "training_data" / "sarcasm_labels.jsonl"
+DATA_FILE    = ROOT / "training_data" / "sarcasm_labels.jsonl"
+# Train-only augments (val stays pure): every training_data/sarcasm_*_augment.jsonl.
+#   sincere       — positive-surface sincere NEGATIVES (counters the tweet_eval bias
+#                   where clean enthusiastic positives read as irony)
+#   hard_positive — polite-surface sarcastic POSITIVES (counters the sincere-augment
+#                   overcorrection: a "polite ⇒ sincere" shortcut that killed recall
+#                   on sarcastic thanks / mock agreement / mock praise)
+# See qa_suite/test_sarcasm.py.
+AUGMENT_GLOB = "sarcasm_*_augment.jsonl"
 MODELS_DIR = ROOT.parent / "central_responder_service" / "models"
 MODEL_OUT  = MODELS_DIR / "sarcasm_clf.pt"
 CONFIG_OUT = MODELS_DIR / "sarcasm_clf_config.json"
@@ -293,6 +301,13 @@ def main() -> None:
 
     tokenizer = DistilBertTokenizerFast.from_pretrained(BASE_MODEL)
     train_recs, val_recs = conversation_split(records, val_frac=args.val_frac)
+
+    for aug_path in sorted((ROOT / "training_data").glob(AUGMENT_GLOB)):
+        aug = load_records(aug_path)
+        n_aug_pos = sum(r["is_sarcastic"] for r in aug)
+        train_recs = train_recs + aug
+        print(f"Augment {aug_path.name}: +{len(aug)} rows "
+              f"({n_aug_pos} pos / {len(aug) - n_aug_pos} neg; train only, val stays pure)")
 
     n_pos   = sum(r["is_sarcastic"] for r in train_recs)
     n_neg   = len(train_recs) - n_pos
