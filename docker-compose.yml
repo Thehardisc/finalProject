@@ -125,6 +125,9 @@ services:
     volumes:
       - hf_cache:/root/.cache/huggingface
       - ./logs/live:/app/logs
+      # Model dir so the service picks up samlowe_finetuned when the trainer
+      # produces it (no-op until then).
+      - ./.cache:/app/models
 
 
   bert_service:

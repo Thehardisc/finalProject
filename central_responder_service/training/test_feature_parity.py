@@ -10,7 +10,7 @@ for p in (_PROJECT_ROOT, _SVC_ROOT):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-from meta_learner import build_feature_vector
+from meta_learner import build_feature_vector, _CDM_KEEP
 from shared.constants import (
     EMOTION_LABELS, BERT_LABELS, VADER_KEYS,
     FEATURE_DIM, ML_DIM, CONTEXT_DIM,
@@ -147,13 +147,15 @@ def test_cdm_block_used_when_correct_length():
     ctx = [float(i) / 100 for i in range(CDM_CTX_DIM)]
     fv  = build_feature_vector(_mo(), context_vector=ctx).flatten()
     cdm_out = fv[_CDM_S:_CDM_E]
-    normalized_idx = {CTX_MSG_LENGTH, CTX_LATENCY_MS, CTX_HMM_EMISSION}
+    normalized_idx = {CTX_MSG_LENGTH, CTX_LATENCY_MS}
     for i, (actual, expected) in enumerate(zip(cdm_out, ctx)):
-        if i not in normalized_idx:
+        if _CDM_KEEP[i] == 0.0:
+            assert actual == pytest.approx(0.0, abs=1e-6), f"CDM index {i} should be masked"
+        elif i not in normalized_idx:
             assert actual == pytest.approx(expected, abs=1e-6), f"CDM index {i} mismatch"
-    assert 0.0 <= cdm_out[CTX_MSG_LENGTH]   <= 3.0
-    assert 0.0 <= cdm_out[CTX_LATENCY_MS]   <= 3.0
-    assert 0.0 <= cdm_out[CTX_HMM_EMISSION] <= 1.0
+    assert 0.0 <= cdm_out[CTX_MSG_LENGTH] <= 3.0
+    assert 0.0 <= cdm_out[CTX_LATENCY_MS] <= 3.0
+    assert cdm_out[CTX_HMM_EMISSION] == pytest.approx(0.0, abs=1e-6)
 
 
 def test_prior_block_zeros_when_missing():

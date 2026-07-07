@@ -18,6 +18,13 @@ from transformers import DistilBertModel, DistilBertTokenizerFast, get_linear_sc
 
 
 ROOT       = Path(__file__).parent
+sys.path.insert(0, str(ROOT.parent))  # repo root → shared/
+
+from shared.utils.logger import get_logger
+from shared.utils.progress import TrainingProgress
+
+logger = get_logger("sarcasm_train")
+
 DATA_FILE  = ROOT / "training_data" / "sarcasm_labels.jsonl"
 MODELS_DIR = ROOT.parent / "central_responder_service" / "models"
 MODEL_OUT  = MODELS_DIR / "sarcasm_clf.pt"
@@ -131,7 +138,8 @@ def compute_metrics(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.
         p  = (probs >= t).astype(int)
         tprs.append(((p == 1) & (labels == 1)).sum() / max(1, (labels == 1).sum()))
         fprs.append(((p == 1) & (labels == 0)).sum() / max(1, (labels == 0).sum()))
-    auc = float(np.trapz(tprs[::-1], fprs[::-1]))
+    _trapz = getattr(np, "trapezoid", None) or np.trapz  # np.trapz removed in NumPy 2.0
+    auc = float(_trapz(tprs[::-1], fprs[::-1]))
 
     return dict(acc=acc, precision=precision, recall=recall, f1=f1, auc=auc,
                 tp=tp, fp=fp, fn=fn, tn=tn)
@@ -312,9 +320,8 @@ def main() -> None:
     best_state     = None
     no_improve     = 0
 
-    print(f"\nTraining for up to {args.epochs} epochs (patience={args.patience})\n")
-    print(f"{'Epoch':>5}  {'TrainLoss':>9}  {'ValLoss':>7}  {'F1':>6}  {'AUC':>6}  {'P':>6}  {'R':>6}  {'Thr':>5}")
-    print("-" * 65)
+    logger.info(f"Training for up to {args.epochs} epochs (patience={args.patience})")
+    prog = TrainingProgress(logger, task="sarcasm_clf", total=args.epochs, unit="epoch")
 
     for epoch in range(1, args.epochs + 1):
         train_loss = train_epoch(model, train_dl, optimizer, scheduler, criterion, device)
@@ -323,11 +330,11 @@ def main() -> None:
         threshold, val_f1 = tune_threshold(val_labels, val_probs)
         metrics = compute_metrics(val_labels, val_probs, threshold=threshold)
 
-        print(
-            f"{epoch:>5}  {train_loss:>9.4f}  {val_loss:>7.4f}  "
-            f"{metrics['f1']:>6.3f}  {metrics['auc']:>6.3f}  "
-            f"{metrics['precision']:>6.3f}  {metrics['recall']:>6.3f}  {threshold:>5.2f}"
-        )
+        prog.step(metrics={
+            "train_loss": train_loss, "val_loss": val_loss,
+            "F1": metrics["f1"], "AUC": metrics["auc"],
+            "P": metrics["precision"], "R": metrics["recall"], "thr": threshold,
+        })
 
         if val_f1 > best_val_f1 + 1e-4:
             best_val_f1    = val_f1
@@ -337,22 +344,24 @@ def main() -> None:
         else:
             no_improve += 1
             if no_improve >= args.patience:
-                print(f"\nEarly stopping at epoch {epoch} (no improvement for {args.patience} epochs).")
+                logger.info(f"[sarcasm_clf] early stopping at epoch {epoch} "
+                            f"(no improvement for {args.patience} epochs)")
                 break
 
     if best_state is None:
-        print("WARNING: no best state found — saving current model.", file=sys.stderr)
+        logger.warning("No best state found — saving current model.")
         best_state = {k: v.cpu() for k, v in model.state_dict().items()}
 
     model.load_state_dict(best_state)
     _, val_labels, val_probs = evaluate(model, val_dl, criterion, device)
     final_metrics = compute_metrics(val_labels, val_probs, threshold=best_threshold)
 
-    print(f"\nFinal val metrics (threshold={best_threshold:.2f}):")
-    print(f"  F1={final_metrics['f1']:.3f}  AUC={final_metrics['auc']:.3f}  "
-          f"Acc={final_metrics['acc']:.3f}")
-    print(f"  TP={final_metrics['tp']}  FP={final_metrics['fp']}  "
-          f"FN={final_metrics['fn']}  TN={final_metrics['tn']}")
+    prog.done(metrics={
+        "F1": final_metrics["f1"], "AUC": final_metrics["auc"],
+        "acc": final_metrics["acc"], "thr": best_threshold,
+    })
+    logger.info(f"Confusion: TP={final_metrics['tp']} FP={final_metrics['fp']} "
+                f"FN={final_metrics['fn']} TN={final_metrics['tn']}")
 
     MODELS_DIR.mkdir(exist_ok=True)
 

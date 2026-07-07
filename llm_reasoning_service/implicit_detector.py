@@ -1,3 +1,4 @@
+import os
 from typing import Optional
 import situation_encoder as _SIT
 
@@ -474,9 +475,15 @@ def detect(text: str, history: list) -> Optional[dict]:
 
     top_emotion_label, top_conf = ranked[0]
 
+    # Keyword/prototype matches carry hand-tuned confidences (0.68–0.80) that were
+    # regularly beating the meta-learner's calibrated posteriors. Scale them down so
+    # a phrase match reads as a hint, not a verdict.
+    conf_scale = float(os.environ.get("IMPLICIT_DETECTOR_CONF_SCALE", "0.85"))
+    top_conf   = top_conf * conf_scale
+
     scores: dict[str, float] = {"neutral": round(max(0.0, 1.0 - top_conf), 3)}
     for emo, conf in ranked[:5]:
-        scores[emo] = round(conf, 3)
+        scores[emo] = round(conf * conf_scale, 3)
 
     return {
         "emotion":    top_emotion_label,

@@ -9,6 +9,30 @@ EMOTION_LABELS = [
 VADER_KEYS  = ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound']
 BERT_LABELS = ['anger', 'disgust', 'fear', 'joy', 'neutral', 'sadness', 'surprise']
 
+# ── Plutchik wheel grouping (canonical — display/API only) ────────────────────
+# STRICT policy: a GoEmotions label joins a petal only if it (or its direct
+# wheel synonym) appears on Plutchik's wheel — the 8 primaries plus their
+# intensity-ring names (annoyance→anger, grief→sadness, admiration→trust,
+# nervousness≈apprehension→fear, curiosity≈interest→anticipation).
+# Every other label — including Plutchik dyads (love, optimism, pride, remorse,
+# disapproval) and relief — is its OWN group: resolve with
+# GOE_TO_PLUTCHIK.get(label, label).
+PLUTCHIK_PETALS = ['joy', 'trust', 'fear', 'surprise',
+                   'sadness', 'disgust', 'anger', 'anticipation']
+GOE_TO_PLUTCHIK = {
+    'joy':         'joy',
+    'admiration':  'trust',
+    'fear':        'fear',
+    'nervousness': 'fear',
+    'surprise':    'surprise',
+    'sadness':     'sadness',
+    'grief':       'sadness',
+    'disgust':     'disgust',
+    'anger':       'anger',
+    'annoyance':   'anger',
+    'curiosity':   'anticipation',
+}
+
 CDM_STATES = [
     "NEUTRAL",
     "WARMTH",

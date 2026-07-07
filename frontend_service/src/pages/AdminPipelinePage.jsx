@@ -32,6 +32,15 @@ const cdmStateIndex = (v) =>
 const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '—';
 const pct = (v)  => v != null ? `${(v * 100).toFixed(1)}%` : '—';
 
+// All 28 GoEmotions labels — must match shared/constants.py EMOTION_LABELS.
+const ALL_EMOTIONS = [
+  'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
+  'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval', 'disgust',
+  'embarrassment', 'excitement', 'fear', 'gratitude', 'grief', 'joy', 'love',
+  'nervousness', 'optimism', 'pride', 'realization', 'relief', 'remorse',
+  'sadness', 'surprise', 'neutral',
+];
+
 const STAGE_ORDER = ['vader', 'bert', 'goemotions'];
 
 const STAGE_META = {
@@ -46,6 +55,156 @@ const MODEL_LABEL_MAP = {
   GoEmotions: 'goemotions',
   Context:    'context',
 };
+
+// ── Meta-learner explanation helpers ──────────────────────────────────────────
+
+// Mirrors meta_learner.py:_GOE_TO_EKMAN — BERT's 7-label space, used ONLY to judge
+// whether BERT's coarse pick points the same way as the fine-grained verdict.
+const GOE_TO_EKMAN = {
+  admiration: 'joy', amusement: 'joy', anger: 'anger', annoyance: 'anger',
+  approval: 'joy', caring: 'joy', confusion: 'surprise', curiosity: 'surprise',
+  desire: 'joy', disappointment: 'sadness', disapproval: 'disgust', disgust: 'disgust',
+  embarrassment: 'fear', excitement: 'joy', fear: 'fear', gratitude: 'joy',
+  grief: 'sadness', joy: 'joy', love: 'joy', nervousness: 'fear', optimism: 'joy',
+  pride: 'joy', realization: 'surprise', relief: 'joy', remorse: 'sadness',
+  sadness: 'sadness', surprise: 'surprise', neutral: 'neutral',
+};
+
+// Mirrors shared/constants.py:GOE_TO_PLUTCHIK — strict Plutchik wheel policy:
+// only labels that appear on the wheel (petals + intensity-ring names) join a
+// petal; every other label (relief, love, pride, …) is its own group.
+const GOE_TO_PLUTCHIK = {
+  joy: 'joy', admiration: 'trust', fear: 'fear', nervousness: 'fear',
+  surprise: 'surprise', sadness: 'sadness', grief: 'sadness', disgust: 'disgust',
+  anger: 'anger', annoyance: 'anger', curiosity: 'anticipation',
+};
+const plutchikGroupOf = (label) => GOE_TO_PLUTCHIK[label] || label;
+
+const POSITIVE_EMOTIONS = new Set(['joy', 'amusement', 'admiration', 'approval', 'excitement', 'love', 'optimism', 'pride', 'caring', 'gratitude', 'desire', 'relief']);
+const NEGATIVE_EMOTIONS = new Set(['anger', 'annoyance', 'disapproval', 'disgust', 'sadness', 'grief', 'remorse', 'disappointment', 'fear', 'nervousness', 'embarrassment']);
+
+const topEntry = (obj) => {
+  const es = Object.entries(obj || {}).filter(([, v]) => typeof v === 'number');
+  return es.length ? es.sort((a, b) => b[1] - a[1])[0] : null;
+};
+
+// gate_weights_alpha is [vader, bert, goe, vad, ctx]; older 4-element models have no VAD gate.
+const GATE_META = [
+  { name: 'VADER',       color: '255,180,0',   hint: 'overall positive / negative tone of the words' },
+  { name: 'BERT',        color: '0,119,255',   hint: '7 basic emotions from the transformer' },
+  { name: 'GoEmotions',  color: '162,67,220',  hint: '28 fine-grained emotions (this gate is capped at 50%)' },
+  { name: 'VAD lexicon', color: '0,210,120',   hint: 'how the words feel: valence, arousal, dominance' },
+  { name: 'Context',     color: '255,100,150', hint: 'conversation history, mood and trajectory' },
+];
+
+const gateEntries = (alpha) => {
+  if (!Array.isArray(alpha) || alpha.length < 4) return null;
+  const meta = alpha.length >= 5 ? GATE_META : [GATE_META[0], GATE_META[1], GATE_META[2], GATE_META[4]];
+  return alpha.slice(0, meta.length).map((v, i) => ({ ...meta[i], value: v }));
+};
+
+// What each raw model's top pick was, and whether the final verdict sided with it.
+function buildExpertRows(stages, decision) {
+  const dominant   = (decision.dominant || '').toLowerCase();
+  const family     = decision.ekman_group || GOE_TO_EKMAN[dominant] || 'neutral';
+  const verdictDir = POSITIVE_EMOTIONS.has(dominant) ? 'positive'
+                   : NEGATIVE_EMOTIONS.has(dominant) ? 'negative' : 'neutral';
+  const rows = [];
+
+  const v = stages?.vader || {};
+  const compound = v.vader_compound ?? v.compound;
+  if (compound != null) {
+    const dir = compound >= 0.05 ? 'positive' : compound <= -0.05 ? 'negative' : 'neutral';
+    const agrees = dir === verdictDir;
+    rows.push({
+      model: 'VADER', color: '255,180,0',
+      said: `${dir} tone (${compound >= 0 ? '+' : ''}${Number(compound).toFixed(2)})`,
+      agrees,
+      why: agrees
+        ? `matches the ${verdictDir} direction of "${dominant}"`
+        : `the wording read as ${dir}, but "${dominant}" is a ${verdictDir} emotion`,
+    });
+  }
+
+  const bTop = topEntry(stages?.bert);
+  if (bTop) {
+    const agrees = bTop[0] === family || bTop[0] === dominant;
+    rows.push({
+      model: 'BERT', color: '0,119,255',
+      said: `${bTop[0]} (${(bTop[1] * 100).toFixed(0)}%)`,
+      agrees,
+      why: agrees
+        ? `BERT's closest 7-label match for "${dominant}" is ${family} — same call, finer grain`
+        : `wanted ${bTop[0]}, but "${dominant}" reads as ${family} on BERT's 7-label scale`,
+    });
+  }
+
+  const gTop = topEntry(stages?.goemotions);
+  if (gTop) {
+    const agrees = gTop[0] === dominant;
+    rows.push({
+      model: 'GoEmotions', color: '162,67,220',
+      said: `${gTop[0]} (${(gTop[1] * 100).toFixed(0)}%)`,
+      agrees,
+      why: agrees ? 'exact match with the verdict' : `its top pick lost out to "${dominant}"`,
+    });
+  }
+  return rows;
+}
+
+// Turns the decision data into a few plain-English sentences.
+function buildPlainWords(decision, stages) {
+  const { dominant, confidence, decision_mode, gate_weights_alpha } = decision;
+  const trace = decision.decision_trace || [];
+  const out = [];
+
+  if (decision_mode !== 'meta-learner') {
+    out.push('No trained meta-learner was loaded when this message arrived, so there was no real fusion step: the verdict is simply the strongest raw model score — GoEmotions first, then BERT, then VADER.');
+  } else {
+    out.push('A trained neural network combined every signal below — VADER tone, BERT\'s 7 emotions, GoEmotions\' 28 emotions, the word-feel (VAD) lexicon and the conversation context — into one 116-number summary, then scored all 28 possible emotions in a single pass.');
+    const gates = gateEntries(gate_weights_alpha);
+    if (gates) {
+      const sorted = [...gates].sort((a, b) => b.value - a.value);
+      out.push(`For this message it chose to trust ${sorted[0].name} most (${(sorted[0].value * 100).toFixed(0)}%), then ${sorted[1].name} (${(sorted[1].value * 100).toFixed(0)}%) — it re-decides this trust split for every single message.`);
+      const ctx = gates.find(g => g.name === 'Context');
+      if (ctx && ctx.value >= 0.15) {
+        out.push(`Earlier messages mattered here: conversation context steered ${(ctx.value * 100).toFixed(0)}% of the outcome, so the same text in a different conversation could score differently.`);
+      }
+    }
+  }
+
+  const rows = buildExpertRows(stages, decision);
+  if (rows.length) {
+    const disagree = rows.filter(r => !r.agrees);
+    if (disagree.length === 0) {
+      out.push('All the individual models pointed the same way, so this was an easy, uncontested call.');
+    } else {
+      out.push(`The models did not fully agree (${disagree.map(r => `${r.model} saw ${r.said.split(' (')[0]}`).join('; ')}) — the meta-learner arbitrated, siding with the signals it weighted highest.`);
+    }
+  }
+
+  const applied = trace.filter(t => t.status === 'applied' && !/rule-based/i.test(t.step || ''));
+  if (applied.length) {
+    out.push(`The network's first pick was then corrected: ${applied.map(a => a.step).join(' and ')} changed the outcome — the decision path below shows exactly why.`);
+  } else if (decision_mode === 'meta-learner' && trace.length) {
+    out.push('No safety guard or sarcasm correction fired afterwards — the network\'s own pick stood as the final verdict.');
+  }
+
+  const agg = Object.entries(decision.aggregated || {})
+    .filter(([k, v]) => typeof v === 'number' && !k.startsWith('vader_') && k !== 'ekman_group')
+    .sort((a, b) => b[1] - a[1]);
+  const runner = agg.find(([k]) => k !== dominant);
+  if (confidence != null) {
+    if (confidence >= 0.7) {
+      out.push(`Final verdict: "${dominant}" at ${(confidence * 100).toFixed(0)}% — a high-confidence call.`);
+    } else if (confidence >= 0.45) {
+      out.push(`Final verdict: "${dominant}" at ${(confidence * 100).toFixed(0)}% — fairly sure but not certain${runner ? `; the runner-up was "${runner[0]}" at ${(runner[1] * 100).toFixed(0)}%` : ''}.`);
+    } else {
+      out.push(`This was a close call: "${dominant}" won at only ${(confidence * 100).toFixed(0)}%${runner ? `, with "${runner[0]}" right behind at ${(runner[1] * 100).toFixed(0)}%` : ''} — read it as a lean, not a certainty.`);
+    }
+  }
+  return out;
+}
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
@@ -483,6 +642,82 @@ function ContextCard({ decision, context }) {
   );
 }
 
+// Human ground-truth labeling. Verified rows are the trainer's ONLY live-data
+// source — every label saved here becomes real training data on the next cycle.
+function VerifyControl({ detail, onChange }) {
+  const [saving, setSaving]     = useState(false);
+  const [pickOpen, setPickOpen] = useState(false);
+  const msgId     = detail.message.id;
+  const predicted = detail.decision?.dominant;
+  const isVerified = !!(detail.is_verified && detail.ground_truth);
+
+  const save = async (emotion, verified = true) => {
+    setSaving(true);
+    try {
+      await adminAPI.verifyEmotion(msgId, emotion, verified);
+      onChange(verified ? emotion : null, verified);
+      setPickOpen(false);
+    } catch (e) {
+      alert(e.apiMessage || 'Failed to save label.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const btn = (color) => ({
+    padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', fontWeight: 600,
+    background: `rgba(${color},0.12)`, color: `rgb(${color})`,
+    border: `1px solid rgba(${color},0.25)`, cursor: saving ? 'wait' : 'pointer',
+    opacity: saving ? 0.6 : 1, whiteSpace: 'nowrap',
+  });
+
+  if (isVerified) {
+    return (
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+        <div style={{ ...btn('52,199,89'), cursor: 'default' }}>
+          ✓ Verified: {detail.ground_truth}
+        </div>
+        <button onClick={() => save(null, false)} disabled={saving}
+          title="Clear the human label (removes this message from training data)"
+          style={btn('150,150,150')}>
+          ✗
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
+      {predicted && !pickOpen && (
+        <button onClick={() => save(predicted)} disabled={saving}
+          title="Confirm the prediction as ground truth — verified messages feed the next retrain"
+          style={btn('52,199,89')}>
+          ✓ "{predicted}" is correct
+        </button>
+      )}
+      {pickOpen ? (
+        <select autoFocus defaultValue=""
+          onChange={e => e.target.value && save(e.target.value)}
+          onBlur={() => setPickOpen(false)}
+          style={{
+            padding: '4px 8px', borderRadius: 8, fontSize: '0.75rem',
+            background: 'var(--ig-bg)', color: 'var(--ig-txt)',
+            border: '1px solid rgba(var(--ig-ink-rgb),0.2)',
+          }}>
+          <option value="" disabled>true emotion…</option>
+          {ALL_EMOTIONS.map(e => <option key={e} value={e}>{e}</option>)}
+        </select>
+      ) : (
+        <button onClick={() => setPickOpen(true)} disabled={saving}
+          title="Pick the correct emotion yourself"
+          style={btn('255,150,50')}>
+          ✗ wrong → pick
+        </button>
+      )}
+    </div>
+  );
+}
+
 const TRACE_STYLE = {
   applied:    { icon: '⚡', color: '234,140,20',  label: 'applied'       },
   suppressed: { icon: '⊘', color: '120,130,150', label: 'stood down'    },
@@ -537,9 +772,14 @@ function DecisionTrace({ trace, dominant }) {
   );
 }
 
-function DecisionCard({ decision }) {
+function DecisionCard({ decision, stages }) {
   const { dominant, confidence, decision_mode, sarcasm_score } = decision;
-  const domRgb = rgb(dominant);
+  const plutchikGroup = decision.plutchik_group || plutchikGroupOf((dominant || '').toLowerCase());
+  const domRgb     = rgb(dominant);
+  const plainWords = buildPlainWords(decision, stages);
+  const gates      = gateEntries(decision.gate_weights_alpha);
+  const expertRows = buildExpertRows(stages, decision);
+  const gateMax    = gates ? Math.max(...gates.map(g => g.value), 0.01) : 1;
 
   return (
     <div style={{ ...S.stageCard, borderColor: `rgba(${domRgb},0.35)`, background: `rgba(${domRgb},0.05)` }}>
@@ -547,13 +787,17 @@ function DecisionCard({ decision }) {
         <span style={{ fontSize: '1.1rem' }}>🎯</span>
         <div>
           <div style={{ ...S.stageTitle, color: `rgb(${domRgb})` }}>Meta-Learner Decision</div>
-          <div style={S.stageDesc}>Final prediction from 67-dim feature vector</div>
+          <div style={S.stageDesc}>Fuses every model's output into one 116-number feature vector and picks 1 of 28 emotions</div>
         </div>
-        <div style={{
-          marginLeft: 'auto', fontSize: '0.68rem', padding: '2px 8px',
-          background: 'rgba(var(--ig-ink-rgb),0.06)', color: 'rgba(var(--ig-ink-rgb),0.5)',
-          border: '1px solid rgba(var(--ig-ink-rgb),0.1)', borderRadius: 20,
-        }}>
+        <div
+          title={decision_mode === 'meta-learner'
+            ? 'A trained neural network (GatingEnsembleNet) made this call by weighing all models per message'
+            : 'No trained model was loaded — fell back to the strongest raw model score (GoEmotions → BERT → VADER)'}
+          style={{
+            marginLeft: 'auto', fontSize: '0.68rem', padding: '2px 8px',
+            background: 'rgba(var(--ig-ink-rgb),0.06)', color: 'rgba(var(--ig-ink-rgb),0.5)',
+            border: '1px solid rgba(var(--ig-ink-rgb),0.1)', borderRadius: 20, cursor: 'help',
+          }}>
           {decision_mode}
         </div>
       </div>
@@ -588,6 +832,12 @@ function DecisionCard({ decision }) {
           <div style={{ fontSize: '1.5rem', fontWeight: 800, color: `rgb(${domRgb})`, textTransform: 'capitalize', marginBottom: 6 }}>
             {dominant || '—'}
           </div>
+          {plutchikGroup && plutchikGroup !== dominant && (
+            <div style={{ fontSize: '0.7rem', color: 'rgba(var(--ig-ink-rgb),0.45)' }}
+              title="Emotions on Plutchik's wheel roll up into one of its 8 primary petals; all other emotions (relief, love, pride, …) stand as their own group">
+              Plutchik group: <strong style={{ color: `rgb(${rgb(plutchikGroup)})`, textTransform: 'capitalize' }}>{plutchikGroup}</strong>
+            </div>
+          )}
           {sarcasm_score > 0 && (
             <div style={{ fontSize: '0.72rem', color: 'rgba(var(--ig-ink-rgb),0.45)' }}>
               Sarcasm: {(sarcasm_score * 100).toFixed(0)}%
@@ -595,6 +845,83 @@ function DecisionCard({ decision }) {
           )}
         </div>
       </div>
+
+      {plainWords.length > 0 && (
+        <div style={{
+          marginTop: 14, padding: '12px 14px', borderRadius: 10,
+          background: 'rgba(var(--ig-ink-rgb),0.04)', border: '1px solid rgba(var(--ig-ink-rgb),0.06)',
+        }}>
+          <div style={S.miniLabel}>How this verdict was reached — in plain words</div>
+          {plainWords.map((s, i) => (
+            <div key={i} style={{
+              display: 'flex', gap: 8, fontSize: '0.76rem', lineHeight: 1.55,
+              color: 'rgba(var(--ig-ink-rgb),0.65)', marginBottom: i === plainWords.length - 1 ? 0 : 7,
+            }}>
+              <span style={{ color: `rgb(${domRgb})`, flexShrink: 0 }}>›</span>
+              <span>{s}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {gates && (
+        <div style={{ marginTop: 14 }}>
+          <div style={S.miniLabel}>Where the meta-learner placed its trust</div>
+          <div style={{ fontSize: '0.68rem', color: 'rgba(var(--ig-ink-rgb),0.40)', lineHeight: 1.5, marginBottom: 8 }}>
+            The network picks these weights itself, fresh for every message — they always sum to
+            100%. A tall bar means that input carried the verdict; a short bar means it was
+            mostly ignored this time.
+          </div>
+          {gates.map(g => (
+            <div key={g.name} title={g.hint} style={{ marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                <span style={{ fontSize: '0.73rem', color: 'rgba(var(--ig-ink-rgb),0.7)' }}>
+                  {g.name}
+                  <span style={{ color: 'rgba(var(--ig-ink-rgb),0.35)', fontSize: '0.66rem' }}> — {g.hint}</span>
+                </span>
+                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: `rgb(${g.color})` }}>
+                  {(g.value * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div style={{ height: 5, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.07)' }}>
+                <div style={{
+                  height: '100%', borderRadius: 3,
+                  width: `${Math.min((g.value / gateMax) * 100, 100)}%`,
+                  background: `linear-gradient(90deg, rgb(${g.color}), rgba(${g.color},0.5))`,
+                  transition: 'width 0.5s ease',
+                }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {expertRows.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={S.miniLabel}>Did the models agree with the verdict?</div>
+          {expertRows.map(r => (
+            <div key={r.model} style={{ marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+                <span style={{ width: 84, flexShrink: 0, fontSize: '0.72rem', fontWeight: 700, color: `rgb(${r.color})` }}>
+                  {r.model}
+                </span>
+                <span style={{ fontSize: '0.74rem', color: 'rgba(var(--ig-ink-rgb),0.75)' }}>{r.said}</span>
+                <span style={{
+                  marginLeft: 'auto', fontSize: '0.66rem', fontWeight: 700, padding: '1px 7px', borderRadius: 10,
+                  color: r.agrees ? 'rgb(52,199,89)' : 'rgb(255,150,50)',
+                  background: r.agrees ? 'rgba(52,199,89,0.10)' : 'rgba(255,150,50,0.10)',
+                  border: `1px solid ${r.agrees ? 'rgba(52,199,89,0.25)' : 'rgba(255,150,50,0.25)'}`,
+                }}>
+                  {r.agrees ? '✓ agrees' : '✗ outvoted'}
+                </span>
+              </div>
+              <div style={{ fontSize: '0.66rem', color: 'rgba(var(--ig-ink-rgb),0.38)', marginLeft: 92, marginTop: 1 }}>
+                {r.why}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <DecisionTrace trace={decision.decision_trace} dominant={dominant} />
 
@@ -876,15 +1203,11 @@ export default function AdminPipelinePage({ currentUser, onBack }) {
                     "{detail.message.text}"
                   </div>
                 </div>
-                {detail.ground_truth && (
-                  <div style={{
-                    padding: '4px 12px', borderRadius: 20,
-                    background: 'rgba(52,199,89,0.12)', color: 'rgb(52,199,89)',
-                    border: '1px solid rgba(52,199,89,0.25)', fontSize: '0.75rem', fontWeight: 600,
-                  }}>
-                    ✓ Verified: {detail.ground_truth}
-                  </div>
-                )}
+                <VerifyControl
+                  detail={detail}
+                  onChange={(gt, verified) =>
+                    setDetail({ ...detail, ground_truth: gt, is_verified: verified })}
+                />
               </div>
 
               <div style={S.pipeline}>
@@ -905,7 +1228,7 @@ export default function AdminPipelinePage({ currentUser, onBack }) {
                 </PipelineStep>
 
                 <PipelineStep num={5} label="Meta-Learner Decision">
-                  <DecisionCard decision={detail.decision} />
+                  <DecisionCard decision={detail.decision} stages={detail.stages} />
                 </PipelineStep>
 
                 {detail.decision.logic_map && Object.keys(detail.decision.logic_map).length > 0 && (

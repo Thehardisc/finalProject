@@ -80,13 +80,15 @@ class GoEmotionsAnalyzer:
         logger.info("Loading sentence transformer for semantic NLI (all-MiniLM-L6-v2)...")
         from sentence_transformers import SentenceTransformer
         self._sent_model = SentenceTransformer("all-MiniLM-L6-v2")
-        proto_embs = self._sent_model.encode(_PROTO_SENTENCES, convert_to_numpy=True)
+        proto_embs = self._sent_model.encode(_PROTO_SENTENCES, convert_to_numpy=True,
+                                             show_progress_bar=False)
         norms = np.linalg.norm(proto_embs, axis=1, keepdims=True) + 1e-8
         self._proto_norm = proto_embs / norms
         logger.info("All GoEmotions models + semantic NLI loaded — 3-model blend active.")
 
     def _semantic_scores(self, text: str) -> dict:
-        emb = self._sent_model.encode([text], convert_to_numpy=True)[0]
+        emb = self._sent_model.encode([text], convert_to_numpy=True,
+                                      show_progress_bar=False)[0]
         emb_norm = emb / (np.linalg.norm(emb) + 1e-8)
         sims = self._proto_norm @ emb_norm
         exp_s = np.exp((sims - sims.max()) * 5.0)

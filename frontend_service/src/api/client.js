@@ -72,6 +72,8 @@ export const adminAPI = {
         params: { limit, ...(convId ? { conversation_id: convId } : {}) },
     }),
     pipelineDetail:   (messageId)            => client.get(`/admin/pipeline/${messageId}`),
+    verifyEmotion:    (messageId, emotion, verified = true) =>
+        client.post(`/admin/verify/${messageId}`, { emotion, verified }),
     startAiDemo:      (topic, numMessages)  => client.post('/admin/ai-demo', { topic, num_messages: numMessages }),
     aiDemoStatus:     ()                     => client.get('/admin/ai-demo/status'),
     stopAiDemo:       ()                     => client.post('/admin/ai-demo/stop'),

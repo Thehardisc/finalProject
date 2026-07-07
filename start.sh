@@ -48,6 +48,30 @@ else
 fi
 echo ""
 
+echo "[Data] Checking Claude-generated register datasets (.cache/<register>_samples.csv)..."
+ANTHROPIC_KEY=$(grep '^ANTHROPIC_API_KEY=' .env 2>/dev/null | cut -d'=' -f2 | tr -d '"'\'' ')
+MISSING_REGISTERS=""
+for REG in synthetic hyperbole banter; do
+    [ -f ".cache/${REG}_samples.csv" ] || MISSING_REGISTERS="${MISSING_REGISTERS} ${REG}"
+done
+if [ -z "${MISSING_REGISTERS}" ]; then
+    echo "   [OK] All register datasets present."
+elif [ -n "${ANTHROPIC_KEY}" ] && command -v python3 &> /dev/null && python3 -c "import anthropic" &> /dev/null; then
+    for REG in ${MISSING_REGISTERS}; do
+        echo "   [INFO] Generating '${REG}' dataset via Claude API (one-time)..."
+        if ANTHROPIC_API_KEY="${ANTHROPIC_KEY}" python3 central_responder_service/trainer/data/register_gen.py "${REG}"; then
+            echo "   [OK] ${REG}_samples.csv created."
+        else
+            echo "   [Warn] ${REG} generation failed — trainer will skip that set."
+        fi
+    done
+else
+    echo "   [SKIP] Missing:${MISSING_REGISTERS} — ANTHROPIC_API_KEY not set (or anthropic pkg absent);"
+    echo "          trainer will train without those sets. Generate later with:"
+    echo "          python3 central_responder_service/trainer/data/register_gen.py all"
+fi
+echo ""
+
 echo "[Search] Detecting host environment..."
 
 if command -v uname &> /dev/null && [ "$(uname -s)" = "Darwin" ]; then
@@ -230,13 +254,36 @@ check_service "Ingestion Service (API :8000)" "http://localhost:8000/health"
 check_service "API Service (WebSocket :8001)" "http://localhost:8001/conversation/conv-1/state"
 check_service "Frontend (UI :5173)" "http://localhost:5173"
 
-if docker compose logs central_responder_service 2>/dev/null | grep -q "Running in META-LEARNER mode"; then
+# A freshly (re)built central_responder container needs ~40s to import torch and
+# load meta_weights.pkl before it logs its mode — poll instead of a one-shot grep.
+ML_DEADLINE=90
+ML_ELAPSED=0
+ML_MODE=""
+while [ $ML_ELAPSED -lt $ML_DEADLINE ]; do
+    ML_LAST=$(docker compose logs central_responder_service 2>/dev/null \
+        | grep -E "Running in META-LEARNER mode|Falling back to Rule-Based Aggregation" | tail -1)
+    if [ -n "${ML_LAST}" ]; then
+        case "${ML_LAST}" in
+            *"META-LEARNER mode"*) ML_MODE="meta" ;;
+            *)                     ML_MODE="rule" ;;
+        esac
+        break
+    fi
+    sleep 3
+    ML_ELAPSED=$((ML_ELAPSED + 3))
+done
+
+if [ "${ML_MODE}" = "meta" ]; then
     echo "   [OK] Meta-Learner - loaded and active"
     PASS=$((PASS + 1))
-else
-    echo "   [Fail] Meta-Learner - not loaded (check central_responder_service logs)"
+elif [ "${ML_MODE}" = "rule" ]; then
+    echo "   [Fail] Meta-Learner - service fell back to RULE-BASED mode (no compatible meta_weights.pkl)"
     FAIL=$((FAIL + 1))
-    FAILED_CHECKS="${FAILED_CHECKS}   - Meta-Learner: 'Running in META-LEARNER mode' not found in central_responder_service logs"$'\n'
+    FAILED_CHECKS="${FAILED_CHECKS}   - Meta-Learner: fell back to rule-based aggregation (no compatible meta_weights.pkl; trainer will hot-reload once a model passes the gate)"$'\n'
+else
+    echo "   [Fail] Meta-Learner - no mode line logged within ${ML_DEADLINE}s (check central_responder_service logs)"
+    FAIL=$((FAIL + 1))
+    FAILED_CHECKS="${FAILED_CHECKS}   - Meta-Learner: neither 'META-LEARNER mode' nor rule-based fallback logged within ${ML_DEADLINE}s"$'\n'
 fi
 
 echo "[Test] Running end-to-end pipeline test..."

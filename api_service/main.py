@@ -263,6 +263,7 @@ async def _handle_conversation_update(message_id, data):
             "final_valence":          float(vader_data.get("vader_compound", 0.0)),
             "bert_emotions":          emotion_list,
             "ekman_group":            pipeline_log.get("ekman_group"),
+            "plutchik_group":         pipeline_log.get("plutchik_group"),
             "meta_confidence":        float(pipeline_log.get("meta_confidence", 0.0)),
             "context_shift":          json.loads(data.get("context_shift", "null")),
             "logic_map":              pipeline_log.get("logic_map", {}),
@@ -599,6 +600,12 @@ class UpdateUserRequest(BaseModel):
     is_active: Optional[bool] = None
 
 
+class VerifyEmotionRequest(BaseModel):
+    # None emotion + verified=False clears a previous verification.
+    emotion:  Optional[str] = None
+    verified: bool = True
+
+
 @app.get("/admin/users")
 async def admin_list_users(admin: dict = Depends(require_admin)):
     async with db_pool.acquire() as conn:
@@ -808,6 +815,7 @@ async def admin_pipeline_detail(
             "conflict":              pipeline_log.get("conflict"),
             "gate_weights_alpha":    pipeline_log.get("gate_weights_alpha"),
             "ekman_group":           pipeline_log.get("ekman_group"),
+            "plutchik_group":        pipeline_log.get("plutchik_group"),
         },
         "context": {
             "reasoning":        reasoning,
@@ -822,6 +830,44 @@ async def admin_pipeline_detail(
         "is_verified":  d.get("is_verified", False),
         "trajectory":   trajectory,
     }
+
+
+@app.post("/admin/verify/{message_id}")
+async def admin_verify_emotion(
+    message_id: str,
+    req: VerifyEmotionRequest,
+    admin: dict = Depends(require_admin),
+):
+    """Set (or clear) the human ground-truth label for a message.
+
+    Verified rows are the trainer's only live-data source (`fetch_live_data`
+    selects WHERE is_verified = TRUE), so this endpoint is what feeds real
+    conversations back into meta-learner retraining.
+    """
+    if req.verified:
+        if req.emotion not in _EMOTION_SET:
+            raise HTTPException(status_code=400,
+                                detail=f"emotion must be one of the {len(_EMOTION_SET)} GoEmotions labels.")
+        emotion = req.emotion
+    else:
+        emotion = None
+
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE emotion_analysis SET ground_truth_emotion = $1, is_verified = $2 "
+            "WHERE message_id = $3",
+            emotion, req.verified, message_id,
+        )
+    if result == "UPDATE 0":
+        raise HTTPException(status_code=404, detail="No analysis found for this message.")
+    logger.bind(
+        actor=admin["sub"], target=message_id, action="verify_emotion",
+    ).info(
+        "admin_action",
+        extra={"event": "admin_action", "emotion": emotion, "verified": req.verified},
+    )
+    return {"status": "ok", "message_id": message_id,
+            "ground_truth": emotion, "is_verified": req.verified}
 
 
 @app.get("/users/online", dependencies=[Depends(get_current_user)])
@@ -870,30 +916,42 @@ async def get_calibration_analytics():
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT ground_truth_emotion, emotions_json FROM emotion_analysis WHERE is_verified = TRUE"
+                "SELECT ground_truth_emotion, is_verified, emotions_json FROM emotion_analysis"
             )
     except Exception as e:
         logger.error(f"Analytics DB Error: {e}")
         raise HTTPException(status_code=500, detail="Could not calculate analytics.")
 
     if not rows:
-        return {"status": "no_data", "message": "Provide more feedback to see calibration stats."}
+        return {"status": "no_data", "message": "No analyzed messages yet."}
 
-    total_verified = len(rows)
+    # Distribution over EVERY analyzed message (model predictions, no ground
+    # truth needed); calibration metrics only over the human-verified subset.
+    all_distribution = Counter()
+    total_verified = 0
     correct_count  = 0
     tp = Counter()
     fp = Counter()
     fn = Counter()
+    gt_counts = Counter()
     confusion = {}
 
     for row in rows:
-        actual    = row['ground_truth_emotion']
-        ems       = json.loads(row['emotions_json'])
-        numeric   = {k: float(v) for k, v in ems.items() if isinstance(v, (int, float)) and k in EMOTION_LABELS}
+        try:
+            ems = json.loads(row['emotions_json'])
+        except (TypeError, ValueError):
+            continue
+        numeric = {k: float(v) for k, v in ems.items() if isinstance(v, (int, float)) and k in EMOTION_LABELS}
         if not numeric:
-            total_verified -= 1
             continue
         predicted = max(numeric, key=numeric.get)
+        all_distribution[predicted] += 1
+
+        actual = row['ground_truth_emotion']
+        if not row['is_verified'] or not actual:
+            continue
+        total_verified += 1
+        gt_counts[actual] += 1
 
         if actual not in confusion:
             confusion[actual] = Counter()
@@ -908,7 +966,7 @@ async def get_calibration_analytics():
 
     emotion_stats = {}
     for emo in EMOTION_LABELS:
-        actual_count = sum(1 for r in rows if r['ground_truth_emotion'] == emo)
+        actual_count = gt_counts[emo]
         if actual_count:
             precision = tp[emo] / (tp[emo] + fp[emo]) if (tp[emo] + fp[emo]) > 0 else 0
             recall    = tp[emo] / (tp[emo] + fn[emo]) if (tp[emo] + fn[emo]) > 0 else 0
@@ -920,21 +978,31 @@ async def get_calibration_analytics():
                 "samples":   actual_count,
             }
 
+    payload = {
+        "total_analyzed":           sum(all_distribution.values()),
+        "all_emotion_distribution": dict(all_distribution.most_common()),
+        "timestamp":                time.time(),
+    }
+
     if total_verified == 0:
-        return {"status": "no_data", "message": "All verified rows are feedback-only. No model outputs to evaluate."}
+        payload.update({
+            "status":  "no_data",
+            "message": "Provide more feedback to see calibration stats.",
+        })
+        return payload
 
     logger.log_stats("Model Calibration Report", {
         "Total Samples":    total_verified,
         "Overall Accuracy": f"{correct_count / total_verified:.2%}",
     })
 
-    return {
+    payload.update({
         "overall_accuracy":       round(correct_count / total_verified, 4),
         "total_verified_samples": total_verified,
         "emotion_breakdown":      emotion_stats,
         "confusion_matrix":       confusion,
-        "timestamp":              time.time(),
-    }
+    })
+    return payload
 
 
 @app.get("/dashboard", response_class=HTMLResponse)

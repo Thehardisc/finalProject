@@ -20,7 +20,7 @@ from shared.constants import (
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
 from trainer.utils import _run_batch, _run_parallel_batches, _vader
-from trainer.data.synthetic import _LABEL_TO_INTENT
+from trainer.data.csv_sets import _LABEL_TO_INTENT
 
 logger = get_logger("trainer")
 

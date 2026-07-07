@@ -14,6 +14,7 @@ from meta_learner import (
     predict_with_meta_learner,
     calculate_feature_impacts,
     apply_context_correction,
+    _GOE_TO_EKMAN,
 )
 
 from trainer import start_trainer_thread
@@ -32,6 +33,7 @@ from shared.constants import (
     CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
     CTX_RESIDENCY, CTX_ABRUPTNESS,
     EMOTION_LABELS as _EMOTION_LABELS,
+    GOE_TO_PLUTCHIK,
 )
 from shared.module_registry import ModuleRegistry
 from implicit_emotion import (
@@ -43,6 +45,16 @@ from implicit_emotion import (
 )
 
 logger = get_logger("central_responder")
+
+# Valence groups (28-label space; the BERT negatives are a subset) — used by
+# the anomaly fallback for valence-aware source selection, the positive→negative
+# flip guard, and the consensus arbiter.
+_NEG_EMOTIONS = {"anger", "annoyance", "disapproval", "disgust", "sadness",
+                 "grief", "remorse", "disappointment", "fear", "nervousness",
+                 "embarrassment"}
+_POS_EMOTIONS = {"joy", "amusement", "admiration", "approval", "excitement",
+                 "love", "optimism", "pride", "caring", "gratitude", "desire",
+                 "relief"}
 
 redis_client = RedisClient()
 INPUT_STREAM  = "partial_analysis_stream"
@@ -303,6 +315,28 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     is_anomaly = False
     anomaly_reason = []
 
+    # Consensus arbiter: a near-flat meta verdict that lands in the opposite
+    # valence group from a unanimous expert consensus (GoE top + BERT top /
+    # VADER concurring) is an anomaly — the experts outvote a meta that is
+    # essentially guessing. Sarcasm-backed verdicts are exempt: after an
+    # inversion the verdict is SUPPOSED to oppose the raw experts.
+    _goe_top_lbl  = max(goe_scores, key=goe_scores.get) if goe_scores else None
+    _bert_top_lbl = max(bert_scores, key=bert_scores.get) if bert_scores else None
+    _vader_cmp0   = float(model_outputs.get("vader", {}).get("vader_compound", 0.0))
+    _consensus_contra = False
+    if _goe_top_lbl and float(sarcasm_score) < 0.5 and meta_confidence < 0.20:
+        _pos_consensus = (_goe_top_lbl in _POS_EMOTIONS
+                          and (_bert_top_lbl == "joy" or _vader_cmp0 >= 0.20))
+        _neg_consensus = (_goe_top_lbl in _NEG_EMOTIONS
+                          and (_bert_top_lbl in ("anger", "disgust", "fear", "sadness")
+                               or _vader_cmp0 <= -0.20))
+        _consensus_contra = ((_pos_consensus and dominant_emotion in _NEG_EMOTIONS)
+                             or (_neg_consensus and dominant_emotion in _POS_EMOTIONS))
+    if _consensus_contra:
+        anomaly_reason.append(
+            f"Expert consensus (GoE {_goe_top_lbl} · BERT {_bert_top_lbl} · VADER {_vader_cmp0:+.2f}) "
+            f"contradicts near-flat meta '{dominant_emotion}' ({meta_confidence:.2f})")
+
     if bert_max_prob < 0.35 and "basic_bert" in model_outputs:
         anomaly_reason.append(f"Low BERT Confidence ({bert_max_prob:.2f})")
     if goe_max_prob < 0.20 and "go_emotions" in model_outputs:
@@ -312,31 +346,65 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     if conflict_desc:
         anomaly_reason.append(f"Model Divergence: {conflict_desc}")
 
-    if (bert_max_prob < 0.35 and goe_max_prob < 0.20) or (meta_confidence < 0.45 and conflict_desc):
+    if (bert_max_prob < 0.35 and goe_max_prob < 0.20) or (meta_confidence < 0.45 and conflict_desc) or _consensus_contra:
         is_anomaly = True
         logger.warning(f"[ANOMALY DETECTED] {message_id}: {', '.join(anomaly_reason)}")
 
         original_conflict_desc = conflict_desc
         _is_hyperbole = bool(conflict_desc and "Hyperbole" in conflict_desc)
         conflict_desc = "Anomaly Fallback: Dynamic Recovery"
-        # Hyperbole = BERT fooled by literal negative wording — trust GoE regardless of max.
-        if goe_scores and (_is_hyperbole or goe_max_prob >= bert_max_prob):
-            final_scores = goe_scores
-            _anomaly_src = "raw GoEmotions" + (" (hyperbole → GoE preferred)" if _is_hyperbole else "")
-        elif bert_scores:
-            final_scores = bert_scores
-            _anomaly_src = "raw BERT"
-        else:
-            final_scores = {"neutral": 1.0}
-            _anomaly_src = "neutral default"
 
-        dominant_emotion = max(final_scores, key=final_scores.get) if final_scores else "neutral"
-        meta_confidence = final_scores.get(dominant_emotion, 0.0)
-        decision_trace.append({
-            "step": "Anomaly fallback", "status": "applied",
-            "detail": f"{', '.join(anomaly_reason)} — replaced scores with {_anomaly_src}",
-            "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
-        })
+        _vader_cmp = float(model_outputs.get("vader", {}).get("vader_compound", 0.0))
+        _bert_top  = max(bert_scores, key=bert_scores.get) if bert_scores else None
+        # Source selection is valence-aware: the most confident raw expert is not
+        # automatically the sanest one. BERT reads playful interjections as anger —
+        # when VADER says clearly positive and BERT's pick is negative, prefer GoE.
+        # (Hyperbole = BERT fooled by literal negative wording — GoE regardless of max.)
+        _bert_valence_clash = _bert_top in _NEG_EMOTIONS and _vader_cmp >= 0.30
+        if goe_scores and (_is_hyperbole or _consensus_contra or goe_max_prob >= bert_max_prob or _bert_valence_clash):
+            raw_scores = goe_scores
+            _anomaly_src = "raw GoEmotions" + (
+                " (hyperbole → GoE preferred)" if _is_hyperbole
+                else (" (expert consensus outvotes flat meta)" if _consensus_contra and goe_max_prob < bert_max_prob
+                      else (" (BERT valence-clash with VADER)" if _bert_valence_clash and goe_max_prob < bert_max_prob else "")))
+        elif bert_scores:
+            raw_scores, _anomaly_src = bert_scores, "raw BERT"
+        else:
+            raw_scores, _anomaly_src = {"neutral": 1.0}, "neutral default"
+
+        # Blend toward the raw expert instead of replacing: the weaker the meta
+        # verdict, the more the raw expert counts (meta 0.44 → mild correction,
+        # meta 0.10 → raw dominates). Replacement discarded everything the
+        # meta-learner knew and let a single expert overwrite a near-miss.
+        _w_raw = min(0.85, max(0.35, 1.0 - float(meta_confidence) / 0.45))
+        _blended = {e: (1.0 - _w_raw) * float(final_scores.get(e, 0.0)) + _w_raw * float(raw_scores.get(e, 0.0))
+                    for e in set(final_scores) | set(raw_scores)}
+        _prev_dominant = dominant_emotion
+        dominant_emotion = max(_blended, key=_blended.get) if _blended else "neutral"
+
+        # Valence sanity: flipping a non-negative verdict to a negative one against
+        # clearly positive VADER needs sarcasm evidence — genuine sarcasm is exactly
+        # that pattern, playful banter is not.
+        if (dominant_emotion in _NEG_EMOTIONS and _prev_dominant not in _NEG_EMOTIONS
+                and _vader_cmp >= 0.30 and float(sarcasm_score) < 0.5):
+            decision_trace.append({
+                "step": "Anomaly fallback", "status": "suppressed",
+                "detail": (f"{', '.join(anomaly_reason)} — blend wanted '{dominant_emotion}', but a "
+                           f"positive→negative flip against VADER {_vader_cmp:+.2f} needs sarcasm evidence "
+                           f"(combined {float(sarcasm_score):.2f} < 0.50) — meta verdict kept"),
+                "label": _prev_dominant, "confidence": round(float(meta_confidence), 4),
+            })
+            dominant_emotion = _prev_dominant
+            conflict_desc = original_conflict_desc
+            is_anomaly = False
+        else:
+            final_scores = _blended
+            meta_confidence = final_scores.get(dominant_emotion, 0.0)
+            decision_trace.append({
+                "step": "Anomaly fallback", "status": "applied",
+                "detail": f"{', '.join(anomaly_reason)} — blended {_w_raw:.0%} toward {_anomaly_src}",
+                "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+            })
     else:
         decision_trace.append({
             "step": "Anomaly fallback", "status": "skipped",
@@ -356,7 +424,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
                       else ("neutral prediction" if dominant_emotion == "neutral"
                             else f"low meta confidence ({meta_confidence:.2f})"))
         _impl_result  = await request_implicit_emotion(r, message_id, _orig_text, _conv_history)
-        if _impl_result and should_override(dominant_emotion, meta_confidence, _impl_result):
+        _vader_compound = float(model_outputs.get("vader", {}).get("vader_compound", 0.0))
+        if _impl_result and should_override(dominant_emotion, meta_confidence, _impl_result,
+                                            goe_scores=goe_scores, vader_compound=_vader_compound):
             _prev_dom        = dominant_emotion
             dominant_emotion = _impl_result["emotion"]
             meta_confidence  = float(_impl_result["confidence"])
@@ -392,6 +462,8 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
                        f"prediction not neutral, no expert conflict"),
             "label": None, "confidence": None,
         })
+    # A published 1.00 is always a bug (degenerate fallback), never a real posterior.
+    meta_confidence = min(float(meta_confidence), 0.99)
     decision_trace.append({
         "step": "Final decision", "status": "final",
         "detail": ("implicit-emotion-override" if _impl_override
@@ -459,6 +531,11 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     cdm_state_idx = cdm_probs.index(max(cdm_probs)) if ce_available else None
     cdm_state_name = CDM_STATES[cdm_state_idx] if cdm_state_idx is not None else None
 
+    # Group fields must reflect the FINAL label — overrides (sarcasm inversion,
+    # anomaly fallback, implicit override) may have changed it since prediction.
+    ekman_group    = _GOE_TO_EKMAN.get(dominant_emotion, "neutral")
+    plutchik_group = GOE_TO_PLUTCHIK.get(dominant_emotion, dominant_emotion)
+
     pipeline_log = {
         "models":                model_outputs,
         "aggregated":            final_scores,
@@ -478,6 +555,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "dynamics":              dynamics_scores,
         "appraisal":             appraisal_scores,
         "ekman_group":           ekman_group,
+        "plutchik_group":        plutchik_group,
         "context_snapshot": {
             "prev_emotion":         prev_emotion,
             "cur_valence":          cur_val,

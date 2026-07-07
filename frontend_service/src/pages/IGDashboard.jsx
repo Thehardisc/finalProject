@@ -708,7 +708,7 @@ export default function IGDashboard({
   onAddMember,
   onRemoveMember,
   onDeleteMessage,
-  onGoToAnalytics,
+  onGoToAdminDash,
   onGoToLiveAnalytics,
   onGoToAdmin,
   onLogout,
@@ -1034,9 +1034,9 @@ export default function IGDashboard({
                 exit={{ opacity: 0, y: -4, scale: 0.97 }}
                 transition={{ type: 'spring', stiffness: 420, damping: 28 }}
                 onClick={e => e.stopPropagation()}
-                style={{ position: 'absolute', top: '110%', left: 0, zIndex: 100, background: 'var(--ig-surf)', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.14)', border: '1px solid rgba(0,0,0,.07)', overflow: 'hidden' }}
+                style={{ position: 'absolute', top: '110%', left: 0, zIndex: 100, background: 'var(--ig-surf)', borderRadius: 14, minWidth: 200, boxShadow: '0 8px 32px rgba(0,0,0,.25)', border: '1px solid var(--ig-bord)', overflow: 'hidden' }}
               >
-                <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.07)' }}>
+                <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--ig-bord)' }}>
                   <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--ig-txt)' }}>{currentUser?.display_name}</div>
                   <div style={{ fontSize: '0.75rem', color: 'var(--ig-txt2)', marginTop: 2 }}>{currentUser?.email}</div>
                   {currentUser?.role === 'admin' && (
@@ -1044,20 +1044,20 @@ export default function IGDashboard({
                   )}
                 </div>
                 {[
-                  { label: 'Analytics',       icon: '✨', action: () => { setShowProfileMenu(false); onGoToAnalytics(); } },
                   onGoToLiveAnalytics && { label: 'Live Analytics', icon: '📊', action: () => { setShowProfileMenu(false); onGoToLiveAnalytics(); } },
+                  currentUser?.role === 'admin' && { label: 'Admin', icon: '🛡️', action: () => { setShowProfileMenu(false); onGoToAdminDash(); }, color: '#d97706' },
                   currentUser?.role === 'admin' && { label: 'Pipeline Inspector', icon: '🔬', action: () => { setShowProfileMenu(false); onGoToAdmin(); }, color: '#7c3aed' },
                 ].filter(Boolean).map(item => (
                   <button key={item.label} onClick={item.action}
-                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', textAlign: 'left', fontSize: '0.88rem', color: item.color || '#1c1c2e', display: 'flex', alignItems: 'center', gap: 10 }}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', textAlign: 'left', fontSize: '0.88rem', color: item.color || 'var(--ig-txt)', display: 'flex', alignItems: 'center', gap: 10 }}
                     onMouseOver={e => e.currentTarget.style.background = 'var(--ig-surf2)'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
                   >{item.icon} {item.label}</button>
                 ))}
-                <div style={{ borderTop: '1px solid rgba(0,0,0,0.07)' }}>
+                <div style={{ borderTop: '1px solid var(--ig-bord)' }}>
                   <button onClick={onLogout}
-                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', textAlign: 'left', fontSize: '0.88rem', color: '#dc2626', display: 'flex', alignItems: 'center', gap: 10 }}
-                    onMouseOver={e => e.currentTarget.style.background = '#fef2f2'}
+                    style={{ width: '100%', background: 'none', border: 'none', cursor: 'pointer', padding: '10px 16px', textAlign: 'left', fontSize: '0.88rem', color: '#ef4444', display: 'flex', alignItems: 'center', gap: 10 }}
+                    onMouseOver={e => e.currentTarget.style.background = 'rgba(220,38,38,0.12)'}
                     onMouseOut={e => e.currentTarget.style.background = 'none'}
                   >→ Log out</button>
                 </div>
@@ -1071,23 +1071,23 @@ export default function IGDashboard({
             {!demoMode && (<>
             <button onClick={() => setShowCompose(true)} title="New Message"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
-              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
-              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = 'var(--ig-txt)'; }}
+              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--ig-txt2)'; }}
             >
               <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
             </button>
             <button onClick={() => setShowGroupModal(true)} title="New Group"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
-              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
-              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = 'var(--ig-txt)'; }}
+              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--ig-txt2)'; }}
             >
               <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
             </button>
             </>)}
             <button onClick={() => setShowSettings(true)} title="Settings"
               style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 7, borderRadius: 8, color: 'var(--ig-txt2)', transition: 'all .12s' }}
-              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
-              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+              onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = 'var(--ig-txt)'; }}
+              onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--ig-txt2)'; }}
             >
               <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
@@ -1255,10 +1255,10 @@ export default function IGDashboard({
                     👥 Members
                   </button>
                 )}
-                <button onClick={onGoToAnalytics} title="Analytics"
+                <button onClick={onGoToLiveAnalytics} title="Live Analytics"
                   style={{ background: 'none', border: 'none', borderRadius: 8, width: 34, height: 34, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--ig-txt2)', transition: 'all .12s' }}
-                  onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = '#1c1c2e'; }}
-                  onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = '#6b7280'; }}
+                  onMouseOver={e => { e.currentTarget.style.background = 'var(--ig-surf2)'; e.currentTarget.style.color = 'var(--ig-txt)'; }}
+                  onMouseOut={e => { e.currentTarget.style.background = 'none'; e.currentTarget.style.color = 'var(--ig-txt2)'; }}
                 >
                   <svg width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" viewBox="0 0 24 24"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
                 </button>

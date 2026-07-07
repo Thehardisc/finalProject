@@ -17,14 +17,12 @@ from sklearn.metrics import accuracy_score, f1_score, classification_report
 from shared.constants import EMOTION_LABELS, FEATURE_DIM
 from shared.utils.logger import get_logger
 from trainer.utils import (_get_analyzers, filter_outliers, filter_balance, print_report, _bar)
-from trainer.data.synthetic import (load_synthetic_features, _SYNTHETIC_CLASSES)
 from trainer.data.empathetic import extract_empathetic_dialogues_features
 from trainer.data.goemotions import extract_goemotions_direct_features
 from trainer.data.meld import extract_meld_features
 from trainer.data.dailydialog import extract_dailydialog_features
 from trainer.data.db import fetch_live_data, load_relabeled_conversations
-from trainer.data.csv_local import extract_csv_local_features
-from trainer.data.hyperbole import extract_hyperbole_features
+from trainer.data.csv_sets import extract_csv_set_features
 from trainer.models import train_gating_network
 
 logger = get_logger("trainer")
@@ -181,19 +179,6 @@ def run_one_cycle(reload_callback=None) -> None:
         gs_tr = [{label: 1.0} for label in y_tr]
         n_ed = len(X_tr)
 
-        X_syn, y_syn, gs_syn = load_synthetic_features(vader, bert, goe, batch_size=nlp_batch_size)
-        n_syn = 0
-        if len(X_syn) > 0:
-            n_syn      = len(X_syn)
-            X_tr       = list(X_tr) + list(X_syn)
-            y_tr       = y_tr + y_syn
-            gs_tr      = gs_tr + gs_syn
-            has_cdm_tr = has_cdm_tr + [False] * n_syn
-            logger.info(
-                f"Bootstrap: +{n_syn} synthetic samples "
-                f"({_SYNTHETIC_CLASSES}) → {len(X_tr)} total train"
-            )
-
         from sklearn.model_selection import train_test_split as _tts
         X_goe_d, y_goe_d, gs_goe_d = extract_goemotions_direct_features(vader, bert, goe, batch_size=nlp_batch_size)
         n_goe_d = 0
@@ -277,36 +262,28 @@ def run_one_cycle(reload_callback=None) -> None:
                 f"({n_dd_ctx} with real context) → {len(X_tr)} total train"
             )
 
-        X_csv, y_csv = extract_csv_local_features(vader, bert, goe, batch_size=nlp_batch_size)
-        n_csv = 0
-        if len(X_csv) > 0:
-            n_csv      = len(X_csv)
-            X_tr       = list(X_tr) + list(X_csv)
-            y_tr       = y_tr + list(y_csv)
-            gs_tr      = gs_tr + [{label: 1.0} for label in y_csv]
-            has_cdm_tr = has_cdm_tr + [False] * n_csv
-            logger.info(f"Bootstrap: +{n_csv} local CSV samples → {len(X_tr)} total train")
-
-        X_hyp, y_hyp = extract_hyperbole_features(vader, bert, goe, batch_size=nlp_batch_size)
-        n_hyp = 0
-        if len(X_hyp) > 0:
-            n_hyp      = len(X_hyp)
-            X_tr       = list(X_tr) + list(X_hyp)
-            y_tr       = y_tr + list(y_hyp)
-            gs_tr      = gs_tr + [{label: 1.0} for label in y_hyp]
-            has_cdm_tr = has_cdm_tr + [False] * n_hyp
-            logger.info(f"Bootstrap: +{n_hyp} hyperbole samples → {len(X_tr)} total train")
+        n_sets: dict = {}
+        for set_name in ("synthetic", "csv_local", "hyperbole", "banter"):
+            X_set, y_set, gs_set = extract_csv_set_features(set_name, vader, bert, goe, batch_size=nlp_batch_size)
+            n_sets[set_name] = len(X_set)
+            if len(X_set) > 0:
+                X_tr       = list(X_tr) + list(X_set)
+                y_tr       = y_tr + list(y_set)
+                gs_tr      = gs_tr + list(gs_set)
+                has_cdm_tr = has_cdm_tr + [False] * len(X_set)
+                logger.info(f"Bootstrap: +{len(X_set)} {set_name} samples → {len(X_tr)} total train")
 
         dataset_composition = {
             "EmpatheticDialogues (train)":    n_ed,
-            "Synthetic (train, 5 classes)":   n_syn,
+            "Synthetic situations (Claude-gen)": n_sets["synthetic"],
             f"GoEmotions-direct (train 3×)":  n_goe_d,
             f"GoEmotions-direct (val)":        n_goe_val,
             f"GoEmotions-direct (test)":       n_goe_test,
             f"MELD ({n_meld_ctx} w/ real ctx)": n_meld,
             f"DailyDialog ({n_dd_ctx} w/ real ctx)": n_dd,
-            "Local CSV (gold labels)":        n_csv,
-            "Hyperbole/slang (Claude-gen)":   n_hyp,
+            "Local CSV (gold labels)":        n_sets["csv_local"],
+            "Hyperbole/slang (Claude-gen)":   n_sets["hyperbole"],
+            "Banter/teasing (Claude-gen)":    n_sets["banter"],
         }
 
     else:
@@ -358,15 +335,16 @@ def run_one_cycle(reload_callback=None) -> None:
         if n_dd_cont > 0:
             logger.info(f"  [DailyDialog] +{n_dd_cont} cached samples added to continuous cycle.")
 
-        X_csv_c, y_csv_c = extract_csv_local_features(vader, bert, goe, batch_size=nlp_batch_size)
-        n_csv_cont = len(X_csv_c)
-        if n_csv_cont > 0:
-            logger.info(f"  [CSVLocal] +{n_csv_cont} local CSV samples added to continuous cycle.")
-
-        X_hyp_c, y_hyp_c = extract_hyperbole_features(vader, bert, goe, batch_size=nlp_batch_size)
-        n_hyp_cont = len(X_hyp_c)
-        if n_hyp_cont > 0:
-            logger.info(f"  [Hyperbole] +{n_hyp_cont} hyperbole samples added to continuous cycle.")
+        X_sets_c: list = []
+        y_sets_c: list = []
+        n_sets_c: dict = {}
+        for set_name in ("csv_local", "hyperbole", "banter"):
+            X_set, y_set, _ = extract_csv_set_features(set_name, vader, bert, goe, batch_size=nlp_batch_size)
+            n_sets_c[set_name] = len(X_set)
+            if len(X_set) > 0:
+                X_sets_c += list(X_set)
+                y_sets_c += list(y_set)
+                logger.info(f"  [{set_name}] +{len(X_set)} samples added to continuous cycle.")
 
         X_all = (
             X_db
@@ -374,8 +352,7 @@ def run_one_cycle(reload_callback=None) -> None:
             + list(X_meld_c)
             + list(X_emp_c)
             + list(X_dd_c)
-            + list(X_csv_c)
-            + list(X_hyp_c)
+            + X_sets_c
         )
         y_all = (
             y_db
@@ -383,8 +360,7 @@ def run_one_cycle(reload_callback=None) -> None:
             + list(y_meld_c)
             + list(y_emp_c)
             + list(y_dd_c)
-            + list(y_csv_c)
-            + list(y_hyp_c)
+            + y_sets_c
         )
         has_cdm_all = (
             [False] * len(X_db)
@@ -392,8 +368,7 @@ def run_one_cycle(reload_callback=None) -> None:
             + list(has_cdm_meld_c)
             + list(has_cdm_emp_c)
             + list(has_cdm_dd_c)
-            + [False] * n_csv_cont
-            + [False] * n_hyp_cont
+            + [False] * len(X_sets_c)
         )
 
         X_tr, X_v, y_tr, y_v, hc_tr, _ = _tts(
@@ -410,7 +385,9 @@ def run_one_cycle(reload_callback=None) -> None:
             f"MELD (cache, {sum(has_cdm_meld_c)} w/ ctx)":  n_meld_cont,
             "EmpatheticDialogues (cache)":                   n_emp_cont,
             f"DailyDialog (cache, {n_dd_ctx_c} w/ ctx)":    n_dd_cont,
-            "Local CSV (gold labels)":                       n_csv_cont,
+            "Local CSV (gold labels)":                       n_sets_c["csv_local"],
+            "Hyperbole/slang (Claude-gen)":                  n_sets_c["hyperbole"],
+            "Banter/teasing (Claude-gen)":                   n_sets_c["banter"],
         }
         logger.info(
             f"Continuous cycle: {len(X_tr)} train / {len(X_v)} val samples "
@@ -464,6 +441,14 @@ def run_one_cycle(reload_callback=None) -> None:
     X_tr_arr = np.vstack([np.array(fv).flatten() for fv in X_tr])
     X_v_arr  = np.vstack([np.array(fv).flatten() for fv in X_v])
     X_te_arr = np.vstack([np.array(fv).flatten() for fv in X_te])
+
+    # Feature caches on disk may predate the context mask (label-leaked CDM/HMM
+    # state slots — see meta_learner._CDM_KEEP). Masking here is idempotent and
+    # guarantees train/inference parity regardless of cache age.
+    from meta_learner import apply_context_mask
+    apply_context_mask(X_tr_arr)
+    apply_context_mask(X_v_arr)
+    apply_context_mask(X_te_arr)
 
     def _augment_rare(X: np.ndarray, y: list, threshold: int = 100) -> tuple:
         counts = Counter(y)

@@ -113,7 +113,8 @@ def _get_analyzers(device):
     logger.info("Loading sentence transformer for semantic NLI (all-MiniLM-L6-v2)...")
     from sentence_transformers import SentenceTransformer
     sent_model = SentenceTransformer("all-MiniLM-L6-v2")
-    proto_embs = sent_model.encode(_TRAINER_PROTO_SENTENCES, convert_to_numpy=True)
+    proto_embs = sent_model.encode(_TRAINER_PROTO_SENTENCES, convert_to_numpy=True,
+                                   show_progress_bar=False)
     proto_norms = np.linalg.norm(proto_embs, axis=1, keepdims=True) + 1e-8
     proto_norm  = proto_embs / proto_norms
 
@@ -132,7 +133,8 @@ def _get_analyzers(device):
                 p_out = f_primary.result()
                 s_out = f_secondary.result()
 
-            sent_embs = sent_model.encode(texts, batch_size=batch_size, convert_to_numpy=True)
+            sent_embs = sent_model.encode(texts, batch_size=batch_size, convert_to_numpy=True,
+                                          show_progress_bar=False)
             e_norms   = np.linalg.norm(sent_embs, axis=1, keepdims=True) + 1e-8
             sent_norm = sent_embs / e_norms
             sims      = sent_norm @ proto_norm.T

@@ -10,7 +10,7 @@ from shared.constants import EMOTION_LABELS, FEATURE_DIM, CDM_CTX_DIM, PRIOR_DIM
 from shared.utils.logger import get_logger
 from meta_learner import build_feature_vector
 from trainer.utils import _vader, _run
-from trainer.data.synthetic import build_synthetic_context_vector
+from trainer.data.csv_sets import build_synthetic_context_vector
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'goemotions_service'))
 try:

@@ -1,11 +1,18 @@
 """Training loop for ConversationLSTM."""
 
 import json
-import time
+import sys
 
 import torch
 import torch.nn as nn
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root → shared/
+
+from shared.utils.logger import get_logger
+from shared.utils.progress import TrainingProgress
+
+logger = get_logger("csl_trainer")
 
 
 
@@ -118,11 +125,10 @@ def train(
     patience_c = 0
     history    = {"train": [], "val": [], "epoch": []}
 
-    print(f"\n{'Epoch':>6}  {'Train':>8}  {'Val':>8}  {'LR':>8}")
-    print("-" * 38)
+    prog = TrainingProgress(logger, task="conversation_lstm", total=epochs,
+                            unit="epoch", log_every=10)
 
     for epoch in range(1, epochs + 1):
-        t0         = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, _criterion, device)
         val_loss   = eval_epoch(model, val_loader,   _criterion, device) if val_loader else train_loss
 
@@ -147,16 +153,18 @@ def train(
         else:
             patience_c += 1
 
-        marker = " ◀ best" if improved else ""
-        if epoch == 1 or epoch % 10 == 0 or improved:
-            elapsed = time.time() - t0
-            print(f"{epoch:>6}  {train_loss:>8.4f}  {val_loss:>8.4f}  {current_lr:.2e}{marker}  ({elapsed:.1f}s)")
+        prog.step(
+            metrics={"train": train_loss, "val": val_loss, "lr": current_lr},
+            note="◀ best" if improved else "",
+            force=improved or epoch == 1,
+        )
 
         if patience_c >= patience:
-            print(f"\nEarly stopping at epoch {epoch} (no improvement for {patience} epochs).")
+            logger.info(f"[conversation_lstm] early stopping at epoch {epoch} "
+                        f"(no improvement for {patience} epochs)")
             break
 
-    print(f"\nBest val loss: {best_val:.4f}")
+    prog.done(metrics={"best_val": best_val})
 
     with open(out_dir / "training_history.json", "w") as fh:
         json.dump(history, fh, indent=2)

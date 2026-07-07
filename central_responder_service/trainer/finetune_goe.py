@@ -14,6 +14,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 from shared.constants import EMOTION_LABELS
 from shared.utils.logger import get_logger
+from shared.utils.progress import TrainingProgress
 
 logger = get_logger("finetune_goe")
 
@@ -96,6 +97,8 @@ def main():
     optim   = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
     sched   = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=EPOCHS * len(loader))
 
+    prog = TrainingProgress(logger, task="goe_finetune", total=EPOCHS * len(loader),
+                            unit="step", log_every=100)
     for epoch in range(1, EPOCHS + 1):
         model.train()
         total_loss, correct, n = 0.0, 0, 0
@@ -113,13 +116,10 @@ def main():
             total_loss += loss.item() * len(lbl)
             correct    += (out.logits.argmax(dim=-1) == lbl).sum().item()
             n          += len(lbl)
-            if (i + 1) % 100 == 0:
-                elapsed = time.time() - t0
-                logger.info(
-                    f"  Epoch {epoch}/{EPOCHS}  step {i+1}/{len(loader)}  "
-                    f"loss={total_loss/n:.4f}  acc={correct/n:.4f}  {elapsed:.0f}s"
-                )
-        logger.info(f"  Epoch {epoch} done — loss={total_loss/n:.4f}  acc={correct/n:.4f}")
+            prog.step(
+                metrics={"epoch": f"{epoch}/{EPOCHS}", "loss": total_loss / n, "acc": correct / n},
+                force=(i + 1 == len(loader)),
+            )
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(OUTPUT_DIR)
@@ -134,7 +134,8 @@ def main():
         "output_dir":     str(OUTPUT_DIR),
     }
     (OUTPUT_DIR / "finetune_meta.json").write_text(json.dumps(meta, indent=2))
-    logger.info(f"Fine-tuning complete in {time.time()-t0:.0f}s — model saved to {OUTPUT_DIR}")
+    prog.done(metrics={"loss": total_loss / n, "acc": correct / n},
+              note=f"model saved to {OUTPUT_DIR}")
 
 
 if __name__ == "__main__":

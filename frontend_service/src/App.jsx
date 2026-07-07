@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import LoginModal from './components/LoginModal';
 import IGDashboard from './pages/IGDashboard';
-import AnalyticsPage from './pages/AnalyticsPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
 import LiveAnalyticsDashboardPage from './pages/LiveAnalyticsDashboardPage';
 import AdminPipelinePage from './pages/AdminPipelinePage';
 import LandingPage from './pages/LandingPage';
@@ -60,6 +60,7 @@ function parseAnalysis(msg) {
         logic_map:              pl.logic_map || null,
         gate_weights_alpha:     pl.gate_weights_alpha || null,
         ekman_group:            pl.ekman_group || null,
+        plutchik_group:         pl.plutchik_group || null,
         context_snapshot:       pl.context_snapshot || null,
         context_shift:          msg.context_shift
                                   ? (typeof msg.context_shift === 'string' ? JSON.parse(msg.context_shift) : msg.context_shift)
@@ -104,7 +105,6 @@ export default function App() {
   const [inputValue, setInputValue]                 = useState('');
   const [status, setStatus]                         = useState('Offline');
   const [currentAnalysis, setCurrentAnalysis]       = useState(null);
-  const [analyticsData, setAnalyticsData]           = useState(null);
   const [mlProcessing, setMlProcessing]             = useState(false);
   const [regeneratingIds, setRegeneratingIds]       = useState(new Set());
   const [partialModels, setPartialModels]           = useState(new Set());
@@ -372,18 +372,6 @@ export default function App() {
     loadHistory();
   }, [activeConversationId, currentUser, systemReady]);
 
-  // ── Analytics fetch ──────────────────────────────────────────────────────
-  const fetchAnalytics = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/analytics/calibration`);
-      setAnalyticsData(res.data);
-    } catch {}
-  };
-
-  useEffect(() => {
-    if (view === 'analytics') fetchAnalytics();
-  }, [view]);
-
   // ── Chat actions ─────────────────────────────────────────────────────────
   const handleCreateChat = async (targetId) => {
     try {
@@ -598,7 +586,7 @@ export default function App() {
           onAddMember={handleAddMember}
           onRemoveMember={handleRemoveMember}
           onDeleteMessage={handleDeleteMessage}
-          onGoToAnalytics={() => setView('analytics')}
+          onGoToAdminDash={() => setView('admin-dash')}
           onGoToLiveAnalytics={() => setView('live-analytics')}
           onGoToAdmin={() => setView('admin')}
           onLogout={handleLogout}
@@ -617,14 +605,10 @@ export default function App() {
         />
       )}
 
-      {view === 'analytics' && (
-        <AnalyticsPage
-          analyticsData={analyticsData}
-          messages={messages}
-          currentAnalysis={currentAnalysis}
+      {view === 'admin-dash' && currentUser?.role === 'admin' && (
+        <AdminDashboardPage
           currentUser={currentUser}
           onBack={() => setView('dashboard')}
-          onRefresh={fetchAnalytics}
         />
       )}
 

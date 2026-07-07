@@ -34,11 +34,26 @@ _NEGATIVE_FAMILY = {"anger", "annoyance", "disappointment", "disapproval", "disg
 IMPLICIT_FLIP_MARGIN = float(os.environ.get("IMPLICIT_FLIP_MARGIN", "0.30"))
 
 
-def should_override(dominant_emotion, meta_confidence, impl_result):
+def should_override(dominant_emotion, meta_confidence, impl_result,
+                    goe_scores=None, vader_compound=0.0):
     impl_conf = float(impl_result.get("confidence", 0))
     impl_emo  = impl_result.get("emotion", "neutral")
     if impl_emo == "neutral":
         return False
+    # Valence veto: the keyword detector's fixed confidences must never flip the
+    # polarity of a message the text models read clearly ("literally shaking rn"
+    # is not fear when GoE says excitement and VADER reads positive).
+    if goe_scores:
+        pos_mass = sum(float(goe_scores.get(e, 0.0)) for e in _POSITIVE_FAMILY)
+        neg_mass = sum(float(goe_scores.get(e, 0.0)) for e in _NEGATIVE_FAMILY)
+        if impl_emo in _NEGATIVE_FAMILY and (pos_mass > 0.5 or vader_compound >= 0.3):
+            logger.info(f"[Implicit] veto: '{impl_emo}' vs positive text signal "
+                        f"(goe_pos={pos_mass:.2f}, vader={vader_compound:+.2f})")
+            return False
+        if impl_emo in _POSITIVE_FAMILY and (neg_mass > 0.5 or vader_compound <= -0.3):
+            logger.info(f"[Implicit] veto: '{impl_emo}' vs negative text signal "
+                        f"(goe_neg={neg_mass:.2f}, vader={vader_compound:+.2f})")
+            return False
     if dominant_emotion == "neutral":
         return impl_conf > IMPLICIT_CONF_THRESHOLD
     # Flipping valence polarity is drastic — demand a much larger margin than a

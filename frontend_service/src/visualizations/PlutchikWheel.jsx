@@ -1,15 +1,20 @@
 
+// Mirrors shared/constants.py:GOE_TO_PLUTCHIK — strict wheel policy: only labels
+// that appear on Plutchik's wheel (petals + intensity-ring names) join a petal.
+// Every other label (relief, love, pride, optimism, …) is its own group and
+// lights no petal.
 const PLUTCHIK_MAPPING = {
-    "admiration": "trust",  "amusement": "joy",    "approval": "trust",
-    "caring":     "trust",  "desire":    "anticipation", "excitement": "joy",
-    "gratitude":  "joy",    "joy":       "joy",    "love":       "joy",
-    "optimism":   "anticipation", "pride": "joy",  "realization":"surprise",
-    "relief":     "joy",    "surprise":  "surprise","curiosity":  "surprise",
-    "confusion":  "surprise","fear":     "fear",   "nervousness":"fear",
-    "remorse":    "sadness","sadness":   "sadness","disappointment":"sadness",
-    "grief":      "sadness","anger":     "anger",  "annoyance":  "anger",
-    "disapproval":"disgust","disgust":   "disgust","embarrassment":"fear",
-    "neutral":    "neutral"
+    "joy":         "joy",
+    "admiration":  "trust",
+    "fear":        "fear",
+    "nervousness": "fear",
+    "surprise":    "surprise",
+    "sadness":     "sadness",
+    "grief":       "sadness",
+    "disgust":     "disgust",
+    "anger":       "anger",
+    "annoyance":   "anger",
+    "curiosity":   "anticipation",
 };
 
 const PETALS = [
@@ -24,7 +29,7 @@ const PETALS = [
 ];
 
 const PlutchikWheel = ({ dominantEmotion }) => {
-    const core = PLUTCHIK_MAPPING[dominantEmotion?.toLowerCase()] || 'neutral';
+    const core = PLUTCHIK_MAPPING[dominantEmotion?.toLowerCase()] || null;
     return (
         <div className="plutchik-container">
             <svg id="plutchik-svg" viewBox="0 0 200 200">
