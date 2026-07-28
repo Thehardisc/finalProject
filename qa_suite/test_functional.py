@@ -62,23 +62,31 @@ def test_minimal_input(io, text):
 def test_negation_flips_valence(io):
     pos, _ = io("this is good", note="baseline (positive)")
     neg, _ = io("this is not good", note="negated -> valence should drop")
-    assert neg["compound"] < pos["compound"], (
-        f"negation did not lower valence: good={pos['compound']:.3f}, not-good={neg['compound']:.3f}")
+    delta = pos["compound"] - neg["compound"]
+    assert delta >= T.NEGATION_MIN_DELTA, (
+        f"negation delta {delta:.3f} < floor {T.NEGATION_MIN_DELTA} "
+        f"(good={pos['compound']:.3f}, not-good={neg['compound']:.3f})")
 
 
 def test_intensifier_increases_magnitude(io):
     base, _ = io("I am happy", note="baseline")
     boost, _ = io("I am very happy", note="intensified -> |valence| should grow")
-    assert abs(boost["compound"]) >= abs(base["compound"]) - 1e-6, (
-        f"intensifier did not increase magnitude: happy={base['compound']:.3f}, very-happy={boost['compound']:.3f}")
+    ratio = abs(boost["compound"]) / abs(base["compound"]) if base["compound"] else float("inf")
+    assert ratio >= T.INTENSIFIER_MIN_RATIO, (
+        f"intensifier ratio {ratio:.3f} < floor {T.INTENSIFIER_MIN_RATIO} "
+        f"(happy={base['compound']:.3f}, very-happy={boost['compound']:.3f})")
 
 
 def test_emoji_shifts_valence(io):
     base, _ = io("lunch", note="neutral baseline")
     pos, _ = io("lunch 😀", note="+emoji -> valence should rise")
     neg, _ = io("lunch 😢", note="-emoji -> valence should fall")
-    assert pos["compound"] > base["compound"], f"😀 did not raise valence: {base['compound']:.3f} -> {pos['compound']:.3f}"
-    assert neg["compound"] < base["compound"], f"😢 did not lower valence: {base['compound']:.3f} -> {neg['compound']:.3f}"
+    pos_delta = pos["compound"] - base["compound"]
+    neg_delta = base["compound"] - neg["compound"]
+    assert pos_delta >= T.EMOJI_MIN_DELTA, (
+        f"😀 delta {pos_delta:.3f} < floor {T.EMOJI_MIN_DELTA} ({base['compound']:.3f} -> {pos['compound']:.3f})")
+    assert neg_delta >= T.EMOJI_MIN_DELTA, (
+        f"😢 delta {neg_delta:.3f} < floor {T.EMOJI_MIN_DELTA} ({base['compound']:.3f} -> {neg['compound']:.3f})")
 
 
 @pytest.mark.parametrize("text", ["im sooo angrryy rn", "thx sm 🙏", "u r the bestttt",

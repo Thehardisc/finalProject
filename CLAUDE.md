@@ -261,7 +261,11 @@ Self-contained pytest suite that exercises the emotion engine in-process (it imp
   (curated + 3000 generated dialogues: per-turn accuracy + valence-arc trajectory).
 - **Non-functional**: `test_robustness.py` (3000 fuzz inputs → never crash, valid label),
   `test_invariants.py` (feature-vector shape, GoE gate cap ≤0.50, gate-vector shape, score
-  normalisation), `test_live.py` (sequential context, sarcasm, payload contract, latency/throughput).
+  normalisation), `test_live.py` (sequential context, sarcasm, payload contract,
+  latency/throughput + sustained-load latency stability, persistence round-trip through the
+  authenticated API, conversation insights/analyze). `test_availability.py` (opt-in fault
+  injection — stops/restarts `context_engine_service` to verify graceful degradation; gated
+  behind `QA_ALLOW_FAULT_INJECTION=1`, skipped otherwise).
 - **Scoring**: per-case asserts where unambiguous; large noisy corpora use an **aggregate accuracy
   gate** (prints misses, stays green). Bands live in `qa_suite/thresholds.py`; recalibrate via
   `calibrate.py` / `build_goemotions_corpus.py`.

@@ -209,6 +209,39 @@ def redis_client():
     return c
 
 
+API_URL = os.environ.get("API_URL", "http://localhost:8001")
+
+
+@pytest.fixture(scope="session")
+def api_up():
+    """Skip API-backed (auth/conversations) tests if api_service isn't reachable."""
+    import requests
+    try:
+        requests.get(f"{API_URL}/auth/me", timeout=2)
+    except requests.exceptions.RequestException as e:
+        pytest.skip(f"api_service at {API_URL} unreachable — is the stack up? ({e})")
+
+
+@pytest.fixture
+def make_user(api_up):
+    """Factory: register + log in a fresh throwaway user. Returns (session, user_id)."""
+    import requests
+
+    def _make():
+        session = requests.Session()
+        email = f"qa-{uuid.uuid4().hex[:12]}@example.test"
+        resp = session.post(
+            f"{API_URL}/auth/register",
+            json={"email": email, "first_name": "QA", "last_name": "Suite",
+                  "password": "qa-suite-pass-1"},
+            timeout=5,
+        )
+        assert resp.status_code == 201, f"register failed: {resp.status_code} {resp.text}"
+        return session, resp.json()["user_id"]
+
+    return _make
+
+
 @pytest.fixture(scope="session")
 def post_and_wait(redis_client):
 
