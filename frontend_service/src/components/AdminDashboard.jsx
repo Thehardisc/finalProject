@@ -6,7 +6,6 @@ const VIOLET  = '139,92,246';
 const EMERALD = '52,211,153';
 const RED     = '239,68,68';
 
-// Every account wears one of the app's emotion-palette hues (stable per name).
 const AVATAR_EMOTIONS = [
   'joy', 'admiration', 'curiosity', 'love', 'optimism', 'pride', 'caring',
   'excitement', 'gratitude', 'relief', 'realization', 'surprise', 'desire',
@@ -157,7 +156,6 @@ export default function AdminDashboard({ currentUser }) {
         }
       `}</style>
 
-      {/* Console bar — counts live with the roster, not as billboards */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap',
         padding: '12px 16px',
@@ -218,7 +216,6 @@ export default function AdminDashboard({ currentUser }) {
         </div>
       )}
 
-      {/* Roster */}
       <div style={{
         background: 'var(--ig-surf)', border: '1px solid var(--ig-bord)',
         borderRadius: 14, overflow: 'hidden',

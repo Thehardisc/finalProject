@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { adminAPI } from '../api/client';
 
-// Admin-only launcher: two Claude agents improvise a conversation between two
-// randomly generated users; messages run through the real emotion pipeline.
 export default function AiDemo({ onDemoStart }) {
   const [open, setOpen]         = useState(false);
   const [topic, setTopic]       = useState('');

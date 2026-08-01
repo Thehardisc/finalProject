@@ -18,7 +18,6 @@ class HeadAgent:
         self.client = anthropic.Anthropic()
         self.agents = {name: cls() for name, cls in ALL_AGENTS.items()}
 
-    # ------------------------------------------------------------------
 
     def run(self, task: str, force_agents: Optional[list] = None) -> str:
         print(f"\n{'='*60}")
@@ -53,7 +52,6 @@ class HeadAgent:
             lines.append(f"\n{'─'*50}\n## {name.upper()}\n{kb[:600]}")
         return "\n".join(lines)
 
-    # ------------------------------------------------------------------
 
     def _route(self, task: str) -> list[str]:
         agent_list = "\n".join(

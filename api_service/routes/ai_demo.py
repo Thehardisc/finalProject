@@ -46,8 +46,6 @@ class StartAiDemoRequest(BaseModel):
     num_messages: int = Field(10, ge=4, le=30)
 
 
-# Agent users are generated per run: random uuid + name, an unguessable password
-# (nobody can log in as them), and an @ai-demo.innerlink email that /users filters out.
 AGENT_EMAIL_DOMAIN = "ai-demo.innerlink"
 
 _FIRST_NAMES = ["Maya", "Leo", "Nina", "Omar", "Tara", "Felix", "Iris", "Jonas",
@@ -88,7 +86,6 @@ def _system_prompt(name, other, persona, topic):
     )
 
 
-# Kickoff user turn guarantees the messages list never starts with an assistant turn.
 def _build_messages(transcript, me, topic):
     messages = [{"role": "user",
                  "content": f"(Conversation start. Topic: {topic}. Send your first message.)"}]
@@ -121,8 +118,6 @@ async def _run_ai_demo(conv_id, topic, num_messages, user_a, user_b):
                 raise RuntimeError("Empty completion from model.")
             transcript.append((key, text))
 
-            # Byte-identical to the WS handler event shape so the whole pipeline
-            # (analysis, persistence, reasoning, broadcast) treats it as a real message.
             event = {
                 "text":            text,
                 "conversation_id": conv_id,

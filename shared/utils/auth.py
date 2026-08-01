@@ -28,7 +28,6 @@ async def validate_api_key(x_api_key: str = Header(None)):
     
     return x_api_key
 
-# rate limiter
 class RateLimiter:
     """Simple Redis-backed Fixed Window Rate Limiter."""
     def __init__(self, redis_client, limit: int = 60, window: int = 60):

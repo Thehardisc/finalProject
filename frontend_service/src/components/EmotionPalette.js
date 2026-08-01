@@ -63,7 +63,6 @@ const PALETTE_DARK = {
   default:       '147, 158, 189',
 };
 
-// re-renders) re-resolves. Falls back to 'light' with no DOM (SSR / tests).
 function resolveTheme() {
   if (typeof document !== 'undefined' &&
       document.querySelector('[data-ig-theme="dark"]')) return 'dark';

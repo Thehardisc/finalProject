@@ -33,8 +33,6 @@ def silence_library_bars():
         return
     _bars_silenced = True
     os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
-    # sentence-transformers shows its "Batches" bar whenever its logger is at
-    # INFO/DEBUG (the stack default) — raise it to WARNING.
     logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
     try:
         from transformers.utils import logging as hf_logging

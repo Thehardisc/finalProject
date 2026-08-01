@@ -13,7 +13,7 @@ for p in (_ROOT, _CE):
     if p not in sys.path:
         sys.path.insert(0, p)
 
-_CE_MAIN = None  # module cache — loaded by file path to dodge bare-name "main" collisions
+_CE_MAIN = None
 
 from shared.constants import (
     CDM_CTX_DIM, N_CDM_STATES, CTX_RESIDENCY, CTX_VELOCITY, CTX_ACCELERATION,
@@ -75,8 +75,6 @@ def _make_service(redis_mock=None):
     fastapi_stub = sys.modules["fastapi"]
     fastapi_stub.FastAPI = MagicMock(return_value=MagicMock())
 
-    # Several services expose a top-level "main" module; import this one by
-    # file path so whichever "main" is already in sys.modules cannot shadow it.
     global _CE_MAIN
     if _CE_MAIN is None:
         import importlib.util
@@ -205,8 +203,6 @@ class TestBuildContextVector:
             "conv:c1:spk:u1:hmm_alpha":   hmm_alpha or json.dumps([1/N_CDM_STATES]*N_CDM_STATES),
             "conv:c1:spk:u1:intent_stab": intent_stab,
             "conv:c1:spk:u1:last_embed":  None,
-            # velocity/acceleration read the per-speaker valence sequence
-            # (oldest → newest); valence_hist arrives newest-first.
             "conv:c1:spk:u1:valence_seq": json.dumps([float(x) for x in reversed(_valence_hist)]),
         }.get(k))
 

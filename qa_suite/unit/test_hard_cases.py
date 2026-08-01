@@ -48,7 +48,6 @@ def _fv(**kw):
     return build_feature_vector(outputs, **extra)
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestSarcasmDetection:
 
@@ -115,7 +114,6 @@ class TestSarcasmDetection:
         assert score == 0.0, f"Genuine sadness should not trigger sarcasm, got {score:.3f}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestImplicitEmotionRouting:
 
@@ -181,7 +179,6 @@ class TestImplicitEmotionRouting:
         assert result is False
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestConflictingSignals:
 
@@ -236,7 +233,6 @@ class TestConflictingSignals:
             assert fv.shape == (1, FEATURE_DIM), f"Case {i}: shape {fv.shape} ≠ (1, {FEATURE_DIM})"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestInertiaNovelty:
 
@@ -284,7 +280,6 @@ class TestInertiaNovelty:
         assert novelty == pytest.approx(1.0, abs=0.01), f"Surprise emotion → high novelty, got {novelty:.3f}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 
 def test_goe_gate_cap_with_extreme_goe_dominant_vector():
     """Feature vector where GoEmotions block is all-ones (extreme GoE signal)."""
@@ -326,7 +321,6 @@ def test_goe_gate_cap_with_extreme_context_vector():
     assert (goe_w <= 0.5001).all(), f"GoE cap violated with saturated context: max={goe_w.max():.4f}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
 
 class TestEdgeCases:
 

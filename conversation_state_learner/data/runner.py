@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import time
 import logging
 import requests
@@ -16,12 +17,12 @@ PIPELINE_POLL_DELAY = 1.0
 
 
 class PipelineRunner:
-    def __init__(self, base_url: str = "http://localhost:8000"):
+    def __init__(self, base_url: str = None):
+        base_url = base_url or os.environ.get("INGESTION_URL", "http://localhost:8000")
         self.base_url = base_url.rstrip("/")
         self._alice: Optional[Dict] = None
         self._bob:   Optional[Dict] = None
 
-    # ── Auth ──────────────────────────────────────────────────────────────────
 
     def _login_demo(self, slot: int) -> dict:
         """Login as a demo user and return {user_id, display_name, cookie}."""
@@ -48,7 +49,6 @@ class PipelineRunner:
             self._bob = self._login_demo(1)
             logger.info(f"  Bob:   {self._bob['user_id']}")
 
-    # ── Conversation creation ─────────────────────────────────────────────────
 
     def _create_conversation(self) -> str:
         """Create a direct conversation between Alice and Bob. Returns conv_id."""
@@ -65,7 +65,6 @@ class PipelineRunner:
         logger.debug(f"  Conversation created: {conv_id}")
         return conv_id
 
-    # ── Pipeline fetch ────────────────────────────────────────────────────────
 
     def _fetch_pipeline(self, message_id: str) -> Optional[Dict]:
         """Poll the admin pipeline endpoint until data is available."""
@@ -92,7 +91,6 @@ class PipelineRunner:
         logger.warning(f"  Pipeline data never arrived for {message_id[:8]}")
         return None
 
-    # ── WebSocket send + capture ──────────────────────────────────────────────
 
     async def _ws_send_and_capture(
         self, conv_id: str, messages: List[str]
@@ -152,7 +150,6 @@ class PipelineRunner:
         logger.debug(f"  Captured {len(analysis_events)} analysis events")
         return analysis_events
 
-    # ── Main public method ────────────────────────────────────────────────────
 
     def run_conversation(
         self,

@@ -15,7 +15,6 @@ DEMO_USERS = [
 _DEMO_PW = os.environ.get("DEMO_PASSWORD", "demo-innerlink-2026")
 
 
-# Ensure DEMO_USERS[slot] exists in the users table; returns the user dict.
 async def upsert_demo_user(conn, slot: int) -> dict:
     demo = DEMO_USERS[slot]
     row = await conn.fetchrow(

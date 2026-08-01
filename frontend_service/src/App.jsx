@@ -6,10 +6,8 @@ import AdminDashboardPage from './pages/AdminDashboardPage';
 import LiveAnalyticsDashboardPage from './pages/LiveAnalyticsDashboardPage';
 import AdminPipelinePage from './pages/AdminPipelinePage';
 import LandingPage from './pages/LandingPage';
+import { API_BASE, WS_BASE } from './api/client';
 import './glass/CrystalGlass-v2.css';
-
-const API_BASE = import.meta.env.VITE_API_URL  || 'http://localhost:8001';
-const WS_BASE  = import.meta.env.VITE_WS_URL   || 'ws://localhost:8001';
 
 axios.defaults.withCredentials = true;
 
@@ -26,7 +24,6 @@ function shouldApplyFriction(data) {
       || (inertia > 0.80 && valence < -0.5);
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function parseAnalysis(msg) {
   if (!msg.emotions) return null;
@@ -76,7 +73,6 @@ function parseAnalysis(msg) {
   }
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
   const [view, setView] = useState('dashboard');
@@ -113,7 +109,6 @@ export default function App() {
   const globalUsersRef   = useRef([]);
   const conversationsRef = useRef([]);
 
-  // AI-demo agent users are hidden from /users, so resolve their names via group membership.
   const resolveSenderName = (senderId, convId) => {
     if (!senderId) return undefined;
     return globalUsersRef.current.find(u => u.user_id === senderId)?.display_name
@@ -144,7 +139,6 @@ export default function App() {
       .finally(() => setSessionChecked(true));
   }, [currentUser]);
 
-  // ── Auth helpers ─────────────────────────────────────────────────────────
   const handleAuthSuccess = (data) => {
     setCurrentUser({
       user_id:      data.user_id,
@@ -200,7 +194,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [currentUser]);
 
-  // ── Conversations + Users polling ───────────────────────────────────────
   const fetchConversations = async () => {
     if (!currentUser) return;
     try {
@@ -372,7 +365,6 @@ export default function App() {
     loadHistory();
   }, [activeConversationId, currentUser, systemReady]);
 
-  // ── Chat actions ─────────────────────────────────────────────────────────
   const handleCreateChat = async (targetId) => {
     try {
       const res = await axios.post(`${API_BASE}/conversations`, {

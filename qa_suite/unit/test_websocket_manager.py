@@ -5,10 +5,6 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-# Stub ONLY modules that are not already imported — decorating a module that is
-# already in sys.modules would mutate the real package for the whole pytest
-# session (this once emptied the real shared.constants.EMOTION_LABELS and broke
-# unrelated suites collected in the same run).
 _stubbed = set()
 for _mod in ["fastapi", "fastapi.middleware", "fastapi.middleware.cors",
              "fastapi.staticfiles", "fastapi.responses",
@@ -41,8 +37,6 @@ if "shared.constants" in _stubbed:
 
 from api_service.websocket.manager import ConnectionManager as WsConnectionManager
 
-# The import above holds its own references — drop our stubs so any module
-# collected later in the session imports the real packages.
 for _mod in _stubbed:
     sys.modules.pop(_mod, None)
 

@@ -18,7 +18,7 @@ from transformers import DistilBertModel, DistilBertTokenizerFast, get_linear_sc
 
 
 ROOT       = Path(__file__).parent
-sys.path.insert(0, str(ROOT.parent))  # repo root → shared/
+sys.path.insert(0, str(ROOT.parent))
 
 from shared.utils.logger import get_logger
 from shared.utils.progress import TrainingProgress
@@ -26,8 +26,6 @@ from shared.utils.progress import TrainingProgress
 logger = get_logger("sarcasm_train")
 
 DATA_FILE    = ROOT / "training_data" / "sarcasm_labels.jsonl"
-# Sincere positive-surface negatives (train-only) — counters the tweet_eval bias
-# where clean enthusiastic positives read as irony. See qa_suite/test_sarcasm.py.
 AUGMENT_FILE = ROOT / "training_data" / "sarcasm_sincere_augment.jsonl"
 MODELS_DIR = ROOT.parent / "central_responder_service" / "models"
 MODEL_OUT  = MODELS_DIR / "sarcasm_clf.pt"
@@ -38,7 +36,6 @@ MAX_LENGTH = 256
 DROPOUT    = 0.3
 SEED       = 42
 
-# ── Model ─────────────────────────────────────────────────────────────────────
 
 class SarcasmClassifier(nn.Module):
     def __init__(self, dropout: float = DROPOUT):
@@ -54,7 +51,6 @@ class SarcasmClassifier(nn.Module):
         return self.head(self.drop(cls)).squeeze(-1)
 
 
-# ── Dataset ───────────────────────────────────────────────────────────────────
 
 def build_text(record: dict) -> str:
     """Concatenate context messages + target with [SEP] as boundary marker."""
@@ -88,7 +84,6 @@ class SarcasmDataset(Dataset):
         }
 
 
-# ── Data loading & splitting ──────────────────────────────────────────────────
 
 def load_records(path: Path) -> List[dict]:
     records = []
@@ -121,7 +116,6 @@ def conversation_split(
     return train, val
 
 
-# ── Metrics ───────────────────────────────────────────────────────────────────
 
 def compute_metrics(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.5) -> dict:
     preds = (probs >= threshold).astype(int)
@@ -141,7 +135,7 @@ def compute_metrics(labels: np.ndarray, probs: np.ndarray, threshold: float = 0.
         p  = (probs >= t).astype(int)
         tprs.append(((p == 1) & (labels == 1)).sum() / max(1, (labels == 1).sum()))
         fprs.append(((p == 1) & (labels == 0)).sum() / max(1, (labels == 0).sum()))
-    _trapz = getattr(np, "trapezoid", None) or np.trapz  # np.trapz removed in NumPy 2.0
+    _trapz = getattr(np, "trapezoid", None) or np.trapz
     auc = float(_trapz(tprs[::-1], fprs[::-1]))
 
     return dict(acc=acc, precision=precision, recall=recall, f1=f1, auc=auc,
@@ -159,7 +153,6 @@ def tune_threshold(labels: np.ndarray, probs: np.ndarray) -> Tuple[float, float]
     return best_t, best_f1
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
 
 def train_epoch(
     model: SarcasmClassifier,
@@ -214,7 +207,6 @@ def evaluate(
     )
 
 
-# ── Dry-run: dataset stats ────────────────────────────────────────────────────
 
 def print_stats(records: List[dict]) -> None:
     n          = len(records)
@@ -255,7 +247,6 @@ def print_stats(records: List[dict]) -> None:
     print()
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser()

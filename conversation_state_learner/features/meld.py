@@ -38,7 +38,6 @@ _MELD_VALENCE: Dict[str, float] = {
 }
 
 
-# ── Helper: build one 79-dim feature vector ────────────────────────────────────
 
 def _utterance_to_vec(
     text: str,
@@ -63,7 +62,6 @@ def _utterance_to_vec(
     return np.concatenate([go_vec, bert_vec, vader_vec, cdm_vec])
 
 
-# ── Public API ─────────────────────────────────────────────────────────────────
 
 def load_meld_sequences(
     vader_fn:      Callable,

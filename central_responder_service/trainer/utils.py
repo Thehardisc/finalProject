@@ -118,7 +118,6 @@ def _get_analyzers(device):
     proto_norms = np.linalg.norm(proto_embs, axis=1, keepdims=True) + 1e-8
     proto_norm  = proto_embs / proto_norms
 
-    # Wrap into an ensemble callable matching the pipeline interface
     class _GoEEnsemble:
         def __init__(self):
             self.model = goe_primary.model
@@ -153,7 +152,6 @@ def _get_analyzers(device):
                 results.append([{"label": k, "score": v} for k, v in merged.items()])
             return results
 
-        # expose device for GPU-detection logic in _run_parallel_batches
         @property
         def device(self):
             return goe_primary.device

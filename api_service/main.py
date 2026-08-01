@@ -601,7 +601,6 @@ class UpdateUserRequest(BaseModel):
 
 
 class VerifyEmotionRequest(BaseModel):
-    # None emotion + verified=False clears a previous verification.
     emotion:  Optional[str] = None
     verified: bool = True
 
@@ -799,7 +798,6 @@ async def admin_pipeline_detail(
         "stages": {
             "vader":      models.get("vader", {}),
             "bert":       models.get("basic_bert", {}),
-            # go_emotions carries side-channel keys (vad_*, goe_confidence) — show only real labels
             "goemotions": {k: v for k, v in models.get("go_emotions", {}).items()
                            if k in _EMOTION_SET},
         },
@@ -925,8 +923,6 @@ async def get_calibration_analytics():
     if not rows:
         return {"status": "no_data", "message": "No analyzed messages yet."}
 
-    # Distribution over EVERY analyzed message (model predictions, no ground
-    # truth needed); calibration metrics only over the human-verified subset.
     all_distribution = Counter()
     total_verified = 0
     correct_count  = 0

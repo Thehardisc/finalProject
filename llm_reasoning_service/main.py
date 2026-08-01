@@ -22,7 +22,6 @@ _ANTHROPIC_SYSTEM_PROMPT = (
 )
 
 
-# --- Explainer Logic ---
 class RuleBasedExplainer:
     def __init__(self):
         self.provider_type = os.getenv("LLM_PROVIDER", "RULE_BASED").upper()

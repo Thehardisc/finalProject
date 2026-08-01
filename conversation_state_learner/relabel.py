@@ -307,7 +307,6 @@ def run_sarcasm_mode(args, conversations: list, api_key: Optional[str]) -> None:
     print(f"Output: {output_path}")
 
 
-# ── Default (implicit emotion) mode ──────────────────────────────────────────
 
 def build_user_message(conversation: dict) -> str:
     lines = [
@@ -333,7 +332,6 @@ def build_user_message(conversation: dict) -> str:
     return "\n".join(lines)
 
 
-# ── Claude API call ───────────────────────────────────────────────────────────
 
 def call_claude(
     user_message: str,
@@ -368,7 +366,6 @@ def parse_response(raw: str, conversation_id: str):
         return None
 
 
-# ── Batch API mode ────────────────────────────────────────────────────────────
 
 def run_batch_mode(args, conversations: list, api_key: str) -> None:
     """Submit all labeling requests to Anthropic Batch API (50% cost reduction)."""
@@ -530,7 +527,6 @@ def run_batch_mode(args, conversations: list, api_key: str) -> None:
         print(f"[WARN] {failed} requests failed — check stderr for details.")
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()

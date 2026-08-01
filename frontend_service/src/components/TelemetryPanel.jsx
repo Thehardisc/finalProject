@@ -29,7 +29,6 @@ export default function TelemetryPanel({ processing, lastAnalysis, partialModels
   const domEmo  = d?.final_dominant_emotion;
   const domRgb  = domEmo ? (EmotionPalette[domEmo.toLowerCase()] || EmotionPalette.neutral) : null;
 
-  // VADER/BERT/GoEmotions can be 'active' when their partial event arrives.
   const stageStatus = (stage) => {
     if (!processing && !d) return 'idle';
     if (d) return 'done';

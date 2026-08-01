@@ -1,20 +1,11 @@
 import { useMemo } from 'react';
 import { EmotionPalette } from './EmotionPalette';
 
-/*
- * EmotionBackground — animated, emotion-reactive gradient backdrop.
- *
- * Pure CSS (no WebGL): three drifting blurred blobs plus a slowly rotating
- * conic sheen, colored from EmotionPalette by the live dominant emotion.
- * The root is transparent and absolutely positioned — the host page paints
- * its own base (var(--ig-bg)) and must place content above with z-index.
- */
 
 function rgbOf(emotion) {
   return EmotionPalette[emotion?.toLowerCase()] || EmotionPalette.neutral;
 }
 
-// Pull a secondary hue so the field has depth, not one flat tint.
 const SECONDARY = {
   neutral: 'pride', joy: 'optimism', anger: 'annoyance', sadness: 'grief',
   fear: 'nervousness', love: 'admiration', surprise: 'excitement',
@@ -48,7 +39,6 @@ export default function EmotionBackground({ emotion = 'neutral' }) {
     <div className="eb-root" aria-hidden="true">
       <style>{CSS}</style>
 
-      {/* Slowly rotating conic sheen tints the whole field */}
       <div
         className="eb-sheen-layer"
         style={{
@@ -58,7 +48,6 @@ export default function EmotionBackground({ emotion = 'neutral' }) {
         }}
       />
 
-      {/* Drifting emotion-colored blobs */}
       <div className="eb-blob" style={{
         width: '55vw', height: '55vw', top: '-15vw', left: '-12vw',
         background: `radial-gradient(circle, rgba(${primary},0.55) 0%, transparent 68%)`,

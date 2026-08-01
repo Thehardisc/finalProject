@@ -26,7 +26,6 @@ TRAINING_DIR = Path(__file__).parent / "training_data"
 OUTPUT_FILE  = TRAINING_DIR / "conversations.jsonl"
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _save_raw(trajectory_type: str, idx: int, messages: List[str]):
     RAW_DIR.mkdir(exist_ok=True)
@@ -55,7 +54,6 @@ def _append_training(record: dict):
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-# ── Phase 1: Generate ─────────────────────────────────────────────────────────
 
 def phase_generate(
     api_key: str,
@@ -88,7 +86,6 @@ def phase_generate(
     logger.info(f"\n✓ Generated {generated} conversation files in {RAW_DIR}/")
 
 
-# ── Phase 2: Run ──────────────────────────────────────────────────────────────
 
 def phase_run(
     base_url: str,
@@ -147,7 +144,6 @@ def phase_run(
     logger.info(f"\n✓ Enriched {done}/{total} conversations → {OUTPUT_FILE}")
 
 
-# ── Entrypoint ────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -166,8 +162,8 @@ def main():
     )
     parser.add_argument(
         "--base-url",
-        default="http://localhost:8000",
-        help="Base URL of the emotion analysis API (default: http://localhost:8000).",
+        default=os.environ.get("INGESTION_URL", "http://localhost:8000"),
+        help="Base URL of the emotion analysis API (default: $INGESTION_URL or http://localhost:8000).",
     )
     parser.add_argument(
         "--trajectories",

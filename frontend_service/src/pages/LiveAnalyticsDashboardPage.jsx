@@ -30,7 +30,6 @@ function timeAgo(ts) {
   return `${Math.round(diff / 86400)}d ago`;
 }
 
-// ── KPI Card ─────────────────────────────────────────────────────────────────
 
 function KpiCard({ label, value, sub, color = '0,119,255' }) {
   return (
@@ -53,7 +52,6 @@ function KpiCard({ label, value, sub, color = '0,119,255' }) {
   );
 }
 
-// ── Emotion row bar ───────────────────────────────────────────────────────────
 
 function EmotionBar({ emotion, count, total }) {
   const pct = total > 0 ? (count / total) * 100 : 0;
@@ -78,7 +76,6 @@ function EmotionBar({ emotion, count, total }) {
   );
 }
 
-// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
   const [analyses, setAnalyses]     = useState([]);
@@ -86,7 +83,6 @@ export default function LiveAnalyticsDashboardPage({ currentUser, onBack }) {
   const [lastRefresh, setLastRefresh] = useState(null);
   const [filterEmo, setFilterEmo]   = useState(null);
 
-  // chart.js canvases can't resolve CSS variables — compute literals per theme
   const igTheme = (() => {
     try { return JSON.parse(localStorage.getItem('ig_settings') || '{}').theme === 'dark' ? 'dark' : 'light'; }
     catch { return 'light'; }

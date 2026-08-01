@@ -8,7 +8,7 @@ import requests
 import redis
 
 
-pytestmark = pytest.mark.e2e  # needs the running docker stack
+pytestmark = pytest.mark.e2e
 
 INGESTION_URL = os.environ.get("INGESTION_URL", "http://localhost:8000")
 REDIS_HOST    = os.environ.get("REDIS_HOST", "localhost")
@@ -29,7 +29,6 @@ def _key_from_dotenv():
 
 API_KEY       = os.environ.get("INTERNAL_API_KEY") or _key_from_dotenv()
 
-# First message after the stack has idled can take >25s (model warm-up paths).
 WAIT_BUDGET_SEC = 60
 
 

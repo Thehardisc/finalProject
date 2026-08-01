@@ -46,7 +46,6 @@ _EMOTION_VALENCE = {
 }
 
 
-# ── Phase derivation ──────────────────────────────────────────────────────────
 
 def derive_phase(valence_window: List[float]) -> int:
     if len(valence_window) < 3:
@@ -74,7 +73,6 @@ def vec_valence(vec: np.ndarray) -> float:
                      for i, e in enumerate(EMOTION_LABELS_28)))
 
 
-# ── Real GoE inference ────────────────────────────────────────────────────────
 
 def run_goe_model_on_texts(
     texts: List[str],
@@ -117,7 +115,6 @@ def run_goe_model_on_texts(
     return results
 
 
-# ── Data loading ──────────────────────────────────────────────────────────────
 
 def load_meld_sequences(path: Path) -> List[Tuple[np.ndarray, np.ndarray, List[float]]]:
     with open(path) as f:
@@ -244,7 +241,6 @@ def build_windows(
     return samples
 
 
-# ── Training ──────────────────────────────────────────────────────────────────
 
 def topk_acc(pred: torch.Tensor, tgt: torch.Tensor, k: int) -> float:
     tgt_cls = tgt.argmax(dim=-1)
@@ -365,7 +361,6 @@ def train(
     return model, best_top1
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()

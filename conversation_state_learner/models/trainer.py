@@ -7,7 +7,7 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root → shared/
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from shared.utils.logger import get_logger
 from shared.utils.progress import TrainingProgress
@@ -115,7 +115,6 @@ def train(
 
     if loss_fn == "kl":
         criterion = nn.KLDivLoss(reduction="batchmean")
-        # KL expects log-probs as input; wrap model output
         def _criterion(preds, targets):
             return criterion(torch.log(preds + 1e-9), targets)
     else:

@@ -22,7 +22,6 @@ DEFAULT_JSONL  = Path(__file__).parent.parent / "training_data" / "conversations
 DEFAULT_OUT    = Path(__file__).parent.parent / "features"
 
 
-# ── Per-message feature vector (79 dims) ──────────────────────────────────────
 
 def msg_to_vec(pipeline: dict) -> np.ndarray:
     """Convert a single message's pipeline dict to a 79-dim feature vector."""
@@ -52,7 +51,6 @@ def msg_to_vec(pipeline: dict) -> np.ndarray:
     return np.concatenate([go_vec, bert_vec, vader_vec, ce_vec])
 
 
-# ── Derived window features (9 dims) ──────────────────────────────────────────
 
 def window_to_derived(window_msgs: List[dict]) -> np.ndarray:
     """Compute 9 derived features from a list of WINDOW_SIZE message dicts."""
@@ -105,7 +103,6 @@ def window_to_derived(window_msgs: List[dict]) -> np.ndarray:
     )
 
 
-# ── Main extraction ────────────────────────────────────────────────────────────
 
 def extract(jsonl_path: Path) -> dict:
     """Read conversations.jsonl and produce both windowed and sequence datasets."""
@@ -208,7 +205,6 @@ def extract(jsonl_path: Path) -> dict:
     }
 
 
-# ── Train / val / test split ───────────────────────────────────────────────────
 
 def split_dataset(data: dict, train: float = 0.70, val: float = 0.15, seed: int = 42) -> dict:
     """Stratified split by trajectory type."""
@@ -243,7 +239,6 @@ def split_dataset(data: dict, train: float = 0.70, val: float = 0.15, seed: int 
     return splits
 
 
-# ── Normalisation ──────────────────────────────────────────────────────────────
 
 def fit_scaler(X_train: np.ndarray) -> object:
     """Fit a StandardScaler on the training split. Returns the fitted scaler."""
@@ -256,7 +251,6 @@ def fit_scaler(X_train: np.ndarray) -> object:
     return scaler
 
 
-# ── Save / load ───────────────────────────────────────────────────────────────
 
 def save_dataset(data: dict, splits: dict, scaler, out_dir: Path):
     """Save all artefacts to out_dir/."""
@@ -315,7 +309,6 @@ def save_dataset(data: dict, splits: dict, scaler, out_dir: Path):
     print(f"  stats.json       — dataset statistics")
 
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(description="Extract features from conversations.jsonl")

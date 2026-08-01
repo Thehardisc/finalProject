@@ -27,10 +27,6 @@ logger = get_logger("trainer")
 _MODEL_DIR = Path(os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")).parent
 _DATA_DIR  = Path(os.environ.get("TRAINING_DATA_DIR", "/app/training_data"))
 
-# version → cache-key prefix (bump to force recompute); max_rows 0 = unlimited;
-# label_caps = per-label row cap; generated = produced by register_gen.py;
-# ctx "synthetic" = label-conditioned fake CDM context (else zero context);
-# gs "goe" = gold-standard dist is the real GoE output (else one-hot of the label)
 CSV_SETS: dict = {
     "csv_local": {
         "tag": "CSVLocal", "version": "csv_local_v2",
@@ -61,9 +57,6 @@ CSV_SETS: dict = {
 }
 
 
-# ── Synthetic-context synthesis ──────────────────────────────────────────────
-# Label-conditioned fake CDM context for samples with no real conversation
-# history (the "synthetic" set's ctx policy, and db.py's relabeled data).
 
 _LABEL_TO_INTENT: dict = {
     'admiration':     (2,  14,  1),

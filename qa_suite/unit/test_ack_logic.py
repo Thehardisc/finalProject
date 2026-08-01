@@ -76,7 +76,6 @@ class TestPersistenceAckLogic:
         process = AsyncMock(side_effect=Exception("permanent DB error"))
         dlq_fail = AsyncMock(side_effect=Exception("DLQ also down"))
 
-        # Simulate attempt == MAX
         async def _run_at_max_attempt():
             to_ack = []
             stream, message_id = "test_stream", "1-0"

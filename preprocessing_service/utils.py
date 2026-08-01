@@ -4,10 +4,6 @@ try:
 except ImportError:
     emoji = None
 
-# High-signal emotion emoji → the emotion the sender means, not the picture.
-# Generic demojize renders "❤️" as "red heart", which BERT/GoEmotions read as
-# sadness-adjacent noise; these override before the generic pass. VADER still
-# receives the raw text, so its own emoji handling is unaffected.
 EMOJI_EMOTION_MAP = {
     "❤️": " love ", "❤": " love ", "🧡": " love ", "💛": " love ", "💚": " love ",
     "💙": " love ", "💜": " love ", "🖤": " love ", "🤍": " love ", "🤎": " love ",

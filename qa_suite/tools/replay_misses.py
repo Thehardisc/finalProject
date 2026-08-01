@@ -6,20 +6,19 @@ The <tag> namespaces conversation IDs so runs don't share context
 (e.g. "rulebased-baseline", "retrained-v3").
 """
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.request
 
 TAG = sys.argv[1] if len(sys.argv) > 1 else f"run{int(time.time())}"
-API = "http://localhost:8000/messages"
+API = os.environ.get("INGESTION_URL", "http://localhost:8000") + "/messages"
 KEY = subprocess.run(
     ["grep", "^INTERNAL_API_KEY", "/Users/stevenfurman/Documents/Projects-Final/.env"],
     capture_output=True, text=True).stdout.strip().split("=", 1)[1]
 
-# (text, old_prediction, acceptable_labels)  — "old" is what the leak-era model said.
 CASES = [
-    # ── previously WRONG ──────────────────────────────────────────────────────
     ("It's everything at once. Work, family... I feel overwhelmed.", "neutral", {"sadness", "nervousness", "fear", "grief"}),
     ("I keep telling myself to be stronger but I'm just tired.", "neutral", {"sadness", "disappointment", "grief"}),
     ("Are we even talking, You never freaking listen :(", "neutral", {"anger", "annoyance", "disappointment", "sadness"}),
@@ -41,7 +40,6 @@ CASES = [
     ("OMG IT'S FINALLY HAPPENING, Colombia tomorrow!! \U0001f1e8\U0001f1f4✈️ I literally cannot sleep I'm so hyped, are you packed", "surprise", {"excitement", "joy", "surprise"}),
     ("Noice now its working", "neutral", {"joy", "approval", "relief", "admiration", "excitement"}),
     ("Okay then its going not bad at all", "surprise", {"approval", "optimism", "joy", "relief", "neutral"}),
-    # ── previously RIGHT (controls — must not regress) ────────────────────────
     ("Honestly I'm furious about how this was handled.", "anger", {"anger", "annoyance"}),
     ("I am honestly terrified about the surgery tomorrow", "fear", {"fear", "nervousness"}),
     ("Thank you for saying that. I really needed to hear it.", "gratitude", {"gratitude"}),

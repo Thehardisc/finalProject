@@ -60,7 +60,6 @@ function timeAgo(id) {
 }
 
 
-// ── Avatar ─────────────────────────────────────────────────────────────────────
 
 function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
   const letter = name?.[0]?.toUpperCase() || '?';
@@ -87,7 +86,6 @@ function Avatar({ name = '?', size = 44, rgb = '88,86,214', online = false }) {
   );
 }
 
-// ── MsgBubble ──────────────────────────────────────────────────────────────────
 
 function formatMsgTime(ts) {
   if (ts == null) return null;
@@ -183,7 +181,6 @@ function MsgBubble({ msg, isOwn, onClick, isRegenerating, onDelete, showTimestam
   );
 }
 
-// ── SuggestedResponses ─────────────────────────────────────────────────────────
 
 function SuggestedResponses({ dominant, onSelect }) {
   const suggestions = SUGGESTIONS[dominant?.toLowerCase()] || [];
@@ -214,7 +211,6 @@ function SuggestedResponses({ dominant, onSelect }) {
   );
 }
 
-// ── GroupModal ─────────────────────────────────────────────────────────────────
 
 function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
   const [groupName,  setGroupName]  = useState('');
@@ -286,7 +282,6 @@ function GroupModal({ globalUsers, currentUser, onConfirm, onClose }) {
   );
 }
 
-// ── CrisisAlert ────────────────────────────────────────────────────────────────
 
 function CrisisAlert({ onDismiss }) {
   return (
@@ -305,7 +300,6 @@ function CrisisAlert({ onDismiss }) {
   );
 }
 
-// ── EmotionalArcStrip ──────────────────────────────────────────────────────────
 
 function EmotionalArcStrip({ messages, onSelectMsg }) {
   const stripRef = useRef(null);
@@ -421,7 +415,6 @@ function BipolarBar({ value, label }) {
   );
 }
 
-// Waiting state — PlutchikWheel + component list (no emoji icons)
 function AnalysisWaiting() {
   const PREVIEW = [
     { dot: '167,139,250', label: 'Dominant Emotion',  sub: '28-class GoEmotions + 7 Ekman' },
@@ -456,7 +449,6 @@ function AnalysisWaiting() {
   );
 }
 
-// Processing state — pipeline telemetry while models run
 function AnalysisProcessing({ partialModels = new Set(), lastAnalysis }) {
   return (
     <div style={{ padding: '12px 10px' }}>
@@ -694,7 +686,6 @@ function LiveAnalysisPanel({ currentAnalysis, processing, partialModels = new Se
 }
 
 
-// ── Main Dashboard ─────────────────────────────────────────────────────────────
 
 export default function IGDashboard({
   currentUser,
@@ -787,7 +778,6 @@ export default function IGDashboard({
     setCrisisDismissed(false);
   }, [activeConversationId]);
 
-  // Demo mode (admin): sidebar shows only AI-demo chats; normal mode hides them.
   const demoMode   = currentUser?.role === 'admin' && (settings.demoMode ?? false);
   const isDemoConv = (c) => c.type === 'group' && (c.name || '').startsWith('AI Demo:');
 
@@ -811,7 +801,6 @@ export default function IGDashboard({
 
   const convLabel  = (conv) => conv.type === 'group' ? conv.name : conv.other_display_name;
 
-  // Toggling demo mode deselects a conversation that belongs to the other view.
   useEffect(() => {
     if (activeConv && (demoMode ? !isDemoConv(activeConv) : isDemoConv(activeConv))) {
       onSelectConversation(null);

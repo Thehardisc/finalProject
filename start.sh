@@ -19,6 +19,12 @@ ACCURACY_GATE_VAL=$(grep '^ACCURACY_GATE=' .env 2>/dev/null | cut -d'=' -f2)
 LLM_PROVIDER_VAL=$(grep '^LLM_PROVIDER=' .env 2>/dev/null | cut -d'=' -f2)
 LOG_LEVEL_VAL=$(grep '^LOG_LEVEL=' .env 2>/dev/null | cut -d'=' -f2)
 RATE_LIMIT_MAX_VAL=$(grep '^RATE_LIMIT_MAX=' .env 2>/dev/null | cut -d'=' -f2)
+INGESTION_URL_VAL=$(grep '^INGESTION_URL=' .env 2>/dev/null | cut -d'=' -f2)
+API_URL_VAL=$(grep '^API_URL=' .env 2>/dev/null | cut -d'=' -f2)
+FRONTEND_URL_VAL=$(grep '^FRONTEND_URL=' .env 2>/dev/null | cut -d'=' -f2)
+INGESTION_URL_VAL=${INGESTION_URL_VAL:-http://localhost:8000}
+API_URL_VAL=${API_URL_VAL:-http://localhost:8001}
+FRONTEND_URL_VAL=${FRONTEND_URL_VAL:-http://localhost:5173}
 
 echo "[Config] Resolved environment from .env:"
 echo "──────────────────────────────────────────────────────────"
@@ -341,9 +347,9 @@ else
 fi
 echo "=============================================================="
 echo ""
-echo "    [Web]  Frontend:     http://localhost:5173"
-echo "    [API]  API:          http://localhost:8001"
-echo "    [In]   Ingestion:    http://localhost:8000"
+echo "    [Web]  Frontend:     ${FRONTEND_URL_VAL}"
+echo "    [API]  API:          ${API_URL_VAL}"
+echo "    [In]   Ingestion:    ${INGESTION_URL_VAL}"
 echo ""
 echo "    [Log]  Per-service (real-time): logs/live/<service>.log"
 echo "    [Log]  Init report:  ${LOGDIR}/init.log"
@@ -373,9 +379,9 @@ echo "=============================================================="
     fi
     echo ""
     echo "[URLs]"
-    echo "   Frontend  : http://localhost:5173"
-    echo "   API       : http://localhost:8001"
-    echo "   Ingestion : http://localhost:8000"
+    echo "   Frontend  : ${FRONTEND_URL_VAL}"
+    echo "   API       : ${API_URL_VAL}"
+    echo "   Ingestion : ${INGESTION_URL_VAL}"
     echo ""
     echo "[Log Files]"
     echo "   logs/live/<service>.log  (real-time, written directly by each service)"

@@ -96,7 +96,6 @@ REGISTERS: dict = {
             "annoyance": 25, "disappointment": 25,
         },
     },
-    # situational sentences: cheaper model, line-based output, batched calls
     "synthetic": {
         "model": "claude-haiku-4-5-20251001",
         "system": _SYNTHETIC_SYSTEM,

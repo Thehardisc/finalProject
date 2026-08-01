@@ -445,8 +445,6 @@ def detect(text: str, history: list) -> Optional[dict]:
     rule_scores = _score_rules(text)
     sit_scores  = _SIT.encode(text) or {}
 
-    # History may only REINFORCE emotions the current message itself evidences —
-    # never author them, or the previous message's emotion bleeds into this one.
     if history:
         context = " ".join(h for h in history[-2:] if h != text)
         ctx_scores = _score_rules(context)
@@ -475,9 +473,6 @@ def detect(text: str, history: list) -> Optional[dict]:
 
     top_emotion_label, top_conf = ranked[0]
 
-    # Keyword/prototype matches carry hand-tuned confidences (0.68–0.80) that were
-    # regularly beating the meta-learner's calibrated posteriors. Scale them down so
-    # a phrase match reads as a hint, not a verdict.
     conf_scale = float(os.environ.get("IMPLICIT_DETECTOR_CONF_SCALE", "0.85"))
     top_conf   = top_conf * conf_scale
 

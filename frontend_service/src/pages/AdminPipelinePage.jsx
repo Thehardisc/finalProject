@@ -2,11 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { adminAPI } from '../api/client';
 import { EmotionPalette } from '../components/EmotionPalette';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const rgb = (emo) => EmotionPalette[emo?.toLowerCase()] || EmotionPalette.neutral || '150,150,150';
 
-// The real 15-state CDM (shared/constants.py CDM_STATES) — `name` matches the backend enum.
 const CDM_STATES = [
   { id:  0, name: 'NEUTRAL',        short: 'NEUTRAL',   color: '107,114,128' },
   { id:  1, name: 'WARMTH',         short: 'WARMTH',    color: '20,184,166'  },
@@ -25,14 +23,12 @@ const CDM_STATES = [
   { id: 14, name: 'AGREEMENT',      short: 'AGREE',     color: '52,211,153'  },
 ];
 
-// cdm_current_state arrives as an enum string ("PRAISE") or an index — normalize to index.
 const cdmStateIndex = (v) =>
   typeof v === 'number' ? v : CDM_STATES.findIndex(s => s.name === v || s.short === v);
 
 const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString() : '—';
 const pct = (v)  => v != null ? `${(v * 100).toFixed(1)}%` : '—';
 
-// All 28 GoEmotions labels — must match shared/constants.py EMOTION_LABELS.
 const ALL_EMOTIONS = [
   'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
   'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval', 'disgust',
@@ -56,10 +52,7 @@ const MODEL_LABEL_MAP = {
   Context:    'context',
 };
 
-// ── Meta-learner explanation helpers ──────────────────────────────────────────
 
-// Mirrors meta_learner.py:_GOE_TO_EKMAN — BERT's 7-label space, used ONLY to judge
-// whether BERT's coarse pick points the same way as the fine-grained verdict.
 const GOE_TO_EKMAN = {
   admiration: 'joy', amusement: 'joy', anger: 'anger', annoyance: 'anger',
   approval: 'joy', caring: 'joy', confusion: 'surprise', curiosity: 'surprise',
@@ -70,9 +63,6 @@ const GOE_TO_EKMAN = {
   sadness: 'sadness', surprise: 'surprise', neutral: 'neutral',
 };
 
-// Mirrors shared/constants.py:GOE_TO_PLUTCHIK — strict Plutchik wheel policy:
-// only labels that appear on the wheel (petals + intensity-ring names) join a
-// petal; every other label (relief, love, pride, …) is its own group.
 const GOE_TO_PLUTCHIK = {
   joy: 'joy', admiration: 'trust', fear: 'fear', nervousness: 'fear',
   surprise: 'surprise', sadness: 'sadness', grief: 'sadness', disgust: 'disgust',
@@ -88,7 +78,6 @@ const topEntry = (obj) => {
   return es.length ? es.sort((a, b) => b[1] - a[1])[0] : null;
 };
 
-// gate_weights_alpha is [vader, bert, goe, vad, ctx]; older 4-element models have no VAD gate.
 const GATE_META = [
   { name: 'VADER',       color: '255,180,0',   hint: 'overall positive / negative tone of the words' },
   { name: 'BERT',        color: '0,119,255',   hint: '7 basic emotions from the transformer' },
@@ -103,7 +92,6 @@ const gateEntries = (alpha) => {
   return alpha.slice(0, meta.length).map((v, i) => ({ ...meta[i], value: v }));
 };
 
-// What each raw model's top pick was, and whether the final verdict sided with it.
 function buildExpertRows(stages, decision) {
   const dominant   = (decision.dominant || '').toLowerCase();
   const family     = decision.ekman_group || GOE_TO_EKMAN[dominant] || 'neutral';
@@ -152,7 +140,6 @@ function buildExpertRows(stages, decision) {
   return rows;
 }
 
-// Turns the decision data into a few plain-English sentences.
 function buildPlainWords(decision, stages) {
   const { dominant, confidence, decision_mode, gate_weights_alpha } = decision;
   const trace = decision.decision_trace || [];
@@ -206,7 +193,6 @@ function buildPlainWords(decision, stages) {
   return out;
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
 
 function Bar({ label, value, color, maxVal = 1, highlight = false }) {
   const w = Math.min((value / (maxVal || 1)) * 100, 100);
@@ -421,7 +407,6 @@ function ContextCard({ decision, context }) {
   const hasReason   = reasoning && Object.keys(reasoning).length > 0;
   const hasSnapshot = !!cs;
 
-  // Snapshot ships historical_pos/neu/neg components — net valence is pos minus neg.
   const histValence = cs?.historical_valence
     ?? ((cs?.historical_pos ?? 0) - (cs?.historical_neg ?? 0));
   const curStateIdx = cdmStateIndex(cs?.cdm_current_state);
@@ -642,8 +627,6 @@ function ContextCard({ decision, context }) {
   );
 }
 
-// Human ground-truth labeling. Verified rows are the trainer's ONLY live-data
-// source — every label saved here becomes real training data on the next cycle.
 function VerifyControl({ detail, onChange }) {
   const [saving, setSaving]     = useState(false);
   const [pickOpen, setPickOpen] = useState(false);
@@ -727,7 +710,6 @@ const TRACE_STYLE = {
   final:      { icon: '✓', color: '34,197,94',   label: 'final'         },
 };
 
-// Ordered decision path: which mechanism produced/changed the verdict and why.
 function DecisionTrace({ trace, dominant }) {
   if (!trace || trace.length === 0) return null;
   return (
@@ -1035,7 +1017,6 @@ function TrajectoryCard({ trajectory, currentDominant, lstmTrajectory }) {
   );
 }
 
-// ── Message List ──────────────────────────────────────────────────────────────
 
 function MessageList({ items, selectedId, onSelect, loading }) {
   const [search, setSearch] = useState('');
@@ -1115,7 +1096,6 @@ function MessageList({ items, selectedId, onSelect, loading }) {
   );
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function AdminPipelinePage({ currentUser, onBack }) {
   const [items, setItems]         = useState([]);
@@ -1154,7 +1134,6 @@ export default function AdminPipelinePage({ currentUser, onBack }) {
       .finally(() => setLoadingDetail(false));
   }, [selectedId]);
 
-  // Match the chat's light/dark theme (same localStorage setting IGDashboard uses).
   const igTheme = (() => {
     try { return JSON.parse(localStorage.getItem('ig_settings') || '{}').theme === 'dark' ? 'dark' : 'light'; }
     catch { return 'light'; }

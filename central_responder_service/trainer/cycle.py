@@ -442,9 +442,6 @@ def run_one_cycle(reload_callback=None) -> None:
     X_v_arr  = np.vstack([np.array(fv).flatten() for fv in X_v])
     X_te_arr = np.vstack([np.array(fv).flatten() for fv in X_te])
 
-    # Feature caches on disk may predate the context mask (label-leaked CDM/HMM
-    # state slots — see meta_learner._CDM_KEEP). Masking here is idempotent and
-    # guarantees train/inference parity regardless of cache age.
     from meta_learner import apply_context_mask
     apply_context_mask(X_tr_arr)
     apply_context_mask(X_v_arr)

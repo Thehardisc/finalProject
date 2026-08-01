@@ -41,19 +41,8 @@ logger = get_logger("meta_learner")
 D_MODEL = 64
 DROPOUT = 0.25
 
-# Cap on the context expert's share of the final logits. The historical 0.50 cap
-# let a leak-trained context head dominate live traffic; 0.20 is a mitigation until
-# a model trained on honest context features (real verified samples) justifies more.
 CTX_WEIGHT_CAP = float(os.environ.get("CTX_WEIGHT_CAP", "0.20"))
 
-# CDM/HMM state features are masked out of the model input (train AND inference).
-# In every bootstrap dataset these were synthesized FROM the gold label
-# (trainer/data/empathetic.py:_GOEMO_TO_CDM_STATE → ctx one-hot), so a model can
-# only ever learn them as label leakage. Until training data with honestly-derived
-# states exists (verified live samples), the model must not see these slots.
-# Kept: valence/speaker/text-derived scalars, which are computed the same way in
-# training and live. The context_engine still publishes the full vector — the
-# Pipeline Inspector and snapshots are unaffected; only the model input is masked.
 _CDM_KEEP = np.ones(CDM_CTX_DIM, dtype=np.float32)
 for _masked in (CTX_CDM_PROBS, CTX_RESIDENCY, CTX_TRANSITION, CTX_COHERENCE,
                 CTX_ENTROPY, CTX_RESONANCE, CTX_HMM_CONF, CTX_HMM_ENTROPY,
@@ -111,7 +100,6 @@ DEFAULT_META_PATH  = DEFAULT_MODEL_PATH.replace(".pkl", "_meta.json")
 
 
 class _CPUUnpickler(pickle.Unpickler):
-    # Deserializes pkl files saved on MPS/CUDA into CPU tensors.
     def find_class(self, module, name):
         if module == "torch.storage" and name == "_load_from_bytes":
             return lambda b: torch.load(io.BytesIO(b), map_location="cpu", weights_only=False)
@@ -305,7 +293,6 @@ def build_feature_vector(
     cdm[CTX_MSG_LENGTH]   = min(float(cdm[CTX_MSG_LENGTH])  / 500.0,  3.0)
     cdm[CTX_LATENCY_MS]   = min(float(cdm[CTX_LATENCY_MS])  / 2000.0, 3.0)
     cdm[CTX_HMM_EMISSION] = float(np.clip(cdm[CTX_HMM_EMISSION], 0.0, 1.0))
-    # Drop the label-leaked CDM/HMM state slots — see _CDM_KEEP above.
     cdm = [float(v) * float(k) for v, k in zip(cdm, _CDM_KEEP)]
 
     prior_list = trajectory_prior if (trajectory_prior is not None and len(trajectory_prior) == PRIOR_DIM) else [0.0] * PRIOR_DIM
@@ -332,7 +319,6 @@ def build_feature_vector(
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
 
-# Appends a decision-path event when a trace list is supplied (Pipeline Inspector).
 def _t(trace, step, status, detail, label=None, confidence=None):
     if trace is not None:
         trace.append({
@@ -351,8 +337,6 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
                "No meta-learner loaded — raw GoEmotions argmax used",
                EMOTION_LABELS[idx], goe[idx])
             return EMOTION_LABELS[idx], float(goe[idx]), scores, 0.0, None, None
-        # GoE absent (service down / not yet arrived) — fall through to BERT before
-        # giving up; every BERT_LABEL is also a valid GoEmotions label.
         bert = feature_vector[0, 4:11]
         if bert.max() > 0:
             idx    = int(bert.argmax())
@@ -368,11 +352,6 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
         return "neutral", 0.5, {"neutral": 0.5}, 0.0, None, None
 
     try:
-        # Slot [110] (sarcasm) is all-zero in every bootstrap dataset, so the
-        # network's weights on that input are untrained init noise — keep the
-        # model input at the zero it was trained with. Sarcasm still acts through
-        # the inversion/override layer below, which reads the real score.
-        # TODO: drop this once training data carries real sarcasm scores.
         model_input = feature_vector.copy()
         model_input[0, ML_DIM + CDM_CTX_DIM + PRIOR_DIM] = 0.0
         pred_label = model.predict(model_input)[0]
@@ -439,8 +418,6 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
                 "surprise":{"surprise","realization","confusion"},
                 "disgust": {"disgust","disapproval"},
             }
-            # The guard stands down when the other experts contradict BERT — a lone
-            # high-confidence BERT must not veto a meta+GoE consensus (hyperbole idioms).
             vader_compound = float(feature_vector[0, 3])
             consensus      = pred_label == goe_top and goe_max >= 0.50
             cross_conflict = goe_max >= 0.60 and _GOE_TO_EKMAN.get(goe_top, "neutral") != bert_top
@@ -482,33 +459,16 @@ def predict_with_meta_learner(model, feature_vector, trace=None):
 
         heuristic_sarcasm, conflict_desc = detect_emotional_conflicts(feature_vector)
         learned_sarcasm = float(feature_vector[0, ML_DIM + CDM_CTX_DIM + PRIOR_DIM])
-        # Combined sarcasm evidence: the trained classifier leads, the VADER/GoE
-        # heuristic corroborates. Either alone is weak — the heuristic misfires on
-        # playful banter (positive wording + mild negative GoE mass), the classifier
-        # can miss novel phrasings — but agreement between them is a strong signal.
-        # Trace of negative GoE mass (anger/annoyance/disappointment/disapproval/
-        # disgust). Real sarcasm leaks some (🙄 → annoyance); sincere gushing
-        # ("YESSS I love you SO much") reads ~zero — the classifier's worst
-        # false-positive mode, which must not invert a sincere positive.
         _goe_block = feature_vector[0, 11:39]
         neg_cue = float(max(_goe_block[2], _goe_block[3], _goe_block[9],
                             _goe_block[10], _goe_block[11]))
         if learned_sarcasm >= 0.5 and heuristic_sarcasm >= 0.5:
             sarcasm_score = max(learned_sarcasm, heuristic_sarcasm)
         elif learned_sarcasm >= 0.75 and neg_cue >= 0.15:
-            # Far above the classifier's tuned operating threshold (0.30) AND a
-            # negative undertone exists — heuristic silence must not dilute it,
-            # or the inversion is too weak to flip anything (0.93 blended to
-            # 0.60 → 12% shift). Moderate scores (the 0.5-0.75 band is noisy,
-            # precision ~0.63) still need full heuristic corroboration.
             sarcasm_score = learned_sarcasm
         else:
             sarcasm_score = 0.65 * learned_sarcasm + 0.35 * heuristic_sarcasm
             if neg_cue < 0.15:
-                # No negative undertone at all → never invert. The classifier's
-                # worst false-positive mode is sincere affection ("i love you"
-                # scores 0.93); without any negative GoE trace an inversion can
-                # only do harm.
                 sarcasm_score = min(sarcasm_score, 0.50)
         if heuristic_sarcasm > 0 or learned_sarcasm > 0:
             _t(trace, "Sarcasm evidence", "info",
@@ -564,8 +524,6 @@ def detect_emotional_conflicts(vec):
             return min(1.0, 0.5 + neg_emo), "Sarcasm detected: semantic praise contradicts frustration."
         if bert_neutral > 0.7 and neg_emo > 0.1:
             return 0.4, "Passive-aggression: formal neutral text with underlying tension."
-        # Hyperbole (inverse sarcasm): negative wording, positive intent. Score stays
-        # below 0.5 — the >=0.5 path flips positive→negative, the wrong direction here.
         bert_negative = max(float(v[4]), float(v[5]), float(v[6]), float(v[9]))
         goe_raw       = v[11:39]
         goe_top       = EMOTION_LABELS[int(goe_raw.argmax())]

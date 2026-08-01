@@ -1,8 +1,4 @@
 
-// Mirrors shared/constants.py:GOE_TO_PLUTCHIK — strict wheel policy: only labels
-// that appear on Plutchik's wheel (petals + intensity-ring names) join a petal.
-// Every other label (relief, love, pride, optimism, …) is its own group and
-// lights no petal.
 const PLUTCHIK_MAPPING = {
     "joy":         "joy",
     "admiration":  "trust",

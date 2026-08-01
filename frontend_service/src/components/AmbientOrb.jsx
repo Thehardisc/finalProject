@@ -5,9 +5,6 @@ function valenceToHsl(valence = 0, volatility = 0) {
   if (valence > 0.25) {
     hue = 215;
   } else if (valence < -0.18) {
-    // Negative valence: indigo → magenta → red. Ramping the other way
-    // (245 → 28) crosses green/yellow mid-ramp, which tints the whole
-    // light-mode panel yellowish.
     const t = Math.min(Math.abs(valence + 0.18) / 0.6, 1);
     hue = Math.round(245 + t * (355 - 245));
   } else {

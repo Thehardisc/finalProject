@@ -112,9 +112,6 @@ def train_gating_network(
     y_v_idx  = np.array([class_to_idx.get(y, 0)   for y in y_v])
 
     counts   = np.bincount(y_tr_idx, minlength=len(classes)).clip(1)
-    # sqrt-inverse-frequency, clipped at 4×. The previous 1/f weights clipped at
-    # 10× over-boosted the rarest (negative) classes so hard that near-flat
-    # inputs tipped to remorse/embarrassment against unanimous positive experts.
     weights  = (1.0 / counts) ** 0.5
     weights  = (weights / weights.mean()).clip(0.25, 4.0)
     cw_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
@@ -155,9 +152,6 @@ def train_gating_network(
         dtype=torch.long, device=device,
     )
 
-    # Anchor the meta to confident GoE signals: a near-flat meta that contradicts
-    # a moderately confident GoE (e.g. amusement 0.43 on banter → meta remorse)
-    # was the dominant live failure mode with the anchor disabled (coeff 0.0).
     nlp_anchor_coeff  = 0.3
     nlp_anchor_thresh = 0.50
 
