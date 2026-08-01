@@ -30,7 +30,7 @@ output_utf8.txt
 
 # ── Secrets — never commit these ───────────────
 .env
-docs/
+docs/*
 agents/
 !docs/.env.example
 
