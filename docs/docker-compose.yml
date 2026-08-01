@@ -34,8 +34,8 @@ services:
 
   ingestion_service:
     build:
-      context: .
-      dockerfile: ingestion_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../ingestion_service/Dockerfile
     ports:
       - "8000:8000"
     depends_on:
@@ -62,8 +62,8 @@ services:
 
   preprocessing_service:
     build:
-      context: .
-      dockerfile: preprocessing_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../preprocessing_service/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -84,8 +84,8 @@ services:
 
   vader_service:
     build:
-      context: .
-      dockerfile: vader_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../vader_service/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -106,8 +106,8 @@ services:
 
   goemotions_service:
     build:
-      context: .
-      dockerfile: goemotions_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../goemotions_service/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -133,8 +133,8 @@ services:
 
   bert_service:
     build:
-      context: .
-      dockerfile: bert_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../bert_service/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -156,8 +156,8 @@ services:
 
   central_responder_service:
     build:
-      context: .
-      dockerfile: central_responder_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../central_responder_service/Dockerfile
     restart: unless-stopped
     depends_on:
       redis:
@@ -201,8 +201,8 @@ services:
 
   trainer_service:
     build:
-      context: .
-      dockerfile: central_responder_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../central_responder_service/Dockerfile
     restart: on-failure
     command: ["python", "-m", "trainer"]
     depends_on:
@@ -247,8 +247,8 @@ services:
 
   llm_reasoning_service:
     build:
-      context: .
-      dockerfile: llm_reasoning_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../llm_reasoning_service/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -272,8 +272,8 @@ services:
 
   aggregation_service:
     build:
-      context: .
-      dockerfile: aggregation_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../aggregation_service/Dockerfile
     restart: unless-stopped
     depends_on:
       redis:
@@ -296,8 +296,8 @@ services:
 
   persistence_service:
     build:
-      context: .
-      dockerfile: persistence_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../persistence_service/Dockerfile
     depends_on:
       redis:
         condition: service_healthy
@@ -322,8 +322,8 @@ services:
 
   api_service:
     build:
-      context: .
-      dockerfile: api_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../api_service/Dockerfile
     ports:
       - "8001:8001"
     depends_on:
@@ -369,7 +369,7 @@ services:
 
   frontend_service:
     build:
-      context: ./frontend_service
+      context: ../frontend_service
       args:
         VITE_API_URL: ${API_URL:-http://localhost:8001}
     ports:
@@ -394,8 +394,8 @@ services:
 
   context_engine_service:
     build:
-      context: .
-      dockerfile: context_engine_service/Dockerfile
+      context: ../central_responder_service
+      dockerfile: ../context_engine_service/Dockerfile
     restart: unless-stopped
     environment:
       REDIS_HOST: redis

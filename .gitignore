@@ -30,8 +30,8 @@ output_utf8.txt
 
 # ── Secrets — never commit these ───────────────
 .env
-.env.*
-!.env.example
+docs/
+!docs/.env.example
 
 # ── IDE / OS ───────────────────────────────────
 .DS_Store
