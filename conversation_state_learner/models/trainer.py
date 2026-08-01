@@ -1,40 +1,31 @@
-"""
-Training loop for ConversationLSTM.
-
-Loss: MSE on predicted vs actual next-message emotion distribution.
-     (KL divergence is also available via --loss kl)
-
-Tracks:
-  - train loss per epoch
-  - val loss per epoch
-  - best model checkpoint (lowest val loss)
-  - early stopping (patience configurable)
-"""
+"""Training loop for ConversationLSTM."""
 
 import json
-import time
-import numpy as np
+import sys
+
 import torch
 import torch.nn as nn
 from pathlib import Path
-from typing import Optional
 
-from features.schema import EMOTION_LABELS_28
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from shared.utils.logger import get_logger
+from shared.utils.progress import TrainingProgress
+
+logger = get_logger("csl_trainer")
+
+
+
 
 
 def _masked_loss(criterion, preds, targets, lengths):
-    """
-    Compute loss only on non-padded timesteps.
-    preds:   [B, T, 28]
-    targets: [B, T, 28]
-    lengths: [B]
-    """
+    """Compute loss only on non-padded timesteps."""
     B, T, D = preds.shape
     mask = torch.zeros(B, T, dtype=torch.bool, device=preds.device)
     for i, l in enumerate(lengths):
         mask[i, :l] = True
 
-    preds_flat   = preds[mask]    # [sum(lengths), 28]
+    preds_flat   = preds[mask]
     targets_flat = targets[mask]
 
     return criterion(preds_flat, targets_flat)
@@ -79,9 +70,7 @@ def eval_epoch(model, loader, criterion, device) -> float:
 
 @torch.no_grad()
 def top_k_accuracy(model, loader, device, k: int = 3) -> float:
-    """
-    At each timestep, is the highest-predicted emotion in the top-k actual emotions?
-    """
+    """At each timestep, is the highest-predicted emotion in the top-k actual emotions?"""
     model.eval()
     correct = 0
     total   = 0
@@ -114,11 +103,7 @@ def train(
     loss_fn:    str   = "mse",
     device:     str   = "cpu",
 ) -> dict:
-    """
-    Full training run with early stopping and checkpointing.
-    Saves best model to out_dir/best_model.pt.
-    Returns history dict.
-    """
+    """Full training run with early stopping and checkpointing."""
     out_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(device)
     model  = model.to(device)
@@ -130,7 +115,6 @@ def train(
 
     if loss_fn == "kl":
         criterion = nn.KLDivLoss(reduction="batchmean")
-        # KL expects log-probs as input; wrap model output
         def _criterion(preds, targets):
             return criterion(torch.log(preds + 1e-9), targets)
     else:
@@ -140,11 +124,10 @@ def train(
     patience_c = 0
     history    = {"train": [], "val": [], "epoch": []}
 
-    print(f"\n{'Epoch':>6}  {'Train':>8}  {'Val':>8}  {'LR':>8}")
-    print("-" * 38)
+    prog = TrainingProgress(logger, task="conversation_lstm", total=epochs,
+                            unit="epoch", log_every=10)
 
     for epoch in range(1, epochs + 1):
-        t0         = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, _criterion, device)
         val_loss   = eval_epoch(model, val_loader,   _criterion, device) if val_loader else train_loss
 
@@ -169,18 +152,19 @@ def train(
         else:
             patience_c += 1
 
-        marker = " ◀ best" if improved else ""
-        if epoch == 1 or epoch % 10 == 0 or improved:
-            elapsed = time.time() - t0
-            print(f"{epoch:>6}  {train_loss:>8.4f}  {val_loss:>8.4f}  {current_lr:.2e}{marker}  ({elapsed:.1f}s)")
+        prog.step(
+            metrics={"train": train_loss, "val": val_loss, "lr": current_lr},
+            note="◀ best" if improved else "",
+            force=improved or epoch == 1,
+        )
 
         if patience_c >= patience:
-            print(f"\nEarly stopping at epoch {epoch} (no improvement for {patience} epochs).")
+            logger.info(f"[conversation_lstm] early stopping at epoch {epoch} "
+                        f"(no improvement for {patience} epochs)")
             break
 
-    print(f"\nBest val loss: {best_val:.4f}")
+    prog.done(metrics={"best_val": best_val})
 
-    # Save training history
     with open(out_dir / "training_history.json", "w") as fh:
         json.dump(history, fh, indent=2)
 

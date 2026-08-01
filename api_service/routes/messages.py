@@ -1,6 +1,4 @@
-"""
-api_service/routes/messages.py — Message feedback and delete endpoints.
-"""
+"""api_service/routes/messages.py — Message feedback and delete endpoints."""
 import json
 import time
 
@@ -74,11 +72,7 @@ async def delete_message(message_id: str,
 @router.get("/message/{message_id}/explain",
             dependencies=[Depends(get_current_user)])
 async def explain_message(message_id: str):
-    """
-    Returns feature-impact breakdown for a message prediction.
-    logic_map shows relative contribution of each ML model (sums to ±1).
-    Suitable for rendering a bar chart in the frontend.
-    """
+    """Returns feature-impact breakdown for a message prediction."""
     pool = get_pool()
     async with pool.acquire() as conn:
         row = await conn.fetchrow(

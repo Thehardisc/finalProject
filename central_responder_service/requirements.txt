@@ -10,3 +10,5 @@ vaderSentiment
 sqlalchemy
 psycopg2-binary
 prometheus-client
+anthropic>=0.28.0
+sentence-transformers

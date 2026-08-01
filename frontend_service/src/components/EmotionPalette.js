@@ -1,127 +1,90 @@
-/**
- * EmotionPalette.js
- * All 27 GoEmotions + neutral → precise Apple-style vibrant RGB strings.
- * Used by WaterMessageBubble and AquaBubble for blended color computation.
- *
- * Color design rules:
- *   • Values are RGB strings: "R, G, B"  (used inside rgba(..., alpha))
- *   • Each color maps to the emotional quality, not a literal hue
- *   • Saturated enough to survive mix-blend-mode: color-burn on white glass
- *   • Neutral uses deep indigo — gray disappears under color-burn
- */
 
-export const EmotionPalette = {
-  // ── High Energy / Tension ─────────────────────────────────────────────
-  anger:        '255, 45,  42',   // Apple Red
-  excitement:   '255, 126,  0',   // Vivid Orange
-  joy:          '52,  199,  89',  // Spring Green
-  surprise:     '255, 196,   0',  // Brilliant Amber
-  fear:         '162,  67, 220',  // Electric Violet
-  annoyance:    '255, 110,   0',  // Deep Orange
-
-  // ── Medium Energy ─────────────────────────────────────────────────────
-  admiration:   '255,  85, 165',  // Hot Pink
-  amusement:    '255, 183,   0',  // Gold
-  confusion:    '88,   86, 214',  // Indigo
-  curiosity:    '255, 210,   0',  // Warm Yellow
-  desire:       '220,  16,  54',  // Crimson
-  disgust:      '120,  60,  14',  // Dark Amber-Brown
-  disapproval:  '200,  75,  75',  // Muted Red
-  embarrassment:'210,  90, 140',  // Rose
-
-  // ── Positive / Connective ─────────────────────────────────────────────
-  approval:     '46,  204, 113',  // Emerald
-  caring:       '255, 175, 195',  // Soft Coral Pink
-  gratitude:    '130, 240, 140',  // Mint
-  love:         '255,  20, 130',  // Deep Pink
-  optimism:     '255, 207,   0',  // Golden Yellow
-  pride:        '124,  32, 226',  // Royal Purple
-
-  // ── Reflective / Cognitive ────────────────────────────────────────────
-  realization:  '0,   185, 255',  // Sky Blue
-  relief:       '150, 215, 235',  // Pale Cyan
-  curiosity:    '255, 196,  45',  // Already above — alias kept for safety
-
-  // ── Low Energy / Melancholic ──────────────────────────────────────────
-  sadness:      '0,   122, 255',  // Ocean Blue
-  disappointment:'60, 122, 175',  // Steel Blue
-  grief:        '20,   20, 110',  // Midnight Navy
-  remorse:      '90,   90, 120',  // Slate Mauve
-
-  // ── Calm / Baseline ───────────────────────────────────────────────────
-  nervousness:  '180,  75, 205',  // Orchid
-  relief:       '150, 215, 235',  // Already above — alias kept
-
-  /*
-   * Neutral uses deep indigo, NOT gray.
-   * Pure gray (220,220,220) vanishes under color-burn on white canvas.
-   * Indigo gives visible, calm presence without emotional charge.
-   */
-  neutral:      '88,   86, 214',  // Indigo
-
-  // Fallback
-  default:      '100, 120, 200',
+const PALETTE_LIGHT = {
+  anger:         '207, 45, 34',
+  excitement:    '166, 89, 16',
+  joy:           '33, 124, 76',
+  surprise:      '156, 95, 14',
+  fear:          '151, 72, 197',
+  annoyance:     '180, 78, 22',
+  admiration:    '193, 48, 135',
+  amusement:     '127, 108, 14',
+  confusion:     '91, 98, 203',
+  curiosity:     '108, 114, 23',
+  desire:        '206, 42, 70',
+  disgust:       '135, 104, 50',
+  disapproval:   '180, 77, 54',
+  embarrassment: '185, 65, 109',
+  approval:      '35, 122, 93',
+  caring:        '189, 63, 97',
+  gratitude:     '37, 125, 51',
+  love:          '203, 39, 110',
+  optimism:      '142, 102, 11',
+  pride:         '131, 82, 203',
+  realization:   '22, 116, 160',
+  relief:        '38, 119, 129',
+  sadness:       '38, 108, 199',
+  disappointment:'60, 113, 154',
+  grief:         '76, 104, 189',
+  remorse:       '109, 103, 153',
+  nervousness:   '168, 60, 190',
+  neutral:       '101, 109, 129',
+  default:       '96, 103, 122',
 };
 
-const SKIP_PATTERN = /^(vader_|sentiment_|emphasis_|dominant_emotion)/;
-
-/**
- * blendEmotions
- * Takes a flat { emotion: weight } dict and returns a weighted-average
- * RGB string "R, G, B" suitable for rgba(...) or rgb(...).
- */
-export const blendEmotions = (emotionWeights) => {
-  if (!emotionWeights || typeof emotionWeights !== 'object') {
-    return EmotionPalette.neutral;
-  }
-
-  let r = 0, g = 0, b = 0, total = 0;
-
-  for (const [emotion, weight] of Object.entries(emotionWeights)) {
-    if (SKIP_PATTERN.test(emotion)) continue;
-    if (typeof weight !== 'number' || weight <= 0) continue;
-
-    const rgb = EmotionPalette[emotion] || EmotionPalette.default;
-    const [cr, cg, cb] = rgb.split(',').map(Number);
-
-    r += cr * weight;
-    g += cg * weight;
-    b += cb * weight;
-    total += weight;
-  }
-
-  if (total === 0) return EmotionPalette.neutral;
-
-  return `${Math.round(r / total)}, ${Math.round(g / total)}, ${Math.round(b / total)}`;
+const PALETTE_DARK = {
+  anger:         '240, 104, 95',
+  excitement:    '243, 141, 63',
+  joy:           '78, 208, 132',
+  surprise:      '243, 188, 63',
+  fear:          '185, 133, 224',
+  annoyance:     '240, 124, 66',
+  admiration:    '232, 115, 173',
+  amusement:     '238, 205, 80',
+  confusion:     '141, 141, 226',
+  curiosity:     '198, 214, 86',
+  desire:        '233, 106, 129',
+  disgust:       '178, 150, 92',
+  disapproval:   '210, 126, 118',
+  embarrassment: '220, 143, 175',
+  approval:      '81, 205, 143',
+  caring:        '236, 156, 175',
+  gratitude:     '120, 217, 152',
+  love:          '238, 99, 159',
+  optimism:      '245, 196, 61',
+  pride:         '175, 131, 226',
+  realization:   '74, 188, 237',
+  relief:        '150, 211, 222',
+  sadness:       '91, 154, 230',
+  disappointment:'114, 158, 197',
+  grief:         '125, 145, 202',
+  remorse:       '142, 142, 180',
+  nervousness:   '201, 134, 223',
+  neutral:       '151, 158, 175',
+  default:       '147, 158, 189',
 };
 
-/**
- * blendEmotionsGradient
- * Returns a CSS linear-gradient() string from the top 2–3 emotions by weight.
- * Angle defaults to 135deg. Output is ready for use in `background:` property.
- */
-export const blendEmotionsGradient = (emotionWeights, angle = '135deg') => {
-  const fallback = `linear-gradient(${angle}, rgb(88, 86, 214), rgb(100, 120, 200))`;
+function resolveTheme() {
+  if (typeof document !== 'undefined' &&
+      document.querySelector('[data-ig-theme="dark"]')) return 'dark';
+  try {
+    if (typeof localStorage !== 'undefined' &&
+        JSON.parse(localStorage.getItem('ig_settings') || '{}').theme === 'dark') return 'dark';
+  } catch {}
+  return 'light';
+}
 
-  if (!emotionWeights || typeof emotionWeights !== 'object') return fallback;
+let _theme = null;
+function activeTheme() {
+  if (_theme !== null) return _theme;
+  _theme = resolveTheme();
+  const reset = () => { _theme = null; };
+  if (typeof queueMicrotask === 'function') queueMicrotask(reset);
+  else Promise.resolve().then(reset);
+  return _theme;
+}
 
-  const entries = Object.entries(emotionWeights)
-    .filter(([k, v]) => !SKIP_PATTERN.test(k) && typeof v === 'number' && v > 0)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3);
-
-  if (entries.length === 0) return fallback;
-
-  if (entries.length === 1) {
-    const rgb = EmotionPalette[entries[0][0]] || EmotionPalette.default;
-    return `linear-gradient(${angle}, rgb(${rgb}), rgba(${rgb}, 0.55))`;
-  }
-
-  const stops = entries.map(([emotion], i) => {
-    const rgb = EmotionPalette[emotion] || EmotionPalette.default;
-    const pct = Math.round((i / (entries.length - 1)) * 100);
-    return `rgb(${rgb}) ${pct}%`;
-  });
-
-  return `linear-gradient(${angle}, ${stops.join(', ')})`;
-};
+export const EmotionPalette = new Proxy({}, {
+  get(_target, prop) {
+    return (activeTheme() === 'dark' ? PALETTE_DARK : PALETTE_LIGHT)[prop];
+  },
+});

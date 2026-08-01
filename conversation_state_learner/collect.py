@@ -1,24 +1,4 @@
-"""
-collect.py — Main data collection CLI for the conversation state learner.
-
-Phases:
-  1. generate  — Use Claude API to write raw conversations per trajectory
-  2. run       — Send raw conversations through the live emotion pipeline
-  3. full      — Both phases in sequence (default)
-
-Output files:
-  raw_conversations/<trajectory_type>_<n>.json     — raw generated text
-  training_data/conversations.jsonl                — enriched with pipeline results
-
-Usage examples:
-  python collect.py --phase generate --api-key sk-ant-... --count 5
-  python collect.py --phase run --input raw_conversations/
-  python collect.py --phase full --api-key sk-ant-... --count 15
-  python collect.py --phase full --api-key sk-ant-... --trajectories escalating_conflict,celebration
-
-Environment:
-  ANTHROPIC_API_KEY — used if --api-key is not provided
-"""
+"""collect.py — Main data collection CLI for the conversation state learner."""
 
 import argparse
 import json
@@ -28,7 +8,6 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-# Allow running from the project root or from this directory.
 _HERE         = Path(__file__).parent
 _PROJECT_ROOT = _HERE.parent
 sys.path.insert(0, str(_HERE))
@@ -47,7 +26,6 @@ TRAINING_DIR = Path(__file__).parent / "training_data"
 OUTPUT_FILE  = TRAINING_DIR / "conversations.jsonl"
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _save_raw(trajectory_type: str, idx: int, messages: List[str]):
     RAW_DIR.mkdir(exist_ok=True)
@@ -76,11 +54,6 @@ def _append_training(record: dict):
         fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def _trajectory_by_type(t_type: str) -> Optional[dict]:
-    return next((t for t in TRAJECTORIES if t["type"] == t_type), None)
-
-
-# ── Phase 1: Generate ─────────────────────────────────────────────────────────
 
 def phase_generate(
     api_key: str,
@@ -101,7 +74,6 @@ def phase_generate(
         n = count_override or trajectory["count"]
         logger.info(f"\n[{trajectory['type']}] — {n} conversations")
 
-        # Figure out starting index (don't overwrite existing files)
         existing = sorted(RAW_DIR.glob(f"{trajectory['type']}_*.json"))
         start_idx = len(existing)
 
@@ -114,13 +86,14 @@ def phase_generate(
     logger.info(f"\n✓ Generated {generated} conversation files in {RAW_DIR}/")
 
 
-# ── Phase 2: Run ──────────────────────────────────────────────────────────────
 
 def phase_run(
     base_url: str,
     trajectories_filter: Optional[List[str]],
     resume: bool = True,
 ):
+
+
     logger.info("=== PHASE 2: RUN PIPELINE ===")
     runner = PipelineRunner(base_url=base_url)
 
@@ -129,17 +102,13 @@ def phase_run(
         logger.error(f"No raw conversations found in {RAW_DIR}. Run --phase generate first.")
         sys.exit(1)
 
-    # Track which files have already been enriched (for resume)
     enriched_ids: set[str] = set()
     if resume and OUTPUT_FILE.exists():
         with OUTPUT_FILE.open() as fh:
             for line in fh:
                 try:
                     r = json.loads(line)
-                    # Key: trajectory_type + first message text (unique enough)
-                    key = r.get("trajectory_type", "") + "|" + (
-                        r.get("messages", [{}])[0].get("text", "")[:50]
-                    )
+                    key = r.get("trajectory_type", "") + "|" + (r.get("messages", [{}])[0].get("text", "")[:50])
                     enriched_ids.add(key)
                 except Exception:
                     pass
@@ -169,14 +138,12 @@ def phase_run(
         except Exception as e:
             logger.error(f"  ✗ Failed: {e}")
 
-        # Brief pause between conversations to avoid overloading the pipeline
         if i < total - 1:
-            time.sleep(3.0)
+            time.sleep(1.0)
 
     logger.info(f"\n✓ Enriched {done}/{total} conversations → {OUTPUT_FILE}")
 
 
-# ── Entrypoint ────────────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser(
@@ -195,8 +162,8 @@ def main():
     )
     parser.add_argument(
         "--base-url",
-        default="http://localhost:8000",
-        help="Base URL of the emotion analysis API (default: http://localhost:8000).",
+        default=os.environ.get("INGESTION_URL", "http://localhost:8000"),
+        help="Base URL of the emotion analysis API (default: $INGESTION_URL or http://localhost:8000).",
     )
     parser.add_argument(
         "--trajectories",
@@ -232,7 +199,6 @@ def main():
         print()
         sys.exit(0)
 
-    # Parse trajectory filter
     trajectories_filter = None
     if args.trajectories:
         trajectories_filter = [s.strip() for s in args.trajectories.split(",")]
@@ -242,7 +208,6 @@ def main():
             logger.error(f"Valid types: {TRAJECTORY_TYPES}")
             sys.exit(1)
 
-    # Execute requested phase(s)
     if args.phase in ("generate", "full"):
         if not args.api_key:
             logger.error("--api-key or ANTHROPIC_API_KEY required for generation phase.")

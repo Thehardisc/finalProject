@@ -1,0 +1,659 @@
+{
+  "_README": "Authored QA messages with the emotion each SHOULD map to. 'family' is derived in the test from 'emotion' via corpora.LABEL_FAMILY. 'strict': true → the test asserts the predicted emotion family per-case (unambiguous despite the formatting edge). 'strict': false → counted only toward the aggregate accuracy gate (genuinely hard: sarcasm, negation-flip, mixed, emoji-only, minimal). 'edge' tags the edge-case category.",
+  "messages": [
+    {
+      "text": "I AM ABSOLUTELY FURIOUS RIGHT NOW",
+      "emotion": "anger",
+      "edge": "all_caps",
+      "strict": true
+    },
+    {
+      "text": "THIS IS THE BEST DAY OF MY LIFE",
+      "emotion": "excitement",
+      "edge": "all_caps",
+      "strict": true
+    },
+    {
+      "text": "I AM SO PROUD OF YOU",
+      "emotion": "pride",
+      "edge": "all_caps",
+      "strict": false
+    },
+    {
+      "text": "STOP SHOUTING AT ME",
+      "emotion": "anger",
+      "edge": "all_caps",
+      "strict": true
+    },
+    {
+      "text": "I CANNOT STOP CRYING",
+      "emotion": "sadness",
+      "edge": "all_caps",
+      "strict": false
+    },
+    {
+      "text": "WE WON THE CHAMPIONSHIP",
+      "emotion": "excitement",
+      "edge": "all_caps",
+      "strict": true
+    },
+    {
+      "text": "im sooooo happyyyy today",
+      "emotion": "joy",
+      "edge": "repeated_chars",
+      "strict": true
+    },
+    {
+      "text": "this is sadddddd",
+      "emotion": "sadness",
+      "edge": "repeated_chars",
+      "strict": true
+    },
+    {
+      "text": "yaaaay we finally did it",
+      "emotion": "excitement",
+      "edge": "repeated_chars",
+      "strict": true
+    },
+    {
+      "text": "ughhhh this is so annoyingggg",
+      "emotion": "annoyance",
+      "edge": "repeated_chars",
+      "strict": true
+    },
+    {
+      "text": "noooo this is terrible",
+      "emotion": "sadness",
+      "edge": "repeated_chars",
+      "strict": false
+    },
+    {
+      "text": "wowwww that is amazing",
+      "emotion": "admiration",
+      "edge": "repeated_chars",
+      "strict": false
+    },
+    {
+      "text": "I love you so much ❤️",
+      "emotion": "love",
+      "edge": "emoji_plus_text",
+      "strict": true
+    },
+    {
+      "text": "I'm absolutely terrified 😱",
+      "emotion": "fear",
+      "edge": "emoji_plus_text",
+      "strict": true
+    },
+    {
+      "text": "thank you so much for everything 🙏",
+      "emotion": "gratitude",
+      "edge": "emoji_plus_text",
+      "strict": true
+    },
+    {
+      "text": "this is disgusting 🤮",
+      "emotion": "disgust",
+      "edge": "emoji_plus_text",
+      "strict": true
+    },
+    {
+      "text": "so excited for tonight 🎉",
+      "emotion": "excitement",
+      "edge": "emoji_plus_text",
+      "strict": true
+    },
+    {
+      "text": "I'm heartbroken 💔",
+      "emotion": "sadness",
+      "edge": "emoji_plus_text",
+      "strict": true
+    },
+    {
+      "text": "😡😡😡",
+      "emotion": "anger",
+      "edge": "emoji_only",
+      "strict": false
+    },
+    {
+      "text": "😍😍😍",
+      "emotion": "love",
+      "edge": "emoji_only",
+      "strict": false
+    },
+    {
+      "text": "😭",
+      "emotion": "sadness",
+      "edge": "emoji_only",
+      "strict": false
+    },
+    {
+      "text": "🎉🎉🎉",
+      "emotion": "excitement",
+      "edge": "emoji_only",
+      "strict": false
+    },
+    {
+      "text": "🙏",
+      "emotion": "gratitude",
+      "edge": "emoji_only",
+      "strict": false
+    },
+    {
+      "text": "🤢",
+      "emotion": "disgust",
+      "edge": "emoji_only",
+      "strict": false
+    },
+    {
+      "text": "😱",
+      "emotion": "fear",
+      "edge": "emoji_only",
+      "strict": false
+    },
+    {
+      "text": "oh great, exactly what I needed today",
+      "emotion": "annoyance",
+      "edge": "sarcasm",
+      "strict": false
+    },
+    {
+      "text": "wow, thanks for nothing",
+      "emotion": "anger",
+      "edge": "sarcasm",
+      "strict": false
+    },
+    {
+      "text": "yeah, because that worked so well last time",
+      "emotion": "annoyance",
+      "edge": "sarcasm",
+      "strict": false
+    },
+    {
+      "text": "nice job breaking it again, hero",
+      "emotion": "annoyance",
+      "edge": "sarcasm",
+      "strict": false
+    },
+    {
+      "text": "oh fantastic, another pointless meeting",
+      "emotion": "annoyance",
+      "edge": "sarcasm",
+      "strict": false
+    },
+    {
+      "text": "sure, I just LOVE waiting in line for hours",
+      "emotion": "annoyance",
+      "edge": "sarcasm",
+      "strict": false
+    },
+    {
+      "text": "great, my favorite, more homework",
+      "emotion": "annoyance",
+      "edge": "sarcasm",
+      "strict": false
+    },
+    {
+      "text": "I'm not happy about this at all",
+      "emotion": "annoyance",
+      "edge": "negation",
+      "strict": false
+    },
+    {
+      "text": "this really isn't good",
+      "emotion": "disapproval",
+      "edge": "negation",
+      "strict": false
+    },
+    {
+      "text": "I don't love this idea",
+      "emotion": "disapproval",
+      "edge": "negation",
+      "strict": false
+    },
+    {
+      "text": "I can't say I'm thrilled with the result",
+      "emotion": "disappointment",
+      "edge": "negation",
+      "strict": false
+    },
+    {
+      "text": "this is not okay",
+      "emotion": "disapproval",
+      "edge": "negation",
+      "strict": false
+    },
+    {
+      "text": "not bad at all, actually pretty good",
+      "emotion": "approval",
+      "edge": "understatement",
+      "strict": false
+    },
+    {
+      "text": "could be worse, I suppose",
+      "emotion": "neutral",
+      "edge": "understatement",
+      "strict": false
+    },
+    {
+      "text": "it's fine, I guess",
+      "emotion": "neutral",
+      "edge": "understatement",
+      "strict": false
+    },
+    {
+      "text": "I'm thrilled but also terrified about the move",
+      "emotion": "fear",
+      "edge": "mixed",
+      "strict": false
+    },
+    {
+      "text": "so happy it's over, though I'll really miss everyone",
+      "emotion": "sadness",
+      "edge": "mixed",
+      "strict": false
+    },
+    {
+      "text": "laughing so I don't start crying",
+      "emotion": "sadness",
+      "edge": "mixed",
+      "strict": false
+    },
+    {
+      "text": "that's hilarious but honestly kind of infuriating",
+      "emotion": "amusement",
+      "edge": "mixed",
+      "strict": false
+    },
+    {
+      "text": "ugh",
+      "emotion": "annoyance",
+      "edge": "minimal",
+      "strict": false
+    },
+    {
+      "text": "yay",
+      "emotion": "excitement",
+      "edge": "minimal",
+      "strict": false
+    },
+    {
+      "text": "meh",
+      "emotion": "neutral",
+      "edge": "minimal",
+      "strict": false
+    },
+    {
+      "text": "wow",
+      "emotion": "surprise",
+      "edge": "minimal",
+      "strict": false
+    },
+    {
+      "text": "lol",
+      "emotion": "amusement",
+      "edge": "minimal",
+      "strict": false
+    },
+    {
+      "text": "thanks",
+      "emotion": "gratitude",
+      "edge": "minimal",
+      "strict": false
+    },
+    {
+      "text": "ok",
+      "emotion": "neutral",
+      "edge": "minimal",
+      "strict": true
+    },
+    {
+      "text": "why",
+      "emotion": "confusion",
+      "edge": "minimal",
+      "strict": false
+    },
+    {
+      "text": "im furiousss rn",
+      "emotion": "anger",
+      "edge": "typos",
+      "strict": false
+    },
+    {
+      "text": "thx so muchhh",
+      "emotion": "gratitude",
+      "edge": "typos",
+      "strict": true
+    },
+    {
+      "text": "so happpy 2day",
+      "emotion": "joy",
+      "edge": "typos",
+      "strict": false
+    },
+    {
+      "text": "i h8 this so much",
+      "emotion": "anger",
+      "edge": "typos",
+      "strict": false
+    },
+    {
+      "text": "this is amazng",
+      "emotion": "admiration",
+      "edge": "typos",
+      "strict": false
+    },
+    {
+      "text": "what?!?!",
+      "emotion": "surprise",
+      "edge": "punctuation",
+      "strict": false
+    },
+    {
+      "text": "really...",
+      "emotion": "disappointment",
+      "edge": "punctuation",
+      "strict": false
+    },
+    {
+      "text": "stop!!!",
+      "emotion": "anger",
+      "edge": "punctuation",
+      "strict": false
+    },
+    {
+      "text": "wow!!!",
+      "emotion": "surprise",
+      "edge": "punctuation",
+      "strict": false
+    },
+    {
+      "text": "why would you do that to me?",
+      "emotion": "disappointment",
+      "edge": "question",
+      "strict": false
+    },
+    {
+      "text": "are you serious right now?",
+      "emotion": "annoyance",
+      "edge": "question",
+      "strict": false
+    },
+    {
+      "text": "how could this even happen?",
+      "emotion": "surprise",
+      "edge": "question",
+      "strict": false
+    },
+    {
+      "text": "what time does the meeting start?",
+      "emotion": "neutral",
+      "edge": "question",
+      "strict": false
+    },
+    {
+      "text": "where did you put my keys?",
+      "emotion": "neutral",
+      "edge": "question",
+      "strict": false
+    },
+    {
+      "text": "merci beaucoup mon ami",
+      "emotion": "gratitude",
+      "edge": "code_switch",
+      "strict": false
+    },
+    {
+      "text": "te amo mucho mi amor",
+      "emotion": "love",
+      "edge": "code_switch",
+      "strict": false
+    },
+    {
+      "text": "please call me at 555-0192 tomorrow",
+      "emotion": "neutral",
+      "edge": "noise",
+      "strict": true
+    },
+    {
+      "text": "the total comes to $42.50 with tax",
+      "emotion": "neutral",
+      "edge": "noise",
+      "strict": true
+    },
+    {
+      "text": "see https://example.com for the details",
+      "emotion": "neutral",
+      "edge": "noise",
+      "strict": true
+    },
+    {
+      "text": "I'm so grateful for all your support",
+      "emotion": "gratitude",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm heartbroken over the terrible news",
+      "emotion": "grief",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm absolutely terrified of what comes next",
+      "emotion": "fear",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "that joke was absolutely hilarious",
+      "emotion": "amusement",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I really admire your courage and skill",
+      "emotion": "admiration",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm so nervous about the interview tomorrow",
+      "emotion": "nervousness",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I feel so guilty about what I did",
+      "emotion": "remorse",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "what a relief that it's finally over",
+      "emotion": "relief",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "I'm really curious how this story ends",
+      "emotion": "curiosity",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm so disappointed by the final result",
+      "emotion": "disappointment",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "that smell is absolutely revolting",
+      "emotion": "disgust",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I strongly disagree with this decision",
+      "emotion": "disapproval",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm so proud of our whole team",
+      "emotion": "pride",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "oh, I finally understand how it works",
+      "emotion": "realization",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "I really want that new bike so badly",
+      "emotion": "desire",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "I care about you more than anything",
+      "emotion": "caring",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "I'm optimistic things will get better soon",
+      "emotion": "optimism",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "you are incredibly talented at this",
+      "emotion": "admiration",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm so embarrassed about what happened earlier",
+      "emotion": "embarrassment",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "yes, I completely agree with this plan",
+      "emotion": "approval",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "I'm overjoyed and can't stop smiling",
+      "emotion": "joy",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm seething with absolute rage",
+      "emotion": "anger",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I miss them more than words can say",
+      "emotion": "grief",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "wow I did not see that coming at all",
+      "emotion": "surprise",
+      "edge": "clear",
+      "strict": true
+    },
+    {
+      "text": "I'm so anxious I can't sit still",
+      "emotion": "nervousness",
+      "edge": "clear",
+      "strict": false
+    },
+    {
+      "text": "  I'm so happy   ",
+      "emotion": "joy",
+      "edge": "whitespace",
+      "strict": true
+    },
+    {
+      "text": "I.am.so.angry.right.now",
+      "emotion": "anger",
+      "edge": "punctuation",
+      "strict": false
+    },
+    {
+      "text": "T H I S I S A M A Z I N G",
+      "emotion": "admiration",
+      "edge": "spaced_letters",
+      "strict": false
+    },
+    {
+      "text": "gr8 news everyone, we passed!",
+      "emotion": "excitement",
+      "edge": "leet",
+      "strict": false
+    },
+    {
+      "text": "i'm cryyyying this is too funny",
+      "emotion": "amusement",
+      "edge": "mixed",
+      "strict": false
+    },
+    {
+      "text": "sending now — prepare to be personally victimized by how good this place looks, I'm not even exaggerating 🏡✨",
+      "emotion": "admiration",
+      "edge": "hyperbole",
+      "strict": true
+    },
+    {
+      "text": "I'm dead 😂 that was hilarious",
+      "emotion": "amusement",
+      "edge": "hyperbole",
+      "strict": true
+    },
+    {
+      "text": "this cake is absolutely insane, best I've ever had",
+      "emotion": "admiration",
+      "edge": "hyperbole",
+      "strict": true
+    },
+    {
+      "text": "this view is literally killing me 😍",
+      "emotion": "love",
+      "edge": "hyperbole",
+      "strict": false
+    },
+    {
+      "text": "stop it, this puppy is too cute, I can't handle it",
+      "emotion": "admiration",
+      "edge": "hyperbole",
+      "strict": false
+    },
+    {
+      "text": "you have no idea how obsessed I am with this song",
+      "emotion": "excitement",
+      "edge": "hyperbole",
+      "strict": false
+    },
+    {
+      "text": "I feel like a victim in this house, it's awful",
+      "emotion": "disgust",
+      "edge": "hyperbole_control",
+      "strict": true
+    },
+    {
+      "text": "I'm honestly terrified about the surgery tomorrow",
+      "emotion": "fear",
+      "edge": "hyperbole_control",
+      "strict": true
+    }
+  ]
+}

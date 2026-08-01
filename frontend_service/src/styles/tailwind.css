@@ -1,0 +1,50 @@
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@custom-variant dark (&:where([data-ig-theme="dark"], [data-ig-theme="dark"] *));
+
+@theme {
+  --color-surface:   var(--ig-surf, #ffffff);
+  --color-surface-2: var(--ig-surf2, #f3f4f6);
+  --color-surface-3: var(--ig-surf3, #f9fafb);
+  --color-rail:      var(--ig-rail-bg, #f7f8fa);
+  --color-ink:       var(--ig-txt, #1c1c2e);
+  --color-ink-2:     var(--ig-txt2, #6b7280);
+  --color-ink-3:     var(--ig-txt3, #9ca3af);
+  --color-bord:      var(--ig-bord, #efefef);
+  --color-bord-2:    var(--ig-bord2, #e5e7eb);
+
+  --color-fg:        var(--text-primary, #1C1B1A);
+  --color-fg-muted:  var(--text-muted, #9B958F);
+  --color-bg:        var(--bg-base, #FAF9F6);
+
+  --color-admiration:    hsl(var(--emo-admiration));
+  --color-amusement:     hsl(var(--emo-amusement));
+  --color-anger:         hsl(var(--emo-anger));
+  --color-annoyance:     hsl(var(--emo-annoyance));
+  --color-approval:      hsl(var(--emo-approval));
+  --color-caring:        hsl(var(--emo-caring));
+  --color-confusion:     hsl(var(--emo-confusion));
+  --color-curiosity:     hsl(var(--emo-curiosity));
+  --color-desire:        hsl(var(--emo-desire));
+  --color-disappointment:hsl(var(--emo-disappointment));
+  --color-disapproval:   hsl(var(--emo-disapproval));
+  --color-disgust:       hsl(var(--emo-disgust));
+  --color-embarrassment: hsl(var(--emo-embarrassment));
+  --color-excitement:    hsl(var(--emo-excitement));
+  --color-fear:          hsl(var(--emo-fear));
+  --color-gratitude:     hsl(var(--emo-gratitude));
+  --color-grief:         hsl(var(--emo-grief));
+  --color-joy:           hsl(var(--emo-joy));
+  --color-love:          hsl(var(--emo-love));
+  --color-nervousness:   hsl(var(--emo-nervousness));
+  --color-optimism:      hsl(var(--emo-optimism));
+  --color-pride:         hsl(var(--emo-pride));
+  --color-realization:   hsl(var(--emo-realization));
+  --color-relief:        hsl(var(--emo-relief));
+  --color-remorse:       hsl(var(--emo-remorse));
+  --color-sadness:       hsl(var(--emo-sadness));
+  --color-surprise:      hsl(var(--emo-surprise));
+  --color-neutral:       hsl(var(--emo-neutral));
+}

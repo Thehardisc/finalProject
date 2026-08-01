@@ -1,18 +1,8 @@
-"""
-Generates demo conversations using the Anthropic Claude API.
+"""Generates demo conversations using the Anthropic Claude API."""
 
-Each conversation follows a defined emotional arc (trajectory).
-Output: list of message strings ready to be sent through the pipeline.
 
-Usage:
-    from data.generator import ConversationGenerator
-    gen = ConversationGenerator(api_key="sk-ant-...")
-    messages = gen.generate(trajectory)
-"""
-
-import json
 import time
-import random
+
 import logging
 from typing import List
 
@@ -39,10 +29,7 @@ class ConversationGenerator:
             raise ImportError("anthropic package required: pip install anthropic")
 
     def generate(self, trajectory: dict, retries: int = 3) -> List[str]:
-        """
-        Generate a list of messages following the given emotional arc.
-        Returns a list of message strings.
-        """
+        """Generate a list of messages following the given emotional arc."""
         target_length = trajectory["length"]
         prompt = trajectory["prompt"]
 
@@ -63,7 +50,6 @@ class ConversationGenerator:
                 raw = response.content[0].text.strip()
                 messages = [line.strip() for line in raw.splitlines() if line.strip()]
 
-                # Validate: we expect close to the target number of messages
                 if len(messages) < target_length - 2:
                     logger.warning(
                         f"Got {len(messages)} messages for '{trajectory['type']}' "
@@ -72,7 +58,6 @@ class ConversationGenerator:
                     time.sleep(2)
                     continue
 
-                # Trim or keep as-is — small overruns are fine
                 return messages[:target_length + 2]
 
             except Exception as e:
@@ -91,10 +76,7 @@ class ConversationGenerator:
         count: int,
         delay_between: float = 1.0,
     ) -> List[List[str]]:
-        """
-        Generate `count` distinct conversations for a single trajectory type.
-        Returns a list of message-lists.
-        """
+        """Generate `count` distinct conversations for a single trajectory type."""
         results = []
         for i in range(count):
             logger.info(

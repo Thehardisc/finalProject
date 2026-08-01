@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Depends, Query, status, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+
 from fastapi.responses import HTMLResponse
 import sys
 import os
@@ -9,30 +9,34 @@ import asyncio
 import time
 import uuid
 from collections import OrderedDict
-from typing import List, Optional
+from typing import Optional
 
-# Add parent directory to path to import shared
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger, sanitize_email
-from shared.utils.auth import validate_api_key, RateLimiter, VALID_API_KEYS
+from shared.utils.auth import RateLimiter
 from shared.constants import EMOTION_LABELS
+
+_NON_EMOTION = frozenset({
+    'vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion',
+})
+_EMOTION_SET = frozenset(EMOTION_LABELS)
 from api_service.auth_utils import hash_password, verify_password, create_jwt, decode_jwt, get_current_user, require_admin, JWT_EXPIRY_HOURS
 from api_service.db.pool import init_pool as _init_pool, close_pool as _close_pool, get_pool
-from api_service.routes.conversations import router as conv_router, set_redis as _conv_set_redis
+from api_service.routes.conversations import router as conv_router, set_redis as _conv_set_redis, set_cache_invalidator as _conv_set_cache_invalidator
 from api_service.routes.messages import router as msg_router, set_redis as _msg_set_redis
+from api_service.routes.ai_demo import router as ai_demo_router, set_redis as _ai_demo_set_redis
+from api_service.demo_users import DEMO_USERS, upsert_demo_user
 
 logger = get_logger("api_service")
 
 app = FastAPI(title="Emotion API", version="1.0.0")
 
-# Include modular routers — handles all /conversations/*, /conversation/*, /message/* endpoints
 app.include_router(conv_router)
 app.include_router(msg_router)
+app.include_router(ai_demo_router)
 
-# Comma-separated list — matches the ingestion_service convention.
-# Default keeps local dev working; production sets ALLOWED_ORIGINS=https://your.host
 _DEFAULT_ORIGINS = "http://localhost:5173,http://localhost,http://127.0.0.1,http://127.0.0.1:5173"
 _allowed_origins = [
     o.strip() for o in os.environ.get("ALLOWED_ORIGINS", _DEFAULT_ORIGINS).split(",")
@@ -48,10 +52,8 @@ app.add_middleware(
 
 redis_client = RedisClient()
 rate_limiter = None
-db_pool = None  # kept for inline endpoints that reference it directly
+db_pool      = None
 
-
-# ── Health ─────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 @app.get("/health/status")
@@ -108,7 +110,34 @@ async def get_system_status():
     return payload
 
 
-# ── Stream Metrics ─────────────────────────────────────────────────────────────
+@app.get("/health/model")
+async def get_model_health():
+    """Returns meta-learner stats: gate weights, accuracy, calibration temperature."""
+    try:
+        stats = await redis_client.redis.hgetall("model:stats") if redis_client.redis else {}
+    except Exception:
+        stats = {}
+
+    if not stats:
+        return {"status": "training", "message": "Model not yet deployed."}
+
+    return {
+        "status":                    stats.get("status", "unknown"),
+        "model_version":             stats.get("model_version"),
+        "feature_dim":               int(stats.get("feature_dim", 0)),
+        "test_accuracy":             float(stats.get("test_accuracy", 0)),
+        "test_f1_macro":             float(stats.get("test_f1_macro", 0)),
+        "calibration_temperature":   float(stats.get("calibration_temperature", 1.0)),
+        "gate_alpha": {
+            "vader":   float(stats.get("vader_gate", 0)),
+            "bert":    float(stats.get("bert_gate", 0)),
+            "goe":     float(stats.get("goe_gate", 0)),
+            "context": float(stats.get("ctx_gate", 0)),
+        },
+        "training_samples":          int(stats.get("training_samples", 0)),
+        "last_trained_utc":          stats.get("last_trained_utc"),
+    }
+
 
 MONITORED_STREAMS = [
     "message_stream",
@@ -137,8 +166,6 @@ async def get_stream_depths():
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-# ── WebSocket Manager ──────────────────────────────────────────────────────────
-
 class ConnectionManager:
     def __init__(self):
         self.active_connections: dict = {}
@@ -161,23 +188,28 @@ class ConnectionManager:
         logger.info(f"Client {user_id} disconnected. Active: {len(self.active_connections)}")
 
     async def broadcast_to_user(self, user_id: str, message: dict):
-        if user_id in self.active_connections:
-            for connection in self.active_connections[user_id]:
-                try:
-                    await connection.send_json(message)
-                except Exception as e:
-                    logger.error(f"Error sending to {user_id}: {e}")
+        if user_id not in self.active_connections:
+            return
+        dead = []
+        for connection in list(self.active_connections[user_id]):
+            try:
+                await connection.send_json(message)
+            except Exception as e:
+                logger.error(f"Error sending to {user_id}: {e}")
+                dead.append(connection)
+        for conn in dead:
+            self.disconnect(conn, user_id)
+        if dead:
+            logger.info(f"Removed {len(dead)} stale connection(s) for user {user_id}.")
 
 
 manager = ConnectionManager()
 
-# LRU cache: conversation_id → [user_id, ...]; evicts oldest when >1000 entries
 _participant_cache: OrderedDict = OrderedDict()
 _PARTICIPANT_CACHE_MAX = 1000
 
 
 async def _get_participants(pool, conv_id: str) -> list:
-    """Fetch conversation participants with LRU caching to avoid N+1 DB queries."""
     if conv_id in _participant_cache:
         _participant_cache.move_to_end(conv_id)
         return _participant_cache[conv_id]
@@ -192,14 +224,13 @@ async def _get_participants(pool, conv_id: str) -> list:
     return user_ids
 
 
-# ── Redis Stream → WebSocket bridge ───────────────────────────────────────────
-
 async def _handle_conversation_update(message_id, data):
     raw_text     = data.get("original_text", "") or data.get("text", "")
     pipeline_log = json.loads(data.get("pipeline_log", "{}"))
     dom_emo      = data.get("dominant_emotion", "Neutral")
     conv_state   = json.loads(data.get("conversation_state", "{}"))
     ems          = json.loads(data.get("emotions", "{}"))
+    vader_data   = json.loads(data.get("vader", "{}"))
     convo_id     = data.get("conversation_id")
 
     mlog = logger.bind(
@@ -215,11 +246,12 @@ async def _handle_conversation_update(message_id, data):
         )
         return
 
-    bert_list = [
+    emotion_list = [
         {"label": k, "score": float(v)}
         for k, v in ems.items()
-        if k not in ['vader_neg', 'vader_neu', 'vader_pos', 'vader_compound', 'dominant_emotion']
+        if k not in _NON_EMOTION and isinstance(v, (int, float))
     ]
+    emotion_list.sort(key=lambda x: x["score"], reverse=True)
 
     payload = {
         "type": "analysis",
@@ -228,14 +260,22 @@ async def _handle_conversation_update(message_id, data):
             "conversation_id":        convo_id,
             "raw_text":               raw_text,
             "final_dominant_emotion": dom_emo,
-            "final_valence":          float(ems.get("vader_compound", 0)),
-            "bert_emotions":          bert_list,
+            "final_valence":          float(vader_data.get("vader_compound", 0.0)),
+            "bert_emotions":          emotion_list,
+            "ekman_group":            pipeline_log.get("ekman_group"),
+            "plutchik_group":         pipeline_log.get("plutchik_group"),
             "meta_confidence":        float(pipeline_log.get("meta_confidence", 0.0)),
             "context_shift":          json.loads(data.get("context_shift", "null")),
             "logic_map":              pipeline_log.get("logic_map", {}),
+            "gate_weights_alpha":     pipeline_log.get("gate_weights_alpha"),
             "sender_id":              data.get("user_id"),
             "context_snapshot":       pipeline_log.get("context_snapshot"),
             "lstm_trajectory":        pipeline_log.get("trajectory"),
+            "sarcasm_score":          float(pipeline_log.get("sarcasm_score", 0)),
+            "inversion_applied":      bool(pipeline_log.get("inversion_applied", False)),
+            "vad":                    pipeline_log.get("vad", {}),
+            "dynamics":               pipeline_log.get("dynamics", {}),
+            "appraisal":              pipeline_log.get("appraisal") or {},
         },
         "vibe": {
             "valence":     conv_state.get("average_valence", 0),
@@ -285,11 +325,30 @@ async def _handle_model_ready(message_id, data):
             await manager.broadcast_to_user(uid, payload)
 
 
+async def _handle_conversation_idle(data: dict) -> None:
+    from api_service.routes.conversations import _run_analysis
+    cid = data.get("conversation_id", "")
+    if not cid:
+        return
+    try:
+        await _run_analysis(cid, redis_client.redis)
+        logger.info(
+            "idle_analysis_done",
+            extra={"event": "idle_analysis_done", "conversation_id": cid},
+        )
+    except Exception as e:
+        logger.warning(f"Idle analysis failed for {cid}: {e}")
+
+
 async def redis_listener():
-    """Listen to Redis streams and push updates to connected WebSocket clients."""
     logger.info("Starting Redis Listener for WebSockets...")
     r = redis_client.redis
-    STREAM_KEYS = ["conversation_update_stream", "reasoning_update_stream", "partial_result_stream"]
+    STREAM_KEYS = [
+        "conversation_update_stream",
+        "reasoning_update_stream",
+        "partial_result_stream",
+        "conversation_idle_stream",
+    ]
     last_ids = {k: "$" for k in STREAM_KEYS}
 
     while True:
@@ -307,12 +366,14 @@ async def redis_listener():
                             await _handle_reasoning_update(message_id, data)
                         elif stream_name == "partial_result_stream":
                             await _handle_model_ready(message_id, data)
+                        elif stream_name == "conversation_idle_stream":
+                            asyncio.create_task(
+                                _handle_conversation_idle(data)
+                            )
         except Exception as e:
             logger.log_exception("WebSocket Redis Listener Error", e)
             await asyncio.sleep(1)
 
-
-# ── WebSocket endpoint ─────────────────────────────────────────────────────────
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
@@ -365,7 +426,6 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 msg_obj = json.loads(data)
                 text = msg_obj.get("text")
                 if text:
-                    # Admins may impersonate sender_id (used by DemoRunner for bi-directional demo)
                     sender = (
                         msg_obj.get("sender_id")
                         if user_data.get("role") == "admin" and msg_obj.get("sender_id")
@@ -404,20 +464,18 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
         manager.disconnect(websocket, user_id)
 
 
-# ── Lifecycle ──────────────────────────────────────────────────────────────────
-
 @app.on_event("startup")
 async def startup_event():
     global db_pool, rate_limiter
-    await _init_pool()           # uses retry logic in db/pool.py
-    db_pool = get_pool()         # keep local ref for inline endpoints
+    await _init_pool()
+    db_pool = get_pool()
 
     await redis_client.connect()
     rate_limiter = RateLimiter(redis_client)
-
-    # Wire redis client into routers that need it
     _conv_set_redis(redis_client)
     _msg_set_redis(redis_client)
+    _ai_demo_set_redis(redis_client)
+    _conv_set_cache_invalidator(lambda conv_id: _participant_cache.pop(conv_id, None))
 
     asyncio.create_task(redis_listener())
 
@@ -429,8 +487,6 @@ async def shutdown_event():
     db_pool = None
     await redis_client.close()
 
-
-# ── Auth Endpoints ─────────────────────────────────────────────────────────────
 
 from pydantic import BaseModel, Field
 
@@ -451,7 +507,6 @@ class LoginRequest(BaseModel):
 
 @app.post("/auth/register", status_code=201)
 async def register(req: RegisterRequest, response: Response):
-    """Register a new user account with bcrypt-hashed password."""
     import re
     if not re.match(r'^[^@]+@[^@]+\.[^@]+$', req.email):
         raise HTTPException(status_code=400, detail="Invalid email format.")
@@ -486,7 +541,6 @@ async def register(req: RegisterRequest, response: Response):
 
 @app.post("/auth/login")
 async def auth_login(req: LoginRequest, response: Response):
-    """Authenticate user with password, return signed JWT."""
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT user_id, email, display_name, password_hash, role, is_active FROM users WHERE email = $1",
@@ -525,14 +579,12 @@ async def auth_login(req: LoginRequest, response: Response):
 
 @app.post("/auth/logout")
 async def auth_logout(response: Response):
-    """Clear the authentication cookie."""
     response.delete_cookie(key="_req_sid", samesite="lax")
     return {"status": "logged_out"}
 
 
 @app.get("/auth/me")
 async def auth_me(current_user: dict = Depends(get_current_user)):
-    """Return profile of the currently authenticated user."""
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT user_id, email, display_name, role, is_active, created_at, last_login FROM users WHERE user_id = $1",
@@ -543,16 +595,18 @@ async def auth_me(current_user: dict = Depends(get_current_user)):
     return dict(user)
 
 
-# ── Admin Endpoints ────────────────────────────────────────────────────────────
-
 class UpdateUserRequest(BaseModel):
     role:      Optional[str]  = None
     is_active: Optional[bool] = None
 
 
+class VerifyEmotionRequest(BaseModel):
+    emotion:  Optional[str] = None
+    verified: bool = True
+
+
 @app.get("/admin/users")
 async def admin_list_users(admin: dict = Depends(require_admin)):
-    """List all users with stats. Admin only."""
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT user_id, email, display_name, role, is_active, created_at, last_login FROM users ORDER BY created_at DESC"
@@ -562,7 +616,6 @@ async def admin_list_users(admin: dict = Depends(require_admin)):
 
 @app.patch("/admin/users/{user_id}")
 async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = Depends(require_admin)):
-    """Update a user's role or active status. Admin only."""
     if user_id == admin["sub"]:
         raise HTTPException(status_code=400, detail="Admins cannot modify their own account via this endpoint.")
 
@@ -597,7 +650,6 @@ async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = 
 
 @app.delete("/admin/users/{user_id}", status_code=204)
 async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
-    """Permanently delete a user. Admin only."""
     if user_id == admin["sub"]:
         raise HTTPException(status_code=400, detail="Admins cannot delete their own account.")
     async with db_pool.acquire() as conn:
@@ -619,7 +671,6 @@ async def admin_recent_analyses(
     conversation_id: Optional[str] = None,
     admin: dict = Depends(require_admin),
 ):
-    """List recent messages with emotion analyses. Admin only."""
     async with db_pool.acquire() as conn:
         if conversation_id:
             rows = await conn.fetch(
@@ -679,7 +730,6 @@ async def admin_pipeline_detail(
     message_id: str,
     admin: dict = Depends(require_admin),
 ):
-    """Full step-by-step pipeline breakdown for a message. Admin only."""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -748,23 +798,31 @@ async def admin_pipeline_detail(
         "stages": {
             "vader":      models.get("vader", {}),
             "bert":       models.get("basic_bert", {}),
-            "goemotions": models.get("go_emotions", {}),
+            "goemotions": {k: v for k, v in models.get("go_emotions", {}).items()
+                           if k in _EMOTION_SET},
         },
         "decision": {
-            "aggregated":    pipeline_log.get("aggregated", {}),
-            "dominant":      pipeline_log.get("dominant_selected"),
-            "confidence":    pipeline_log.get("meta_confidence"),
-            "decision_mode": pipeline_log.get("decision_mode", "rule-based"),
+            "aggregated":            pipeline_log.get("aggregated", {}),
+            "decision_trace":        pipeline_log.get("decision_trace", []),
+            "dominant":              pipeline_log.get("dominant_selected"),
+            "confidence":            pipeline_log.get("meta_confidence"),
+            "decision_mode":         pipeline_log.get("decision_mode", "rule-based"),
             "logic_map":             pipeline_log.get("logic_map", {}),
             "ctx_correction_weight": pipeline_log.get("ctx_correction_weight", 0.0),
             "sarcasm_score":         pipeline_log.get("sarcasm_score", 0),
             "conflict":              pipeline_log.get("conflict"),
+            "gate_weights_alpha":    pipeline_log.get("gate_weights_alpha"),
+            "ekman_group":           pipeline_log.get("ekman_group"),
+            "plutchik_group":        pipeline_log.get("plutchik_group"),
         },
         "context": {
             "reasoning":        reasoning,
             "raw_emotions":     emotions,
             "context_snapshot": pipeline_log.get("context_snapshot"),
             "lstm_trajectory":  pipeline_log.get("trajectory"),
+            "vad":              pipeline_log.get("vad", {}),
+            "dynamics":         pipeline_log.get("dynamics", {}),
+            "appraisal":        pipeline_log.get("appraisal", {}),
         },
         "ground_truth": d.get("ground_truth_emotion"),
         "is_verified":  d.get("is_verified", False),
@@ -772,117 +830,124 @@ async def admin_pipeline_detail(
     }
 
 
-# ── Users / Presence ───────────────────────────────────────────────────────────
+@app.post("/admin/verify/{message_id}")
+async def admin_verify_emotion(
+    message_id: str,
+    req: VerifyEmotionRequest,
+    admin: dict = Depends(require_admin),
+):
+    """Set (or clear) the human ground-truth label for a message.
 
-@app.get("/users/online")
+    Verified rows are the trainer's only live-data source (`fetch_live_data`
+    selects WHERE is_verified = TRUE), so this endpoint is what feeds real
+    conversations back into meta-learner retraining.
+    """
+    if req.verified:
+        if req.emotion not in _EMOTION_SET:
+            raise HTTPException(status_code=400,
+                                detail=f"emotion must be one of the {len(_EMOTION_SET)} GoEmotions labels.")
+        emotion = req.emotion
+    else:
+        emotion = None
+
+    async with db_pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE emotion_analysis SET ground_truth_emotion = $1, is_verified = $2 "
+            "WHERE message_id = $3",
+            emotion, req.verified, message_id,
+        )
+    if result == "UPDATE 0":
+        raise HTTPException(status_code=404, detail="No analysis found for this message.")
+    logger.bind(
+        actor=admin["sub"], target=message_id, action="verify_emotion",
+    ).info(
+        "admin_action",
+        extra={"event": "admin_action", "emotion": emotion, "verified": req.verified},
+    )
+    return {"status": "ok", "message_id": message_id,
+            "ground_truth": emotion, "is_verified": req.verified}
+
+
+@app.get("/users/online", dependencies=[Depends(get_current_user)])
 async def get_online_users():
-    """Return user IDs that currently have an active WebSocket connection."""
     return {"online_user_ids": list(manager.active_connections.keys())}
-
-
-DEMO_USERS = [
-    {"user_id": "531c7f56-e5c4-4557-9b2d-e7e8ed7c942f", "email": "alice@demo.innerlink",   "first_name": "Alice",   "last_name": "Chen",  "role": "admin"},
-    {"user_id": "90b04411-2879-4e2d-adb9-cf254793d1d2", "email": "bob@demo.innerlink",     "first_name": "Bob",     "last_name": "Kim"},
-    {"user_id": "b3c15d22-3f4a-4b8e-a1c9-df365804e3a1", "email": "charlie@demo.innerlink", "first_name": "Charlie", "last_name": "Park"},
-    {"user_id": "c4d26e33-4f5b-4c9f-b2da-ef476915f4b2", "email": "diana@demo.innerlink",   "first_name": "Diana",   "last_name": "Lee"},
-    {"user_id": "d5e37f44-5f6c-4d0f-c3eb-f0587a26f5c3", "email": "eve@demo.innerlink",     "first_name": "Eve",     "last_name": "Zhao"},
-]
-_DEMO_PW = os.environ.get("DEMO_PASSWORD", "demo-innerlink-2026")
 
 
 @app.post("/auth/demo-login/{slot}")
 async def demo_login(slot: int, response: Response):
-    """One-click login as a preset demo user (slot 0-4). Creates the account on first use."""
     if slot < 0 or slot >= len(DEMO_USERS):
         raise HTTPException(status_code=400, detail="Invalid demo slot.")
-    demo = DEMO_USERS[slot]
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT user_id, display_name, role FROM users WHERE email = $1", demo["email"]
-        )
-        desired_role = demo.get("role", "user")
-        if row:
-            user_id      = row["user_id"]
-            display_name = row["display_name"]
-            role         = row["role"]
-            if role != desired_role:
-                await conn.execute(
-                    "UPDATE users SET role = $1 WHERE user_id = $2", desired_role, user_id
-                )
-                role = desired_role
-        else:
-            user_id      = demo.get("user_id") or str(uuid.uuid4())
-            display_name = f"{demo['first_name']} {demo['last_name']}"
-            pw_hash      = hash_password(_DEMO_PW)
-            role         = desired_role
-            await conn.execute(
-                """INSERT INTO users
-                   (user_id, email, first_name, last_name, display_name,
-                    password_hash, role, is_active, created_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,$8)""",
-                user_id, demo["email"], demo["first_name"], demo["last_name"],
-                display_name, pw_hash, role, time.time()
-            )
-        await conn.execute(
-            "UPDATE users SET last_login = $1 WHERE user_id = $2", time.time(), user_id
-        )
+        user = await upsert_demo_user(conn, slot)
 
-    token = create_jwt(user_id, display_name, role)
+    token = create_jwt(user["user_id"], user["display_name"], user["role"])
     response.set_cookie(
         key="_req_sid", value=token,
         httponly=True, samesite="lax",
         max_age=JWT_EXPIRY_HOURS * 3600,
     )
-    return {"user_id": user_id, "display_name": display_name, "email": demo["email"], "role": role}
+    return user
 
 
 @app.get("/users", dependencies=[Depends(get_current_user)])
 async def get_users(current_user_id: str = Query(None)):
-    """Return active users, optionally excluding the calling user."""
     async with db_pool.acquire() as conn:
         if current_user_id:
             rows = await conn.fetch(
-                "SELECT user_id, display_name FROM users WHERE user_id != $1 AND is_active = TRUE",
+                "SELECT user_id, display_name FROM users WHERE user_id != $1 AND is_active = TRUE "
+                "AND email NOT LIKE '%@ai-demo.innerlink'",
                 current_user_id
             )
         else:
             rows = await conn.fetch(
-                "SELECT user_id, display_name FROM users WHERE is_active = TRUE"
+                "SELECT user_id, display_name FROM users WHERE is_active = TRUE "
+                "AND email NOT LIKE '%@ai-demo.innerlink'"
             )
     return [dict(r) for r in rows]
 
 
-# ── Analytics ──────────────────────────────────────────────────────────────────
-
 @app.get("/analytics/calibration", dependencies=[Depends(get_current_user)])
 async def get_calibration_analytics():
-    """Get model performance metrics from human-verified feedback."""
     from collections import Counter
 
     pool = get_pool()
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT ground_truth_emotion, emotions_json FROM emotion_analysis WHERE is_verified = TRUE"
+                "SELECT ground_truth_emotion, is_verified, emotions_json FROM emotion_analysis"
             )
     except Exception as e:
         logger.error(f"Analytics DB Error: {e}")
         raise HTTPException(status_code=500, detail="Could not calculate analytics.")
 
     if not rows:
-        return {"status": "no_data", "message": "Provide more feedback to see calibration stats."}
+        return {"status": "no_data", "message": "No analyzed messages yet."}
 
-    total_verified = len(rows)
+    all_distribution = Counter()
+    total_verified = 0
     correct_count  = 0
     tp = Counter()
     fp = Counter()
     fn = Counter()
+    gt_counts = Counter()
     confusion = {}
 
     for row in rows:
-        actual    = row['ground_truth_emotion']
-        ems       = json.loads(row['emotions_json'])
-        predicted = ems.get("dominant_emotion", "Neutral")
+        try:
+            ems = json.loads(row['emotions_json'])
+        except (TypeError, ValueError):
+            continue
+        numeric = {k: float(v) for k, v in ems.items() if isinstance(v, (int, float)) and k in EMOTION_LABELS}
+        if not numeric:
+            continue
+        predicted = max(numeric, key=numeric.get)
+        all_distribution[predicted] += 1
+
+        actual = row['ground_truth_emotion']
+        if not row['is_verified'] or not actual:
+            continue
+        total_verified += 1
+        gt_counts[actual] += 1
 
         if actual not in confusion:
             confusion[actual] = Counter()
@@ -897,7 +962,7 @@ async def get_calibration_analytics():
 
     emotion_stats = {}
     for emo in EMOTION_LABELS:
-        actual_count = sum(1 for r in rows if r['ground_truth_emotion'] == emo)
+        actual_count = gt_counts[emo]
         if actual_count:
             precision = tp[emo] / (tp[emo] + fp[emo]) if (tp[emo] + fp[emo]) > 0 else 0
             recall    = tp[emo] / (tp[emo] + fn[emo]) if (tp[emo] + fn[emo]) > 0 else 0
@@ -909,21 +974,32 @@ async def get_calibration_analytics():
                 "samples":   actual_count,
             }
 
+    payload = {
+        "total_analyzed":           sum(all_distribution.values()),
+        "all_emotion_distribution": dict(all_distribution.most_common()),
+        "timestamp":                time.time(),
+    }
+
+    if total_verified == 0:
+        payload.update({
+            "status":  "no_data",
+            "message": "Provide more feedback to see calibration stats.",
+        })
+        return payload
+
     logger.log_stats("Model Calibration Report", {
         "Total Samples":    total_verified,
         "Overall Accuracy": f"{correct_count / total_verified:.2%}",
     })
 
-    return {
+    payload.update({
         "overall_accuracy":       round(correct_count / total_verified, 4),
         "total_verified_samples": total_verified,
         "emotion_breakdown":      emotion_stats,
         "confusion_matrix":       confusion,
-        "timestamp":              time.time(),
-    }
+    })
+    return payload
 
-
-# ── Static dashboard ───────────────────────────────────────────────────────────
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard():

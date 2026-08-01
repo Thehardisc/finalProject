@@ -1,19 +1,29 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import LoginModal from './components/LoginModal';
-import DemoRunner from './components/DemoRunner';
 import IGDashboard from './pages/IGDashboard';
-import AnalyticsPage from './pages/AnalyticsPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
 import LiveAnalyticsDashboardPage from './pages/LiveAnalyticsDashboardPage';
 import AdminPipelinePage from './pages/AdminPipelinePage';
+import LandingPage from './pages/LandingPage';
+import { API_BASE, WS_BASE } from './api/client';
 import './glass/CrystalGlass-v2.css';
-
-const API_BASE = import.meta.env.VITE_API_URL  || 'http://localhost:8001';
-const WS_BASE  = import.meta.env.VITE_WS_URL   || 'ws://localhost:8001';
 
 axios.defaults.withCredentials = true;
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+const FRICTION_DELAY_MS = 280;
+const FRICTION_CDM_STATES = new Set(['TENSION', 'CONFLICT', 'ARGUMENT', 'FRUSTRATION']);
+
+function shouldApplyFriction(data) {
+  if (!data) return false;
+  const cdmState = data.context_snapshot?.cdm_current_state;
+  const sarcasm  = data.sarcasm_score  ?? 0;
+  const inertia  = data.dynamics?.inertia ?? 0;
+  const valence  = data.vad?.valence      ?? 0;
+  return (sarcasm > 0.75 && FRICTION_CDM_STATES.has(cdmState))
+      || (inertia > 0.80 && valence < -0.5);
+}
+
 
 function parseAnalysis(msg) {
   if (!msg.emotions) return null;
@@ -35,17 +45,27 @@ function parseAnalysis(msg) {
         id:                     msg.id,
         raw_text:               msg.content || msg.text,
         final_dominant_emotion: ems.dominant_emotion || pl.dominant_selected || 'Neutral',
-        final_valence:          ems.vader_compound || 0,
+        final_valence:          pl.models?.vader?.vader_compound ?? pl.vad?.valence ?? 0,
         bert_emotions:          bert_list,
         llm_insights:           'Analysis loaded.',
-        llm_sarcasm_score:      pl.sarcasm_score || 0,
+        sarcasm_score:          pl.sarcasm_score || 0,
+        inversion_applied:      pl.inversion_applied || false,
         hierarchical_scores:    [],
         emojis_found:           [],
         slang_detected:         {},
         meta_confidence:        pl.meta_confidence ?? null,
         logic_map:              pl.logic_map || null,
+        gate_weights_alpha:     pl.gate_weights_alpha || null,
+        ekman_group:            pl.ekman_group || null,
+        plutchik_group:         pl.plutchik_group || null,
         context_snapshot:       pl.context_snapshot || null,
+        context_shift:          msg.context_shift
+                                  ? (typeof msg.context_shift === 'string' ? JSON.parse(msg.context_shift) : msg.context_shift)
+                                  : null,
         lstm_trajectory:        pl.trajectory || null,
+        vad:                    pl.vad || {},
+        dynamics:               pl.dynamics || {},
+        appraisal:              pl.appraisal || {},
       },
     };
   } catch {
@@ -53,16 +73,19 @@ function parseAnalysis(msg) {
   }
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const [view, setView] = useState('dashboard'); // 'dashboard' | 'analytics' | 'live-analytics' | 'admin'
+  const [view, setView] = useState('dashboard');
+  const [showLoginModal, setShowLoginModal] = useState(false);
 
-  // ── Auth ────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', 'dark');
+    document.body.style.background = '#05060F';
+  }, []);
+
   const [currentUser, setCurrentUser]       = useState(null);
   const [sessionChecked, setSessionChecked] = useState(false);
 
-  // ── System readiness ────────────────────────────────────────────────────
   const [systemReady, setSystemReady]               = useState(false);
   const [gateVisible, setGateVisible]               = useState(false);
   const [trainingInProgress, setTrainingInProgress] = useState(false);
@@ -70,7 +93,6 @@ export default function App() {
     database: false, redis: false, meta_learner: false,
   });
 
-  // ── Data ────────────────────────────────────────────────────────────────
   const [conversations, setConversations]           = useState([]);
   const [globalUsers, setGlobalUsers]               = useState([]);
   const [onlineUsers, setOnlineUsers]               = useState(new Set());
@@ -79,23 +101,31 @@ export default function App() {
   const [inputValue, setInputValue]                 = useState('');
   const [status, setStatus]                         = useState('Offline');
   const [currentAnalysis, setCurrentAnalysis]       = useState(null);
-  const [analyticsData, setAnalyticsData]           = useState(null);
   const [mlProcessing, setMlProcessing]             = useState(false);
   const [regeneratingIds, setRegeneratingIds]       = useState(new Set());
   const [partialModels, setPartialModels]           = useState(new Set());
 
-  const socketRef      = useRef(null);
-  const activeConvRef  = useRef(activeConversationId); // tracks current conv without causing WS reconnect
+  const socketRef        = useRef(null);
+  const globalUsersRef   = useRef([]);
+  const conversationsRef = useRef([]);
+
+  const resolveSenderName = (senderId, convId) => {
+    if (!senderId) return undefined;
+    return globalUsersRef.current.find(u => u.user_id === senderId)?.display_name
+      || conversationsRef.current.find(c => c.conversation_id === convId)
+           ?.members?.find(m => m.user_id === senderId)?.display_name
+      || senderId.substring(0, 8);
+  };
+  const activeConvRef  = useRef(activeConversationId);
   const retryCountRef  = useRef(0);
+  const isSendingRef   = useRef(false);
   const retryTimerRef  = useRef(null);
   const mountedRef     = useRef(true);
 
-  // Keep ref in sync whenever the active conversation changes
   useEffect(() => {
     activeConvRef.current = activeConversationId;
   }, [activeConversationId]);
 
-  // ── Session restore ──────────────────────────────────────────────────────
   useEffect(() => {
     if (currentUser) return;
     axios.get(`${API_BASE}/auth/me`)
@@ -109,7 +139,6 @@ export default function App() {
       .finally(() => setSessionChecked(true));
   }, [currentUser]);
 
-  // ── Auth helpers ─────────────────────────────────────────────────────────
   const handleAuthSuccess = (data) => {
     setCurrentUser({
       user_id:      data.user_id,
@@ -133,7 +162,6 @@ export default function App() {
     setView('dashboard');
   };
 
-  // ── System readiness gate ────────────────────────────────────────────────
   useEffect(() => {
     if (!currentUser) return;
     setGateVisible(true);
@@ -166,7 +194,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [currentUser]);
 
-  // ── Conversations + Users polling ───────────────────────────────────────
   const fetchConversations = async () => {
     if (!currentUser) return;
     try {
@@ -175,10 +202,12 @@ export default function App() {
         axios.get(`${API_BASE}/users?current_user_id=${currentUser.user_id}`),
         axios.get(`${API_BASE}/users/online`),
       ]);
-      // Filter out any self-conversations that may exist from legacy data
       const all = chats.data || [];
-      setConversations(all.filter(c => c.type === 'group' || c.other_user_id !== currentUser.user_id));
+      const visible = all.filter(c => c.type === 'group' || c.other_user_id !== currentUser.user_id);
+      setConversations(visible);
+      conversationsRef.current = visible;
       setGlobalUsers(users.data || []);
+      globalUsersRef.current = users.data || [];
       setOnlineUsers(new Set(online.data?.online_user_ids || []));
     } catch {}
   };
@@ -190,7 +219,6 @@ export default function App() {
     return () => clearInterval(id);
   }, [currentUser]);
 
-  // ── Persistent WebSocket — one connection per session, not per conversation ──
   useEffect(() => {
     if (!currentUser || !systemReady) return;
 
@@ -218,7 +246,6 @@ export default function App() {
           const payload = JSON.parse(event.data);
 
           if (payload.type === 'analysis') {
-            // Only update UI if this message belongs to the active conversation
             const convId = payload.data?.conversation_id;
             if (convId && convId !== activeConvRef.current) return;
 
@@ -233,8 +260,10 @@ export default function App() {
                 id:         payload.data.id,
                 sender:     isSelf ? 'user' : 'ai',
                 text:       payload.data.raw_text,
-                senderName: isSelf ? currentUser.display_name : payload.data.sender_id?.substring(0, 8),
+                senderName: isSelf ? currentUser.display_name
+                  : resolveSenderName(payload.data.sender_id, payload.data.conversation_id),
                 analysis:   payload,
+                timestamp:  Date.now(),
               };
 
               if (prev.some(m => m.id === payload.data.id)) {
@@ -247,7 +276,7 @@ export default function App() {
 
               if (optimisticIdx >= 0) {
                 const next = [...prev];
-                next[optimisticIdx] = { ...next[optimisticIdx], ...newMsg };
+                next[optimisticIdx] = { ...next[optimisticIdx], ...newMsg, timestamp: next[optimisticIdx].timestamp ?? newMsg.timestamp };
                 return next;
               }
               return [...prev, newMsg];
@@ -260,6 +289,11 @@ export default function App() {
               }
               return prev;
             });
+            setMessages(prev => prev.map(m =>
+              m.id === payload.message_id
+                ? { ...m, analysis: { ...m.analysis, ai_insight: payload.ai_insight } }
+                : m
+            ));
           } else if (payload.type === 'model_ready') {
             setPartialModels(prev => {
               const next = new Set(prev);
@@ -295,9 +329,8 @@ export default function App() {
       clearTimeout(retryTimerRef.current);
       if (socketRef.current) socketRef.current.close(1000, 'component unmounted');
     };
-  }, [currentUser, systemReady]); // ← activeConversationId intentionally excluded
+  }, [currentUser, systemReady]);
 
-  // ── History load on conversation switch ─────────────────────────────────
   useEffect(() => {
     if (!currentUser || !systemReady || !activeConversationId) return;
 
@@ -313,9 +346,10 @@ export default function App() {
               text:       m.content,
               senderName: isSelf ? currentUser.display_name : (
                 conversations.find(c => c.other_user_id === m.sender_id)?.other_display_name
-                || m.sender_id.substring(0, 8)
+                || resolveSenderName(m.sender_id, activeConversationId)
               ),
-              analysis: parseAnalysis(m),
+              analysis:  parseAnalysis(m),
+              timestamp: m.timestamp,
             };
           });
           setMessages(msgs);
@@ -331,19 +365,6 @@ export default function App() {
     loadHistory();
   }, [activeConversationId, currentUser, systemReady]);
 
-  // ── Analytics fetch ──────────────────────────────────────────────────────
-  const fetchAnalytics = async () => {
-    try {
-      const res = await axios.get(`${API_BASE}/analytics/calibration`);
-      setAnalyticsData(res.data);
-    } catch {}
-  };
-
-  useEffect(() => {
-    if (view === 'analytics') fetchAnalytics();
-  }, [view]);
-
-  // ── Chat actions ─────────────────────────────────────────────────────────
   const handleCreateChat = async (targetId) => {
     try {
       const res = await axios.post(`${API_BASE}/conversations`, {
@@ -395,25 +416,39 @@ export default function App() {
     } catch {}
   };
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     if (!inputValue.trim() || !socketRef.current || !activeConversationId) return;
-    const optimistic = {
-      id:         Date.now(),
-      sender:     'user',
-      text:       inputValue,
-      senderName: currentUser.display_name,
-      analysis:   null,
-    };
-    setMessages(prev => [...prev, optimistic]);
-    setMlProcessing(true);
-    setPartialModels(new Set());
-    socketRef.current.send(JSON.stringify({
-      text:            inputValue,
-      recipient_id:    'system',
-      sender_id:       currentUser.user_id,
-      conversation_id: activeConversationId,
-    }));
-    setInputValue('');
+    if (isSendingRef.current) return;
+    isSendingRef.current = true;
+
+    const text = inputValue;
+
+    try {
+      if (shouldApplyFriction(currentAnalysis?.data)) {
+        await new Promise(r => setTimeout(r, FRICTION_DELAY_MS));
+      }
+
+      const optimistic = {
+        id:         Date.now(),
+        sender:     'user',
+        text,
+        senderName: currentUser.display_name,
+        analysis:   null,
+        timestamp:  Date.now(),
+      };
+      setMessages(prev => [...prev, optimistic]);
+      setMlProcessing(true);
+      setPartialModels(new Set());
+      socketRef.current.send(JSON.stringify({
+        text,
+        recipient_id:    'system',
+        sender_id:       currentUser.user_id,
+        conversation_id: activeConversationId,
+      }));
+      setInputValue('');
+    } finally {
+      isSendingRef.current = false;
+    }
   };
 
   const handleRegenerateAnalysis = (msgId) => {
@@ -425,12 +460,6 @@ export default function App() {
     }, 2800);
   };
 
-  const handleInjectDemo = (demoMessages) => {
-    setMessages(demoMessages);
-    const last = demoMessages[demoMessages.length - 1];
-    if (last?.analysis) setCurrentAnalysis(last.analysis);
-  };
-
   const handleDemoStart = async (convId) => {
     await fetchConversations();
     setActiveConversationId(convId);
@@ -438,51 +467,92 @@ export default function App() {
     setCurrentAnalysis(null);
   };
 
-  // ── Render: loading gate ──────────────────────────────────────────────────
   if (currentUser && !systemReady) {
+    const ready = Object.values(componentStatus).filter(Boolean).length;
+    const total = Math.max(Object.keys(componentStatus).length, 1);
     return (
-      <div className="crystal-shell">
-        <div className="crystal-gate">
-          <div style={{ '--bubble-rgb': '0, 119, 255' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', background: '#05060F',
+        fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+      }}>
+        <div style={{
+          position: 'fixed', width: 700, height: 700, borderRadius: '50%',
+          left: -250, top: -250,
+          background: 'radial-gradient(circle, rgba(79,40,210,0.38) 0%, transparent 70%)',
+          filter: 'blur(100px)', pointerEvents: 'none',
+        }} />
+        <div style={{
+          position: 'fixed', width: 600, height: 600, borderRadius: '50%',
+          right: -200, bottom: -200,
+          background: 'radial-gradient(circle, rgba(46,16,130,0.48) 0%, transparent 70%)',
+          filter: 'blur(90px)', pointerEvents: 'none',
+        }} />
+        <div style={{
+          display: 'flex', flexDirection: 'column', alignItems: 'center',
+          textAlign: 'center', position: 'relative', zIndex: 1,
+        }}>
+          <div style={{
+            width: 52, height: 52, borderRadius: 18, marginBottom: 28,
+            background: 'linear-gradient(135deg, #7c3aed 0%, #4338ca 100%)',
+            boxShadow: '0 4px 24px rgba(109,40,217,0.50)',
+          }} />
+          <div style={{ fontSize: '1.15rem', fontWeight: 700, color: 'rgba(255,255,255,0.88)', letterSpacing: '-0.02em', marginBottom: 6 }}>
+            InnerLink
+          </div>
+          <div style={{ fontSize: '0.82rem', color: 'rgba(255,255,255,0.38)', marginBottom: 40 }}>
+            Preparing your secure session
+          </div>
+          <div style={{ position: 'relative', width: 56, height: 56, marginBottom: 28 }}>
+            <svg width="56" height="56" style={{ transform: 'rotate(-90deg)' }}>
+              <circle cx="28" cy="28" r="22" fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3" />
+              <circle
+                cx="28" cy="28" r="22" fill="none" stroke="url(#gate-grad)"
+                strokeWidth="3" strokeLinecap="round"
+                strokeDasharray={`${2 * Math.PI * 22}`}
+                strokeDashoffset={`${2 * Math.PI * 22 * (1 - ready / total)}`}
+                style={{ transition: 'stroke-dashoffset 0.6s ease' }}
+              />
+              <defs>
+                <linearGradient id="gate-grad" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stopColor="#6d28d9" />
+                  <stop offset="100%" stopColor="#4c1d95" />
+                </linearGradient>
+              </defs>
+            </svg>
             <div style={{
-              width: 48, height: 48, borderRadius: 16,
-              background: 'linear-gradient(135deg, #0077ff 0%, #7000ff 100%)',
-              boxShadow: '0 6px 20px rgba(0,119,255,0.35)',
-              marginBottom: 24,
-            }} />
+              position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+              justifyContent: 'center', fontSize: '0.72rem', fontWeight: 700,
+              color: 'rgba(167,139,250,0.88)',
+            }}>
+              {ready}/{total}
+            </div>
           </div>
-          <h2 style={{ margin: '0 0 6px', fontSize: '1.2rem', fontWeight: 700, color: '#1c1c2e' }}>
-            InnerLink is Initializing
-          </h2>
-          <p style={{ margin: '0 0 24px', color: '#6b7280', fontSize: '0.88rem' }}>
-            Warming up neural pipelines…
-          </p>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, width: 260 }}>
-            {[
-              { key: 'redis',        label: 'Redis Stream Engine' },
-              { key: 'database',     label: 'PostgreSQL Database' },
-              { key: 'meta_learner', label: 'Meta-Learner Intelligence' },
-            ].map(({ key, label }) => (
-              <div key={key} className={`crystal-gate-check ${componentStatus[key] ? 'ready' : ''}`}>
-                <span style={{ fontSize: '0.85rem' }}>{componentStatus[key] ? '✓' : '◌'}</span>
-                {label}
-              </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {Object.entries(componentStatus).map(([key, done]) => (
+              <div key={key} style={{
+                width: 8, height: 8, borderRadius: '50%',
+                background: done ? '#4ade80' : 'rgba(255,255,255,0.15)',
+                boxShadow: done ? '0 0 8px rgba(74,222,128,0.50)' : 'none',
+                transition: 'all 0.4s ease',
+              }} />
             ))}
-          </div>
-          <div style={{ marginTop: 28, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-            <div className="crystal-gate-spinner" style={{ '--bubble-rgb': '0, 119, 255' }} />
-            <span style={{ fontSize: '0.78rem', color: '#9ca3af' }}>Checking every 3 seconds…</span>
           </div>
         </div>
       </div>
     );
   }
 
-  // ── Render: login ─────────────────────────────────────────────────────────
   if (!sessionChecked) return null;
-  if (!currentUser) return <LoginModal onSuccess={handleAuthSuccess} />;
+  if (!currentUser) return (
+    <>
+      <LandingPage onSignIn={() => setShowLoginModal(true)} />
+      {showLoginModal && (
+        <LoginModal onSuccess={handleAuthSuccess} onClose={() => setShowLoginModal(false)} />
+      )}
+    </>
+  );
 
-  // ── Render: main app ──────────────────────────────────────────────────────
   return (
     <div className="crystal-shell">
       {trainingInProgress && (
@@ -508,7 +578,7 @@ export default function App() {
           onAddMember={handleAddMember}
           onRemoveMember={handleRemoveMember}
           onDeleteMessage={handleDeleteMessage}
-          onGoToAnalytics={() => setView('analytics')}
+          onGoToAdminDash={() => setView('admin-dash')}
           onGoToLiveAnalytics={() => setView('live-analytics')}
           onGoToAdmin={() => setView('admin')}
           onLogout={handleLogout}
@@ -522,20 +592,15 @@ export default function App() {
           partialModels={partialModels}
           regeneratingIds={regeneratingIds}
           onRegenerateAnalysis={handleRegenerateAnalysis}
-          onInjectDemo={handleInjectDemo}
           socketRef={socketRef}
           onDemoStart={handleDemoStart}
         />
       )}
 
-      {view === 'analytics' && (
-        <AnalyticsPage
-          analyticsData={analyticsData}
-          messages={messages}
-          currentAnalysis={currentAnalysis}
+      {view === 'admin-dash' && currentUser?.role === 'admin' && (
+        <AdminDashboardPage
           currentUser={currentUser}
           onBack={() => setView('dashboard')}
-          onRefresh={fetchAnalytics}
         />
       )}
 

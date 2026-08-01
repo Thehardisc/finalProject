@@ -1,22 +1,10 @@
-"""
-train.py — Step 3: Train the ConversationLSTM on collected conversation sequences.
-
-Usage:
-    python3 train.py                          # default settings
-    python3 train.py --epochs 200 --hidden 256 --layers 2
-    python3 train.py --loss kl --lr 5e-4
-
-Output (saved to models/checkpoints/):
-    best_model.pt          — best checkpoint (lowest val loss)
-    training_history.json  — loss curve per epoch
-    model_config.json      — hyperparameters used
-"""
+"""train.py — Step 3: Train the ConversationLSTM on collected conversation sequences."""
 
 import argparse
 import json
 import sys
 import torch
-import numpy as np
+
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -45,7 +33,6 @@ def main():
 
     print("=== STEP 3: TRAIN ConversationLSTM ===\n")
 
-    # ── Load data ──────────────────────────────────────────────────────────────
     print("Loading sequence dataset...")
     try:
         train_ds, val_ds, test_ds = load_sequence_dataset(FEATURES_DIR)
@@ -62,14 +49,12 @@ def main():
         print("ERROR: No training data. Run collect.py and features/extract.py first.")
         sys.exit(1)
 
-    # Reduce batch size if we have very few samples
     batch_size = min(args.batch, n_train)
 
     train_loader, val_loader, test_loader = make_loaders(
         train_ds, val_ds, test_ds, batch_size=batch_size
     )
 
-    # ── Build model ────────────────────────────────────────────────────────────
     model = ConversationLSTM(
         input_dim=MSG_DIM,
         hidden_dim=args.hidden,
@@ -85,7 +70,6 @@ def main():
     print(f"  Output:  {N_EMOTIONS} dims/step (next emotion distribution)")
     print(f"  Params:  {n_params:,}")
 
-    # ── Save config ────────────────────────────────────────────────────────────
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
     config = {
         "input_dim":  MSG_DIM,
@@ -104,11 +88,10 @@ def main():
     with open(CKPT_DIR / "model_config.json", "w") as fh:
         json.dump(config, fh, indent=2)
 
-    # ── Train ──────────────────────────────────────────────────────────────────
-    history = train(
+    train(
         model=model,
         train_loader=train_loader,
-        val_loader=val_loader or train_loader,   # fallback if no val split
+        val_loader=val_loader or train_loader,
         out_dir=CKPT_DIR,
         epochs=args.epochs,
         lr=args.lr,
@@ -117,7 +100,6 @@ def main():
         device=args.device,
     )
 
-    # ── Evaluate best model on test set ───────────────────────────────────────
     if test_loader and (CKPT_DIR / "best_model.pt").exists():
         print("\nLoading best checkpoint for final evaluation...")
         ckpt = torch.load(CKPT_DIR / "best_model.pt", map_location="cpu")
@@ -142,13 +124,38 @@ def main():
         print(f"  Top-1 acc: {top1_acc:.1%}  (predicted dominant = actual dominant)")
         print(f"  Top-3 acc: {top3_acc:.1%}  (predicted dominant in actual top-3)")
 
-        # Append test results to config
         config["test_loss"]  = test_loss
         config["top1_acc"]   = top1_acc
         config["top3_acc"]   = top3_acc
         config["best_epoch"] = ckpt["epoch"]
         with open(CKPT_DIR / "model_config.json", "w") as fh:
             json.dump(config, fh, indent=2)
+
+    best_ckpt = CKPT_DIR / "best_model.pt"
+    if best_ckpt.exists():
+        import os as _os
+        _env_model = _os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")
+        deploy_dir = Path(_env_model).parent
+        deploy_dir.mkdir(parents=True, exist_ok=True)
+
+        import shutil
+        shutil.copy(best_ckpt, deploy_dir / "trajectory_lstm.pt")
+
+        deploy_cfg = {
+            "input_dim":  config["input_dim"],
+            "hidden_dim": config["hidden_dim"],
+            "num_layers": config["num_layers"],
+            "output_dim": config["output_dim"],
+            "dropout":    config["dropout"],
+        }
+        with open(deploy_dir / "trajectory_config.json", "w") as fh:
+            json.dump(deploy_cfg, fh, indent=2)
+
+        print(f"\n✅ Deployed to {deploy_dir}/")
+        print(f"   trajectory_lstm.pt      (input_dim={config['input_dim']})")
+        print(f"   trajectory_config.json")
+    else:
+        print("\n⚠  No checkpoint found — model not deployed.")
 
     print(f"\n=== DONE — checkpoint saved to {CKPT_DIR}/ ===")
 

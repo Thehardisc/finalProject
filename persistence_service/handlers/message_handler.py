@@ -1,6 +1,4 @@
-"""
-persistence_service/handlers/message_handler.py — Persist incoming chat messages.
-"""
+"""persistence_service/handlers/message_handler.py — Persist incoming chat messages."""
 from persistence_service.db_models import Message
 
 

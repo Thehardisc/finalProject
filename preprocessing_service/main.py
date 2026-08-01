@@ -1,13 +1,15 @@
 import asyncio
+import json
 import sys
 import os
+
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from preprocessing_service.utils import clean_text, demojize_text
-from preprocessing_service.debouncer import MessageDebouncer, DEBOUNCE_WINDOW_MS
+from preprocessing_service.debouncer import MessageDebouncer, FAST_DISPATCH_MS, BURST_WINDOW_MS
 
 logger = get_logger("preprocessing_service")
 
@@ -23,16 +25,9 @@ async def _process_one(
     record_id:       str,
     data:            dict,
     is_continuation: bool = False,
+    burst_fragments: str = None,
 ) -> None:
-    """
-    Clean, demojize, tag, and forward one message to preprocessed_stream.
-
-    is_continuation=True means this message is a rapid-fire fragment of the
-    same thought as the preceding message (same user, same conversation,
-    within DEBOUNCE_WINDOW_MS).  Downstream services — specifically the
-    Context Engine — use this flag to suppress CDM state transitions and
-    velocity spikes for what is semantically a single conversational turn.
-    """
+    """Clean, demojize, tag, and forward one message to preprocessed_stream."""
     try:
         original_text            = data.get("text", "")
         processed_text           = clean_text(original_text)
@@ -42,8 +37,9 @@ async def _process_one(
         output_event["processed_text"]           = processed_text
         output_event["processed_text_demojized"] = processed_text_demojized
         output_event["original_text"]            = original_text
-        # "true"/"false" strings — Redis stream values are always strings
         output_event["is_continuation"]          = "true" if is_continuation else "false"
+        if burst_fragments:
+            output_event["burst_fragments"]      = burst_fragments
 
         await redis_client.publish_event(OUTPUT_STREAM, output_event)
 
@@ -77,19 +73,14 @@ async def main():
     debouncer = MessageDebouncer()
     logger.info(
         f"Preprocessing worker started.  "
-        f"Debounce window={DEBOUNCE_WINDOW_MS}ms"
+        f"Fast dispatch={FAST_DISPATCH_MS}ms  Burst window={BURST_WINDOW_MS}ms"
     )
 
     async def _flush_burst(
         items: list,
         flags: list,
     ) -> None:
-        """
-        Process and ACK a flushed burst.
-
-        items : [(record_id, data), ...]
-        flags : [is_continuation, ...]
-        """
+        """Process and ACK a flushed burst."""
         if len(items) > 1:
             user  = items[0][1].get("user_id",          "?")
             conv  = items[0][1].get("conversation_id",  "?")
@@ -98,15 +89,30 @@ async def main():
                 f"user={user}  conv={conv}  "
                 f"continuations={sum(flags)}"
             )
-        for (record_id, data), is_cont in zip(items, flags):
-            await _process_one(r, record_id, data, is_continuation=is_cont)
+        if len(items) > 1:
+            combined_text = " ".join(data.get("text", "") for _, data in items)
+            fragments_data = [{"message_id": data.get("message_id")} for _, data in items]
+
+            first_record_id, first_data = items[0]
+            first_data = first_data.copy()
+            first_data["text"] = combined_text
+
+            await _process_one(
+                r, first_record_id, first_data,
+                is_continuation=flags[0],
+                burst_fragments=json.dumps(fragments_data)
+            )
+            for record_id, _ in items[1:]:
+                try:
+                    await r.xack(STREAM_KEY, GROUP_NAME, record_id)
+                except Exception:
+                    pass
+        else:
+            first_record_id, first_data = items[0]
+            await _process_one(r, first_record_id, first_data, is_continuation=flags[0])
 
     while True:
         try:
-            # PEL recovery: reclaim records idle >30 s (crash-before-ACK protection).
-            # Reclaimed messages are treated as fresh turns (is_continuation=False)
-            # because burst context is lost on restart — safe, just slightly
-            # less accurate for the rare mid-burst crash case.
             try:
                 _, stale, _ = await r.xautoclaim(
                     STREAM_KEY, GROUP_NAME, CONSUMER_NAME,
@@ -118,11 +124,6 @@ async def main():
             except Exception:
                 pass
 
-            # count=10: read a full batch so bursts arriving simultaneously
-            # are all added to the debouncer in the same loop iteration.
-            # block=500: short enough that debounce timers fire promptly while
-            # idle; asyncio yields freely during the await, so all in-flight
-            # tasks continue running during the server-side wait.
             messages = await r.xreadgroup(
                 GROUP_NAME, CONSUMER_NAME,
                 {STREAM_KEY: ">"},

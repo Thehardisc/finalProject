@@ -1,27 +1,3 @@
-"""
-context_engine_service/main.py — Context Engine Service (CDM edition).
-
-Listens to preprocessed_stream, builds a 23-dim context vector per message,
-and publishes it to partial_analysis_stream for the central_responder_service.
-
-Context vector layout (23 dims — must match shared/constants.py CONTEXT_DIM):
-  [0:7]    CDM state probabilities (7 latent conversation states)
-  [7]      state_residency         (consecutive messages in current state, normalised)
-  [8:11]   transition_path         (last 3 state indices / 7)
-  [11]     entry_abruptness        (fractional state-index jump, 0-1)
-  [12]     topic_coherence         (cosine similarity vs previous message embedding)
-  [13]     emotion_entropy         (Shannon entropy of previous-turn GoEmotions dist.)
-  [14]     speaker_divergence      (std of per-speaker EMA valences)
-  [15]     velocity                (Δvalence vs previous message)
-  [16]     acceleration            (Δ²valence — is the shift intensifying?)
-  [17]     historical_valence      (Qdrant episodic memory, weighted by topic similarity)
-  [18]     topic_resonance         (Qdrant average cosine score)
-  [19]     volatility              (EMA of variance, user working-memory window)
-  [20]     current_valence         (EMA valence of whole conversation)
-  [21]     message_length          (char count)
-  [22]     latency_ms              (time since previous message)
-"""
-
 import asyncio
 import json
 import sys
@@ -31,20 +7,41 @@ import os
 import numpy as np
 from typing import Dict, List
 
-# Make cdm.py importable from any launch directory (project root or service dir)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from cdm import CDM
+from cdm import CDM, N_CDM_STATES, reload_hmm as _cdm_reload_hmm
+import train_cdm_hmm
+from appraisal import compute_appraisal
 from shared.module_registry import register_module
 from shared.constants import (
-    CONTEXT_DIM,
-    CTX_HIST_VALENCE, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
+    CDM_CTX_DIM,
+    CTX_CDM_PROBS,
+    CTX_HIST_POS,
+    CTX_HIST_NEU,
+    CTX_HIST_NEG,
+    CTX_RESONANCE,
+    CTX_VOLATILITY,
+    CTX_CURR_VALENCE,
+    CTX_RESIDENCY,
+    CTX_TRANSITION,
+    CTX_ABRUPTNESS,
+    CTX_COHERENCE,
+    CTX_ENTROPY,
+    CTX_SPK_DIVERGENCE,
+    CTX_VELOCITY,
+    CTX_ACCELERATION,
+    CTX_MSG_LENGTH,
+    CTX_LATENCY_MS,
+    CTX_HMM_CONF,
+    CTX_HMM_ENTROPY,
+    CTX_HMM_EMISSION,
+    CTX_HMM_NEXT3,
+    CTX_INTENT_STAB,
 )
 
 from fastapi import FastAPI
 import redis.asyncio as aioredis
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models
-from sentence_transformers import SentenceTransformer
 
 from shared.utils.logger import get_logger
 
@@ -56,7 +53,6 @@ REDIS_HOST  = os.getenv("REDIS_HOST",  "redis")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "qdrant")
 STREAM_MAXLEN = int(os.getenv("REDIS_STREAM_MAXLEN", 10_000))
 
-# GoEmotions label order — must match shared/constants.py EMOTION_LABELS
 _GOEMOTION_LABELS = [
     'admiration', 'amusement', 'anger', 'annoyance', 'approval', 'caring',
     'confusion', 'curiosity', 'desire', 'disappointment', 'disapproval',
@@ -64,11 +60,10 @@ _GOEMOTION_LABELS = [
     'joy', 'love', 'nervousness', 'optimism', 'pride', 'realization',
     'relief', 'remorse', 'sadness', 'surprise', 'neutral'
 ]
-_N_GOEMO = len(_GOEMOTION_LABELS)  # 28
+_N_GOEMO = len(_GOEMOTION_LABELS)
 
 
 def _emotion_entropy(emotions: Dict) -> float:
-    """Shannon entropy (nats) of a GoEmotions probability distribution."""
     probs = np.array([float(emotions.get(e, 0.0)) for e in _GOEMOTION_LABELS])
     s = probs.sum()
     probs = probs / s if s > 0 else np.ones(_N_GOEMO) / _N_GOEMO
@@ -81,15 +76,20 @@ class ContextEngineService:
         self.redis  = aioredis.from_url(redis_url, decode_responses=True)
         self.qdrant = AsyncQdrantClient(url=qdrant_url)
         self.collection_name = "episodic_memory"
-        self.embedder    = SentenceTransformer('all-MiniLM-L6-v2')
-        self.vector_size = 384
-
-        self.decay_factor       = 0.95
-        self.window_size_seconds = 3600  # 1-hour sliding window for volatility
+        
+        self.embedder              = None
+        self.vector_size           = 384
+        self.decay_factor          = 0.95
+        self.window_size_seconds   = 3600
+        
+        self.qdrant_write_queue = asyncio.Queue(maxsize=1000)
+        self.redis_write_queue = asyncio.Queue(maxsize=1000)
 
     async def initialize(self):
-        """Ensure Qdrant collection exists and is properly indexed."""
         try:
+            from sentence_transformers import SentenceTransformer
+            self.embedder = SentenceTransformer('all-MiniLM-L6-v2')
+            
             collections = await self.qdrant.get_collections()
             if not any(c.name == self.collection_name for c in collections.collections):
                 await self.qdrant.create_collection(
@@ -102,13 +102,37 @@ class ContextEngineService:
                     field_schema=models.PayloadSchemaType.KEYWORD
                 )
                 logger.info("Qdrant collection and indexes initialized.")
+            asyncio.create_task(self._qdrant_worker())
+            asyncio.create_task(self._redis_worker())
         except Exception as e:
-            logger.error(f"Failed to initialize Qdrant: {e}")
+            logger.error(f"Failed to initialize ContextEngine: {e}", exc_info=True)
+
+    async def _qdrant_worker(self):
+        while True:
+            try:
+                task = await self.qdrant_write_queue.get()
+                await self.save_to_episodic_memory(**task)
+                self.qdrant_write_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Qdrant worker error: {e}")
+
+    async def _redis_worker(self):
+        while True:
+            try:
+                task = await self.redis_write_queue.get()
+                await self._store_embedding(task["key"], task["embedding"])
+                self.redis_write_queue.task_done()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Redis worker error: {e}")
 
     async def calculate_user_baseline(self, user_id: str, current_embedding: List[float] = None) -> Dict[str, float]:
-        """Fetch long-term episodic memory from Qdrant for this user and topic."""
+        zero_res = {"historical_pos": 0.0, "historical_neu": 0.0, "historical_neg": 0.0, "topic_resonance": 0.0}
         if not current_embedding or not user_id:
-            return {"historical_valence": 0.0, "topic_resonance": 0.0}
+            return zero_res
 
         try:
             search_result = await asyncio.wait_for(
@@ -120,45 +144,54 @@ class ContextEngineService:
                     ),
                     limit=5,
                 ),
-                timeout=0.5,  # 500 ms circuit breaker
+                timeout=1.5,
             )
 
             if not search_result:
-                return {"historical_valence": 0.0, "topic_resonance": 0.0}
+                return zero_res
 
             total_score = sum(hit.score for hit in search_result)
             if total_score == 0:
-                return {"historical_valence": 0.0, "topic_resonance": 0.0}
+                return zero_res
 
-            weighted_valence = sum(
-                hit.payload.get("valence", 0) * (hit.score / total_score)
-                for hit in search_result
-            )
+            pos, neu, neg = 0.0, 0.0, 0.0
+            _emo_pos = {'admiration', 'amusement', 'approval', 'caring', 'desire', 'excitement', 'gratitude', 'joy', 'love', 'optimism', 'pride', 'relief'}
+            _emo_neg = {'anger', 'annoyance', 'disappointment', 'disapproval', 'disgust', 'embarrassment', 'fear', 'grief', 'nervousness', 'remorse', 'sadness'}
+
+            for hit in search_result:
+                w = hit.score / total_score
+                emo = hit.payload.get("dominant_emotion", "neutral")
+                if emo in _emo_pos:
+                    pos += w
+                elif emo in _emo_neg:
+                    neg += w
+                else:
+                    neu += w
+
             return {
-                "historical_valence": float(weighted_valence),
-                "topic_resonance":    float(total_score / len(search_result)),
+                "historical_pos": float(pos),
+                "historical_neu": float(neu),
+                "historical_neg": float(neg),
+                "topic_resonance": float(total_score / len(search_result)),
             }
         except asyncio.TimeoutError:
             logger.warning(f"Qdrant query timed out for user {user_id} — using zero baseline")
-            return {"historical_valence": 0.0, "topic_resonance": 0.0}
+            return zero_res
         except Exception as e:
             logger.warning(f"Failed to fetch baseline from Qdrant: {e}")
-            return {"historical_valence": 0.0, "topic_resonance": 0.0}
+            return zero_res
 
     async def update_working_memory(self, user_id: str, current_valence: float, linguistic_markers: Dict) -> float:
-        """Update Redis working-memory window and return EMA volatility."""
         if not user_id:
             return 0.0
 
-        now = time.time()
-        window_cutoff   = now - self.window_size_seconds
-        state_key       = f"context:user:{user_id}:state"
-        valence_key     = f"context:user:{user_id}:valence_window"
-        linguistic_key  = f"context:user:{user_id}:linguistic_window"
+        now            = time.time()
+        window_cutoff  = now - self.window_size_seconds
+        valence_key    = f"context:user:{user_id}:valence_window"
+        linguistic_key = f"context:user:{user_id}:linguistic_window"
+        state_key      = f"context:user:{user_id}:state"
 
         try:
-            # Ensure current_valence is a plain Python float before it enters
-            # json.dumps — numpy 2.0 scalars are not JSON-serialisable.
             _valence = float(current_valence)
             async with self.redis.pipeline(transaction=True) as pipe:
                 pipe.zremrangebyscore(valence_key,    "-inf", window_cutoff)
@@ -176,19 +209,25 @@ class ContextEngineService:
             current_variance = float(np.var(recent_valences)) if len(recent_valences) > 1 else 0.0
             prev_volatility  = float(prev_state.get("current_volatility", 0.0))
             new_volatility   = float(self.decay_factor * prev_volatility + (1 - self.decay_factor) * current_variance)
+            baseline_valence = float(np.mean(recent_valences)) if recent_valences else _valence
 
-            await self.redis.hset(state_key, mapping={
-                "current_volatility": new_volatility,
-                "last_message_ts":    float(now),
-                "baseline_valence":   float(np.mean(recent_valences)) if recent_valences else _valence,
-            })
+            _USER_TTL = 86400
+            async with self.redis.pipeline(transaction=True) as pipe2:
+                pipe2.hset(state_key, mapping={
+                    "current_volatility": new_volatility,
+                    "last_message_ts":    float(now),
+                    "baseline_valence":   baseline_valence,
+                })
+                pipe2.expire(state_key,      _USER_TTL)
+                pipe2.expire(valence_key,    _USER_TTL)
+                pipe2.expire(linguistic_key, _USER_TTL)
+                await pipe2.execute()
             return new_volatility
         except Exception as e:
-            logger.error(f"Redis memory update failed: {e}")
+            logger.error(f"Redis working-memory update failed: {e}", exc_info=True)
             return 0.0
 
     async def _store_embedding(self, key: str, embedding: List[float]):
-        """Persist embedding in Redis for the next message's topic-coherence computation."""
         try:
             await self.redis.set(key, json.dumps(embedding), ex=86400 * 7)
         except Exception as e:
@@ -203,37 +242,42 @@ class ContextEngineService:
         current_embedding:  List[float],
         last_emotions:      Dict,
         is_continuation:    bool = False,
+        message_text:       str = "",
+        top_emotion:        str = "neutral",
     ) -> List[float]:
-        """
-        Build the 23-dim CDM context vector for the current message.
-
-        is_continuation=True: rapid-fire fragment of the same conversational turn.
-        Dispatches to _build_continuation_vector() which keeps the CDM state as-is,
-        zeros velocity/acceleration, and skips Qdrant and valence-history writes.
-
-        Reads Redis state written by aggregation_service for the PREVIOUS message,
-        so all features capture momentum and trajectory rather than instantaneous values.
-        """
         if is_continuation:
             return await self._build_continuation_vector(
                 conversation_id, user_id, linguistic_markers, current_embedding, last_emotions
             )
 
-        # Qdrant + working-memory are independent — run in parallel
         baseline_task = self.calculate_user_baseline(user_id, current_embedding)
         memory_task   = self.update_working_memory(user_id, current_valence, linguistic_markers)
         baseline_data, volatility = await asyncio.gather(baseline_task, memory_task)
 
-        # ── Read conversation hash (written by aggregation_service for T-1) ────
-        state = await self.redis.hgetall(f"conversation:{conversation_id}")
+        _spk            = f"conv:{conversation_id}:spk:{user_id}"
+        last_embed_key  = f"{_spk}:last_embed"
+        state_hist_key  = f"{_spk}:state_hist"
+        cdm_state_key   = f"{_spk}:cdm_state"
+        hmm_alpha_key   = f"{_spk}:hmm_alpha"
+        intent_stab_key = f"{_spk}:intent_stab"
 
-        # ── Velocity & Acceleration ────────────────────────────────────────────
-        hist_raw = await self.redis.lrange(f"conv:{conversation_id}:valence_hist", 0, 2)
-        hist = [float(x) for x in hist_raw]
-        velocity     = hist[0] - hist[1] if len(hist) >= 2 else 0.0
-        acceleration = (velocity - (hist[1] - hist[2])) if len(hist) >= 3 else 0.0
+        (
+            state, spk_seq_raw, last_embed_json,
+            raw_prev, hmm_raw, stab_raw, state_hist_raw
+        ) = await asyncio.gather(
+            self.redis.hgetall(f"conversation:{conversation_id}"),
+            self.redis.get(f"{_spk}:valence_seq"),
+            self.redis.get(last_embed_key),
+            self.redis.get(cdm_state_key),
+            self.redis.get(hmm_alpha_key),
+            self.redis.get(intent_stab_key),
+            self.redis.lrange(state_hist_key, 0, 2),
+        )
 
-        # ── Speaker Divergence ─────────────────────────────────────────────────
+        spk_seq      = json.loads(spk_seq_raw) if spk_seq_raw else []
+        velocity     = float(spk_seq[-1] - spk_seq[-2]) if len(spk_seq) >= 2 else 0.0
+        acceleration = float((spk_seq[-1] - spk_seq[-2]) - (spk_seq[-2] - spk_seq[-3])) if len(spk_seq) >= 3 else 0.0
+
         spk_vals = []
         for k, v in state.items():
             if k.startswith("spk:"):
@@ -243,9 +287,6 @@ class ContextEngineService:
                     pass
         speaker_divergence = float(np.std(spk_vals)) if len(spk_vals) >= 2 else 0.0
 
-        # ── Topic Coherence ────────────────────────────────────────────────────
-        last_embed_key  = f"conv:{conversation_id}:last_embed"
-        last_embed_json = await self.redis.get(last_embed_key)
         topic_coherence = 0.0
         if last_embed_json and current_embedding:
             try:
@@ -256,61 +297,74 @@ class ContextEngineService:
                     topic_coherence = float(np.dot(le, ce) / denom)
             except Exception:
                 pass
-        asyncio.create_task(self._store_embedding(last_embed_key, current_embedding))
+        try:
+            self.redis_write_queue.put_nowait({"key": last_embed_key, "embedding": current_embedding})
+        except asyncio.QueueFull:
+            pass
 
-        # ── Emotion Entropy (previous turn's GoEmotions distribution) ─────────
         emotion_entropy = _emotion_entropy(last_emotions)
+        prev_state_idx  = int(raw_prev) if raw_prev is not None else 0
+        hmm_alpha       = np.array(json.loads(hmm_raw), dtype=np.float64) if hmm_raw else None
+        prev_stab_cnt   = int(stab_raw) if stab_raw else 0
+        state_hist      = [int(x) for x in state_hist_raw]
 
-        # ── CDM DFSM ───────────────────────────────────────────────────────────
-        state_hist_key  = f"conv:{conversation_id}:state_hist"
-        cdm_state_key   = f"conv:{conversation_id}:cdm_state"
-
-        raw_prev = await self.redis.get(cdm_state_key)
-        prev_state_idx = int(raw_prev) if raw_prev is not None else 0
-
-        current_state_idx = CDM.transition(
-            prev_state_idx, velocity, emotion_entropy, speaker_divergence, topic_coherence
+        diag = CDM.transition(
+            prev_state_idx, velocity, emotion_entropy, topic_coherence,
+            hmm_alpha=hmm_alpha,
+            top_emotion=top_emotion,
+            message_text=message_text,
         )
-        cdm_vec = CDM.one_hot(current_state_idx)
+        current_state_idx = diag.current_state
+        cdm_vec           = diag.one_hot
+        entry_abruptness  = 1.0 - diag.transition_probability
 
-        # ── State Residency & Transition Path ──────────────────────────────────
-        state_hist_raw = await self.redis.lrange(state_hist_key, 0, 2)
-        state_hist     = [int(x) for x in state_hist_raw]
-
-        residency = 0
+        residency = 1
         for s in state_hist:
             if s == current_state_idx:
                 residency += 1
             else:
                 break
-        state_residency  = min(residency / 10.0, 1.0)
-        entry_abruptness = CDM.entry_abruptness(prev_state_idx, current_state_idx)
+        state_residency = min(residency / 10.0, 1.0)
 
-        transition_path = [s / 7.0 for s in state_hist[:3]]
+        transition_path = [s / float(N_CDM_STATES) for s in state_hist[:3]]
         while len(transition_path) < 3:
-            transition_path.append(current_state_idx / 7.0)
+            transition_path.append(current_state_idx / float(N_CDM_STATES))
 
-        await self.redis.set(cdm_state_key, str(current_state_idx), ex=86400 * 7)
-        await self.redis.lpush(state_hist_key, str(current_state_idx))
-        await self.redis.ltrim(state_hist_key, 0, 9)
-        await self.redis.expire(state_hist_key, 86400 * 7)
+        new_stab_cnt = prev_stab_cnt + 1 if current_state_idx == prev_state_idx else 1
+        intent_stability = min(new_stab_cnt / 10.0, 1.0)
 
-        ctx = np.zeros(CONTEXT_DIM, dtype=np.float64)
-        ctx[0:7]  = cdm_vec
-        ctx[7]    = state_residency
-        ctx[8:11] = transition_path[:3]
-        ctx[11]   = entry_abruptness
-        ctx[12]   = topic_coherence
-        ctx[13]   = emotion_entropy
-        ctx[14]   = speaker_divergence
-        ctx[15]   = velocity
-        ctx[16]   = acceleration
-        ctx[17]   = baseline_data["historical_valence"]
-        ctx[18]   = baseline_data["topic_resonance"]
-        ctx[19]   = volatility
-        ctx[20]   = current_valence
-        ctx[21]   = float(linguistic_markers.get("length", 0))
-        ctx[22]   = float(linguistic_markers.get("latency_ms", 0))
+        async with self.redis.pipeline(transaction=True) as pipe:
+            pipe.set(cdm_state_key,  str(current_state_idx), ex=86400 * 7)
+            pipe.lpush(state_hist_key, str(current_state_idx))
+            pipe.ltrim(state_hist_key, 0, 9)
+            pipe.expire(state_hist_key, 86400 * 7)
+            pipe.set(hmm_alpha_key,   json.dumps([float(a) for a in diag.hmm_alpha_next]), ex=86400 * 7)
+            pipe.set(intent_stab_key, str(new_stab_cnt), ex=86400 * 7)
+            await pipe.execute()
+
+        ctx = np.zeros(CDM_CTX_DIM, dtype=np.float64)
+        ctx[CTX_CDM_PROBS]      = cdm_vec
+        ctx[CTX_RESIDENCY]      = state_residency
+        ctx[CTX_TRANSITION]     = transition_path[:3]
+        ctx[CTX_ABRUPTNESS]     = entry_abruptness
+        ctx[CTX_COHERENCE]      = topic_coherence
+        ctx[CTX_ENTROPY]        = emotion_entropy
+        ctx[CTX_SPK_DIVERGENCE] = speaker_divergence
+        ctx[CTX_VELOCITY]       = velocity
+        ctx[CTX_ACCELERATION]   = acceleration
+        ctx[CTX_HIST_POS]       = baseline_data["historical_pos"]
+        ctx[CTX_HIST_NEU]       = baseline_data["historical_neu"]
+        ctx[CTX_HIST_NEG]       = baseline_data["historical_neg"]
+        ctx[CTX_RESONANCE]      = baseline_data["topic_resonance"]
+        ctx[CTX_VOLATILITY]     = volatility
+        ctx[CTX_CURR_VALENCE]   = current_valence
+        ctx[CTX_MSG_LENGTH]     = float(linguistic_markers.get("length", 0))
+        ctx[CTX_LATENCY_MS]     = float(linguistic_markers.get("latency_ms", 0))
+        ctx[CTX_HMM_CONF]       = diag.hmm_confidence
+        ctx[CTX_HMM_ENTROPY]    = diag.hmm_state_entropy
+        ctx[CTX_HMM_EMISSION]   = diag.hmm_emission_logprob
+        ctx[CTX_HMM_NEXT3]      = diag.hmm_top3_next[:3]
+        ctx[CTX_INTENT_STAB]    = intent_stability
         return ctx.tolist()
 
     async def _build_continuation_vector(
@@ -321,30 +375,17 @@ class ContextEngineService:
         current_embedding:  List[float],
         last_emotions:      Dict,
     ) -> List[float]:
-        """
-        Lightweight 23-dim vector for is_continuation=True fragments.
-
-        Kept  (semantic content still changes per fragment):
-          topic_coherence, emotion_entropy, speaker_divergence, embedding storage.
-
-        Suppressed (prevents DFSM pollution from Enter-key bursts):
-          CDM.transition()  — CDM state held as-is
-          velocity / acceleration — set to 0.0
-          state_hist write  — residency counts the fragment correctly
-          valence_hist write — no new emotional turn
-          Qdrant call        — skipped (no new episodic anchor)
-        """
-        cdm_state_key  = f"conv:{conversation_id}:cdm_state"
-        state_hist_key = f"conv:{conversation_id}:state_hist"
+        _spk           = f"conv:{conversation_id}:spk:{user_id}"
+        cdm_state_key  = f"{_spk}:cdm_state"
+        state_hist_key = f"{_spk}:state_hist"
 
         raw_state     = await self.redis.get(cdm_state_key)
         current_state = int(raw_state) if raw_state is not None else 0
         cdm_vec       = CDM.one_hot(current_state)
 
         state_hist_raw = await self.redis.lrange(state_hist_key, 0, 2)
-        state_hist     = [int(x) for x in state_hist_raw]
-        # Count residency including the current fragment
-        residency = 1
+        state_hist = [int(x) for x in state_hist_raw]
+        residency  = 1
         for s in state_hist:
             if s == current_state:
                 residency += 1
@@ -352,11 +393,10 @@ class ContextEngineService:
                 break
         state_residency = min(residency / 10.0, 1.0)
 
-        transition_path = [s / 7.0 for s in state_hist[:3]]
+        transition_path = [s / float(N_CDM_STATES) for s in state_hist[:3]]
         while len(transition_path) < 3:
-            transition_path.append(current_state / 7.0)
+            transition_path.append(current_state / float(N_CDM_STATES))
 
-        # Read existing volatility without writing a new data point
         try:
             user_state = await self.redis.hgetall(f"context:user:{user_id}:state")
             volatility = float(user_state.get("current_volatility", 0.0))
@@ -375,7 +415,7 @@ class ContextEngineService:
                     pass
         speaker_divergence = float(np.std(spk_vals)) if len(spk_vals) >= 2 else 0.0
 
-        last_embed_key  = f"conv:{conversation_id}:last_embed"
+        last_embed_key  = f"{_spk}:last_embed"
         last_embed_json = await self.redis.get(last_embed_key)
         topic_coherence = 0.0
         if last_embed_json and current_embedding:
@@ -387,34 +427,48 @@ class ContextEngineService:
                     topic_coherence = float(np.dot(le, ce) / denom)
             except Exception:
                 pass
-        asyncio.create_task(self._store_embedding(last_embed_key, current_embedding))
+
+        try:
+            self.redis_write_queue.put_nowait({"key": last_embed_key, "embedding": current_embedding})
+        except asyncio.QueueFull:
+            pass
 
         emotion_entropy = _emotion_entropy(last_emotions)
 
-        ctx = np.zeros(CONTEXT_DIM, dtype=np.float64)
-        ctx[0:7]  = cdm_vec
-        ctx[7]    = state_residency
-        ctx[8:11] = transition_path[:3]
-        ctx[11]   = 0.0              # entry_abruptness: no transition
-        ctx[12]   = topic_coherence
-        ctx[13]   = emotion_entropy
-        ctx[14]   = speaker_divergence
-        ctx[15]   = 0.0              # velocity: no new turn
-        ctx[16]   = 0.0              # acceleration: no new turn
-        ctx[17]   = 0.0              # historical_valence: Qdrant skipped
-        ctx[18]   = 0.0              # topic_resonance: Qdrant skipped
-        ctx[19]   = volatility
-        ctx[20]   = current_ema_valence
-        ctx[21]   = float(linguistic_markers.get("length", 0))
-        ctx[22]   = float(linguistic_markers.get("latency_ms", 0))
+        hmm_alpha_key   = f"{_spk}:hmm_alpha"
+        intent_stab_key = f"{_spk}:intent_stab"
+        hmm_raw, stab_raw = await asyncio.gather(
+            self.redis.get(hmm_alpha_key),
+            self.redis.get(intent_stab_key),
+        )
+        hmm_alpha        = np.array(json.loads(hmm_raw), dtype=np.float64) if hmm_raw else np.ones(N_CDM_STATES) / N_CDM_STATES
+        intent_stability = min(int(stab_raw or 0) / 10.0, 1.0)
+        hmm_conf         = float(hmm_alpha.max())
+        hmm_ent          = float(-np.sum(hmm_alpha * np.log(hmm_alpha + 1e-12)))
+        top3_next        = CDM.get_next_probs(current_state)
+
+        ctx = np.zeros(CDM_CTX_DIM, dtype=np.float64)
+        ctx[CTX_CDM_PROBS]      = cdm_vec
+        ctx[CTX_RESIDENCY]      = state_residency
+        ctx[CTX_TRANSITION]     = transition_path[:3]
+        ctx[CTX_COHERENCE]      = topic_coherence
+        ctx[CTX_ENTROPY]        = emotion_entropy
+        ctx[CTX_SPK_DIVERGENCE] = speaker_divergence
+        ctx[CTX_VOLATILITY]     = volatility
+        ctx[CTX_CURR_VALENCE]   = current_ema_valence
+        ctx[CTX_MSG_LENGTH]     = float(linguistic_markers.get("length", 0))
+        ctx[CTX_LATENCY_MS]     = float(linguistic_markers.get("latency_ms", 0))
+        ctx[CTX_HMM_CONF]       = hmm_conf
+        ctx[CTX_HMM_ENTROPY]    = hmm_ent
+        ctx[CTX_HMM_NEXT3]      = top3_next[:3]
+        ctx[CTX_INTENT_STAB]    = intent_stability
         return ctx.tolist()
 
     async def save_to_episodic_memory(
         self, user_id: str, text: str, valence: float,
-        current_embedding: List[float], dominant_emotion: str
+        embedding: List[float], dominant_emotion: str
     ):
-        """Save this interaction to Qdrant for future episodic memory retrieval."""
-        if not user_id or not current_embedding:
+        if not user_id or not embedding:
             return
 
         try:
@@ -424,13 +478,13 @@ class ContextEngineService:
                     points=[
                         models.PointStruct(
                             id=str(uuid.uuid4()),
-                            vector=current_embedding,
+                            vector=embedding,
                             payload={
                                 "user_id":          user_id,
                                 "timestamp":        time.time(),
                                 "valence":          float(valence),
                                 "dominant_emotion": dominant_emotion,
-                                "text":             text[:500],  # cap to avoid large payloads
+                                "text":             text[:500],
                             }
                         )
                     ]
@@ -449,24 +503,97 @@ context_engine = ContextEngineService(
 )
 
 
+async def _background_hmm_training():
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, train_cdm_hmm.ensure_model)
+    _cdm_reload_hmm()
+    logger.info("CDM HMM reloaded after background training.")
+
+
 @app.on_event("startup")
 async def startup_event():
-    logger.info("Initializing Context Engine (CDM 23-dim)...")
+    logger.info("Initializing Context Engine (CDM v4.0 — 15 intent states, 40-dim)...")
+    _cdm_reload_hmm()
     await context_engine.initialize()
+    
     await register_module(
         context_engine.redis,
         "context_engine",
         required=False,
         schema="context_vector",
     )
+    
     asyncio.create_task(redis_listener())
+    asyncio.create_task(_dlq_drainer())
+
+    if os.getenv("TRAIN_HMM_ON_STARTUP", "false").lower() == "true":
+        asyncio.create_task(_background_hmm_training())
+        logger.info("HMM training started in background (TRAIN_HMM_ON_STARTUP=True).")
+    else:
+        logger.info("Skipping HMM training (TRAIN_HMM_ON_STARTUP is disabled).")
+
+
+async def _dlq_drainer():
+    dlq_name   = "preprocessed_stream_dlq"
+    group_name = "context_engine_dlq_group"
+    client_id  = "dlq_drainer_1"
+
+    try:
+        await context_engine.redis.xgroup_create(dlq_name, group_name, mkstream=True)
+    except Exception as e:
+        if "BUSYGROUP" not in str(e):
+            logger.warning(f"DLQ group create: {e}")
+
+    logger.info("DLQ drainer started — monitoring preprocessed_stream_dlq.")
+
+    while True:
+        try:
+            try:
+                _, stale, _ = await context_engine.redis.xautoclaim(
+                    dlq_name, group_name, client_id,
+                    min_idle_time=30_000, start_id="0-0", count=10,
+                )
+                messages = [(dlq_name, stale)] if stale else None
+            except Exception:
+                messages = None
+
+            if not messages:
+                messages = await context_engine.redis.xreadgroup(
+                    group_name, client_id, {dlq_name: ">"}, count=10, block=5000
+                )
+
+            if messages:
+                for _, msgs in messages:
+                    for msg_id, data in msgs:
+                        try:
+                            raw   = json.loads(data.get("raw_data", "{}"))
+                            mid   = raw.get("message_id", "?")
+                            cid   = raw.get("conversation_id", "?")
+                            error = data.get("error", "unknown")
+                        except Exception:
+                            mid, cid, error = "?", "?", data.get("error", "unknown")
+                        logger.error(
+                            "dlq_message_drained",
+                            extra={
+                                "event":           "dlq_message_drained",
+                                "message_id":      mid,
+                                "conversation_id": cid,
+                                "error":           error,
+                            },
+                        )
+                        await context_engine.redis.xack(dlq_name, group_name, msg_id)
+        except Exception as e:
+            if "Timeout" in str(e) or "timeout" in str(e):
+                continue
+            logger.warning(f"DLQ drainer loop error: {e}")
+            await asyncio.sleep(5)
 
 
 async def redis_listener():
-    """Read preprocessed_stream, build CDM context vectors, publish to partial_analysis_stream."""
     group_name  = "context_engine_group"
     client_id   = f"context_engine_{uuid.uuid4().hex[:6]}"
     stream_name = "preprocessed_stream"
+    dlq_name    = "preprocessed_stream_dlq"
 
     try:
         await context_engine.redis.xgroup_create(stream_name, group_name, mkstream=True)
@@ -476,14 +603,16 @@ async def redis_listener():
 
     logger.info("context_engine_listening", extra={"event": "stream_listen_start", "stream": stream_name, "group": group_name})
 
+    last_stale_id = '0-0'
+
     while True:
         try:
-            # PEL recovery — reclaim messages idle >30 s (crash-before-ACK protection)
             try:
-                _, stale, _ = await context_engine.redis.xautoclaim(
+                next_stale_id, stale, _ = await context_engine.redis.xautoclaim(
                     stream_name, group_name, client_id,
-                    min_idle_time=30_000, start_id='0-0', count=10
+                    min_idle_time=30_000, start_id=last_stale_id, count=10
                 )
+                last_stale_id = next_stale_id if next_stale_id != '0-0' else '0-0'
                 messages = [(stream_name, stale)] if stale else None
             except Exception:
                 messages = None
@@ -500,18 +629,23 @@ async def redis_listener():
                         user_id         = msg_data.get("user_id", "anonymous")
                         conversation_id = msg_data.get("conversation_id", "")
                         raw_msg_id      = msg_data.get("message_id", "")
+                        is_continuation = str(msg_data.get("is_continuation", "false")).lower() == "true"
                         mlog = logger.bind(message_id=raw_msg_id, conversation_id=conversation_id, user_id=user_id)
                         try:
-
-                            # Previous conversation state written by aggregation_service
                             state        = await context_engine.redis.hgetall(f"conversation:{conversation_id}")
                             prev_valence = float(state.get("average_valence", 0.0)) if state else 0.0
                             prev_emotion = state.get("dominant_emotion", "neutral") if state else "neutral"
 
-                            # Previous-turn GoEmotions distribution (for entropy feature)
                             try:
-                                last_emotions = json.loads(state.get("last_message_emotions", "{}") or "{}")
-                            except json.JSONDecodeError:
+                                raw_emotions = json.loads(state.get("last_message_emotions", "{}") or "{}")
+                                last_emotions = {}
+                                for k, v in raw_emotions.items():
+                                    if k in _GOEMOTION_LABELS:
+                                        try:
+                                            last_emotions[k] = float(v)
+                                        except (ValueError, TypeError):
+                                            pass
+                            except Exception:
                                 last_emotions = {}
 
                             raw_emb = await asyncio.get_running_loop().run_in_executor(
@@ -519,10 +653,20 @@ async def redis_listener():
                             )
                             embedding = raw_emb.tolist()
 
+                            _now = time.time()
+                            _last_ts = float(state.get("last_updated", 0.0) or 0.0) if state else 0.0
+                            inter_msg_latency_ms = (_now - _last_ts) * 1000.0 if _last_ts > 0 else 0.0
+
                             linguistic_markers = {
                                 "length":     len(text),
-                                "latency_ms": float(msg_data.get("latency_ms", 0)),
+                                "latency_ms": inter_msg_latency_ms,
                             }
+
+                            top_emotion = max(last_emotions, key=last_emotions.get) if last_emotions else "neutral"
+
+                            _prev_embed_raw = await context_engine.redis.get(
+                                f"conv:{conversation_id}:spk:{user_id}:last_embed"
+                            )
 
                             try:
                                 context_vector = await asyncio.wait_for(
@@ -533,46 +677,66 @@ async def redis_listener():
                                         linguistic_markers,
                                         embedding,
                                         last_emotions,
+                                        is_continuation=is_continuation,
+                                        message_text=text,
+                                        top_emotion=top_emotion,
                                     ),
-                                    timeout=1.5,  # overall circuit breaker
+                                    timeout=1.5,
                                 )
                             except asyncio.TimeoutError:
                                 logger.warning(
                                     f"build_context_vector timed out for {raw_msg_id} "
-                                    f"— publishing zero {CONTEXT_DIM}-dim vector"
+                                    f"— publishing zero {CDM_CTX_DIM}-dim vector"
                                 )
-                                context_vector = [0.0] * CONTEXT_DIM
+                                context_vector = [0.0] * CDM_CTX_DIM
 
-                            asyncio.create_task(
-                                context_engine.save_to_episodic_memory(
-                                    user_id, text, prev_valence, embedding, prev_emotion
-                                )
-                            )
+                            if _prev_embed_raw:
+                                try:
+                                    context_engine.qdrant_write_queue.put_nowait({
+                                        "user_id":          user_id,
+                                        "text":             "",
+                                        "valence":          prev_valence,
+                                        "embedding":        json.loads(_prev_embed_raw),
+                                        "dominant_emotion": prev_emotion,
+                                    })
+                                except asyncio.QueueFull:
+                                    logger.warning(f"Qdrant write queue full for msg {raw_msg_id}, dropping episodic memory.")
 
-                            # Publish raw vector + named scalars so consumers never
-                            # need to guess indices. If CONTEXT_DIM changes, only
-                            # shared/constants.py and this block need updating.
-                            # ── DIAG-1: prove vector is not all-zeros before publish ──
                             _nz = sum(1 for v in context_vector if v != 0.0)
-                            logger.warning(
+                            logger.debug(
                                 f"[DIAG-1] CE publish msg={raw_msg_id} "
                                 f"dim={len(context_vector)} nonzero={_nz} "
-                                f"cdm={[round(float(v),2) for v in context_vector[0:7]]} "
-                                f"hist_val={float(context_vector[CTX_HIST_VALENCE]):.4f} "
-                                f"cur_val={float(context_vector[CTX_CURR_VALENCE]):.4f}"
+                                f"cdm={[round(float(v),2) for v in context_vector[0:N_CDM_STATES]]} "
+                                f"hist_pos={float(context_vector[CTX_HIST_POS]):.4f} "
+                                f"cur_val={float(context_vector[CTX_CURR_VALENCE]):.4f} "
+                                f"hmm_conf={float(context_vector[CTX_HMM_CONF]):.3f}"
                             )
+                            
+                            _appraisal = compute_appraisal({
+                                "entry_abruptness":  float(context_vector[CTX_ABRUPTNESS]),
+                                "current_valence":   float(context_vector[CTX_CURR_VALENCE]),
+                                "topic_resonance":   float(context_vector[CTX_RESONANCE]),
+                                "volatility":        float(context_vector[CTX_VOLATILITY]),
+                                "speaker_divergence": float(context_vector[CTX_SPK_DIVERGENCE]),
+                            })
+
                             await context_engine.redis.xadd(
                                 "partial_analysis_stream",
                                 {
-                                    "message_id":          raw_msg_id,
-                                    "model_name":          "context_engine",
-                                    "context_vector":      json.dumps(context_vector),
-                                    "original_data":       json.dumps(msg_data),
-                                    "ctx_dim":             str(len(context_vector)),
-                                    "ctx_hist_valence":    str(context_vector[CTX_HIST_VALENCE]),
-                                    "ctx_topic_resonance": str(context_vector[CTX_RESONANCE]),
-                                    "ctx_volatility":      str(context_vector[CTX_VOLATILITY]),
-                                    "ctx_curr_valence":    str(context_vector[CTX_CURR_VALENCE]),
+                                    "message_id":               raw_msg_id,
+                                    "model_name":               "context_engine",
+                                    "context_vector":           json.dumps(context_vector),
+                                    "original_data":            json.dumps(msg_data),
+                                    "ctx_dim":                  str(len(context_vector)),
+                                    "ctx_hist_pos":             str(context_vector[CTX_HIST_POS]),
+                                    "ctx_hist_neu":             str(context_vector[CTX_HIST_NEU]),
+                                    "ctx_hist_neg":             str(context_vector[CTX_HIST_NEG]),
+                                    "ctx_topic_resonance":      str(context_vector[CTX_RESONANCE]),
+                                    "ctx_volatility":           str(context_vector[CTX_VOLATILITY]),
+                                    "ctx_curr_valence":         str(context_vector[CTX_CURR_VALENCE]),
+                                    "appraisal_novelty":        str(_appraisal["novelty"]),
+                                    "appraisal_goal_congruence": str(_appraisal["goal_congruence"]),
+                                    "appraisal_coping":         str(_appraisal["coping"]),
                                 },
                                 maxlen=STREAM_MAXLEN, approximate=True,
                             )
@@ -584,6 +748,10 @@ async def redis_listener():
                                 extra={"event": "ce_message_failed", "error_class": type(msg_err).__name__, "error": str(msg_err)},
                             )
                             try:
+                                await context_engine.redis.xadd(dlq_name, {
+                                    "raw_data": json.dumps(msg_data),
+                                    "error": str(msg_err)
+                                }, maxlen=STREAM_MAXLEN, approximate=True)
                                 await context_engine.redis.xack(stream_name, group_name, msg_id)
                             except Exception as ack_err:
                                 mlog.warning(
@@ -592,7 +760,16 @@ async def redis_listener():
                                 )
 
         except Exception as e:
-            logger.error("redis_listener_loop_error", extra={"event": "ce_listener_error", "error": str(e)})
+            if "NOGROUP" in str(e):
+                try:
+                    await context_engine.redis.xgroup_create(stream_name, group_name, mkstream=True)
+                    logger.warning("Re-created consumer group after NOGROUP error.",
+                                   extra={"stream": stream_name})
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error("xgroup_create_failed", extra={"error": str(cg_err)})
+            else:
+                logger.error("redis_listener_loop_error", extra={"event": "ce_listener_error", "error": str(e)})
             await asyncio.sleep(1)
 
 

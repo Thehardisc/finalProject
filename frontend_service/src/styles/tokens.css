@@ -1,0 +1,95 @@
+
+:root {
+  --emo-joy:           52  96%  48%;
+  --emo-excitement:    28  95%  50%;
+  --emo-anger:          2  72%  52%;
+  --emo-annoyance:     22  80%  48%;
+  --emo-fear:         275  50%  50%;
+  --emo-sadness:      215  62%  44%;
+  --emo-grief:        228  60%  30%;
+  --emo-disgust:       30  60%  30%;
+  --emo-disapproval:    2  44%  48%;
+  --emo-remorse:      240  14%  38%;
+  --emo-nervousness:  285  48%  50%;
+  --emo-disappointment:210  38%  42%;
+  --emo-confusion:    238  52%  54%;
+  --emo-surprise:      46  90%  46%;
+  --emo-admiration:   330  62%  58%;
+  --emo-amusement:     43  90%  46%;
+  --emo-curiosity:     46  86%  48%;
+  --emo-caring:       340  62%  62%;
+  --emo-gratitude:    132  58%  46%;
+  --emo-love:         330  80%  50%;
+  --emo-optimism:      46  95%  46%;
+  --emo-pride:        270  64%  48%;
+  --emo-approval:     142  50%  40%;
+  --emo-realization:  198  80%  44%;
+  --emo-relief:       192  44%  56%;
+  --emo-desire:       348  72%  44%;
+  --emo-embarrassment:330  44%  54%;
+  --emo-neutral:      30   16%  54%;
+
+  --orb-hue-positive: 145;
+  --orb-hue-neutral:   40;
+  --orb-hue-negative:  15;
+  --orb-sat:           40%;
+  --orb-lit:           70%;
+
+  --surface-base:       #FAF9F6;
+  --surface-raised:     #FFFFFF;
+  --surface-hover:      #F5F3EE;
+  --surface-border:     rgba(0, 0, 0, 0.07);
+  --surface-border-mid: rgba(0, 0, 0, 0.12);
+
+  --text-primary:   #1C1B1A;
+  --text-secondary: #6B6560;
+  --text-muted:     #9B958F;
+
+  --brand-blue:    #5B8A6A;
+  --brand-purple:  #B56E4F;
+  --brand-success: #3D9B6E;
+  --brand-warn:    #C47B2A;
+
+  --bubble-own-bg:      rgba(91, 138, 106, 0.10);
+  --bubble-other-bg:    rgba(0, 0, 0, 0.03);
+  --bubble-own-border:  rgba(91, 138, 106, 0.22);
+  --bubble-other-border: rgba(0, 0, 0, 0.08);
+
+  --glass-blur:   none;
+  --glass-bg:     #FFFFFF;
+  --glass-border: rgba(0, 0, 0, 0.07);
+
+  --spring:          cubic-bezier(0.34, 1.56, 0.64, 1);
+  --spring-duration: 280ms;
+  --ease-out:        cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --shift-duration:  960ms;
+  --shift-easing:    cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  --enter-duration:  260ms;
+  --enter-easing:    cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+
+@keyframes il-bubble-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.95); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+
+@keyframes il-fade-up {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+@keyframes il-orb-float {
+  0%,100% { transform: translate(0,   0  ) scale(1);    }
+  33%     { transform: translate(24px,-32px) scale(1.04); }
+  66%     { transform: translate(-20px,28px) scale(0.96); }
+}
+
+@keyframes il-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes il-pulse-dot {
+  0%,100% { opacity: 1;   transform: scale(1);   }
+  50%     { opacity: 0.4; transform: scale(0.75); }
+}

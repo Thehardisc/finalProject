@@ -1,18 +1,18 @@
 {
-  "input_dim": 67,
+  "input_dim": 79,
   "hidden_dim": 128,
   "num_layers": 2,
   "output_dim": 28,
   "dropout": 0.2,
   "lr": 0.001,
   "loss_fn": "mse",
-  "epochs": 200,
-  "patience": 30,
-  "n_train": 123,
-  "n_val": 24,
-  "n_test": 38,
-  "test_loss": 0.007137120608240366,
-  "top1_acc": 0.4777777777777778,
-  "top3_acc": 0.7833333333333333,
-  "best_epoch": 83
+  "epochs": 100,
+  "patience": 20,
+  "n_train": 44,
+  "n_val": 0,
+  "n_test": 23,
+  "test_loss": 0.006322553458934029,
+  "top1_acc": 0.47804878048780486,
+  "top3_acc": 0.8097560975609757,
+  "best_epoch": 44
 }

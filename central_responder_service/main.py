@@ -6,36 +6,51 @@ import time
 from collections import deque
 from typing import Optional
 
-# Add parent directory to path to import shared (must come before shared imports)
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-# import meta learner
 from meta_learner import (
     load_meta_learner,
     build_feature_vector,
     predict_with_meta_learner,
     calculate_feature_impacts,
     apply_context_correction,
+    _GOE_TO_EKMAN,
 )
 
-# import background trainer
 from trainer import start_trainer_thread
 
 from trajectory.inference import load_trajectory_model, run_trajectory_step
+from sarcasm_classifier import load_sarcasm_model
 
-import metrics as METRICS  # noqa: F401  (kept so the module is imported once at startup)
 from prometheus_client import start_http_server as _start_metrics_server
 
 from shared.utils.redis_client import RedisClient
 from shared.utils.logger import get_logger
 from shared.constants import (
-    CONTEXT_DIM, N_CDM_STATES,
-    CTX_HIST_VALENCE, CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
+    CDM_CTX_DIM, PRIOR_DIM, N_CDM_STATES, CDM_STATES,
+    CTX_HIST_POS, CTX_HIST_NEU, CTX_HIST_NEG,
+    CTX_RESONANCE, CTX_VOLATILITY, CTX_CURR_VALENCE,
     CTX_RESIDENCY, CTX_ABRUPTNESS,
+    EMOTION_LABELS as _EMOTION_LABELS,
+    GOE_TO_PLUTCHIK,
 )
 from shared.module_registry import ModuleRegistry
+from implicit_emotion import (
+    is_implicit_candidate,
+    should_override,
+    request_implicit_emotion,
+    store_message_for_history,
+    get_conv_history,
+)
 
 logger = get_logger("central_responder")
+
+_NEG_EMOTIONS = {"anger", "annoyance", "disapproval", "disgust", "sadness",
+                 "grief", "remorse", "disappointment", "fear", "nervousness",
+                 "embarrassment"}
+_POS_EMOTIONS = {"joy", "amusement", "admiration", "approval", "excitement",
+                 "love", "optimism", "pride", "caring", "gratitude", "desire",
+                 "relief"}
 
 redis_client = RedisClient()
 INPUT_STREAM  = "partial_analysis_stream"
@@ -43,15 +58,10 @@ GROUP_NAME    = "central_responder_group"
 CONSUMER_NAME = "responder_1"
 OUTPUT_STREAM = "emotion_stream"
 
-AGGREGATION_TIMEOUT_MS = 5000
-# How long to wait for optional modules after all required have arrived.
-# Tunable via env: set higher (e.g. 100 ms) if context_engine latency is >50 ms p50.
-OPTIONAL_TIMEOUT_MS = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "1000"))
+OPTIONAL_TIMEOUT_MS    = float(os.environ.get("OPTIONAL_TIMEOUT_MS", "1000"))
+TRAINER_EXTERNAL       = os.environ.get("TRAINER_EXTERNAL", "false").lower() == "true"
 
-# ── Module registry — populated in main() after Redis connects ──────────────────
-REGISTRY: Optional[ModuleRegistry] = None
-
-# ── Meta-learner ────────────────────────────────────────────────────────────────
+REGISTRY:     Optional[ModuleRegistry] = None
 META_LEARNER = load_meta_learner()
 if META_LEARNER is None:
     logger.warning("No compatible meta_weights.pkl found. Falling back to Rule-Based Aggregation until trainer finishes.")
@@ -75,22 +85,28 @@ else:
             pass
     logger.info("No valid model found. Missing ready file.")
 
-start_trainer_thread(on_model_reload)
-logger.info("Background meta-learner retraining daemon is ACTIVATED.")
+if TRAINER_EXTERNAL:
+    logger.info("TRAINER_EXTERNAL=true — trainer runs in its own container; listening for reload signals.")
+else:
+    start_trainer_thread(on_model_reload)
+    logger.info("Background meta-learner retraining daemon is ACTIVATED.")
 
 _model_dir = os.path.join(os.path.dirname(__file__), '..', 'models')
 TRAJECTORY_MODEL = load_trajectory_model(
-    model_path=os.path.join(_model_dir, 'trajectory_lstm.pt'),
-    config_path=os.path.join(_model_dir, 'trajectory_config.json'),
+    model_path=os.path.join(_model_dir, 'ede_model.pt'),
+    config_path=os.path.join(_model_dir, 'ede_config.json'),
 )
 if TRAJECTORY_MODEL is not None:
-    logger.info("Trajectory LSTM loaded — conversation direction prediction ACTIVE.")
+    logger.info("EDE loaded — conversation phase + trajectory prior ACTIVE.")
+
+SARCASM_MODEL = load_sarcasm_model(
+    model_path=os.path.join(_model_dir, 'sarcasm_clf.pt'),
+    config_path=os.path.join(_model_dir, 'sarcasm_clf_config.json'),
+)
+if SARCASM_MODEL is not None:
+    logger.info("Sarcasm classifier loaded — learned sarcasm_score ACTIVE.")
 
 
-# ── Aggregation helpers ─────────────────────────────────────────────────────────
-
-# Recently-completed message IDs — prevents re-processing late optional arrivals.
-# deque(maxlen) automatically evicts from the left when full.
 _completed_order: deque = deque(maxlen=500)
 _completed_ids:   set   = set()
 
@@ -104,7 +120,6 @@ def _mark_completed(msg_id: str) -> None:
 
 
 async def _do_aggregation(msg_id: str, info: dict, r) -> None:
-    """Execute aggregation and clean up pending state."""
     packets    = list(info["models"].values())
     agg_lat    = (time.time() - info["arrival_timestamp"]) * 1000
     try:
@@ -116,16 +131,10 @@ async def _do_aggregation(msg_id: str, info: dict, r) -> None:
 
 
 async def _optional_timeout(msg_id: str, r) -> None:
-    """
-    Fires OPTIONAL_TIMEOUT_MS after all required modules arrived.
-    Triggers aggregation with whatever optional modules have appeared so far.
-    If aggregation already ran (optional arrived in time), the 'aggregated'
-    flag prevents double-processing.
-    """
     await asyncio.sleep(OPTIONAL_TIMEOUT_MS / 1000.0)
     info = pending_aggregations.get(msg_id)
     if info and not info.get("aggregated"):
-        info["aggregated"] = True   # claim before any await
+        info["aggregated"] = True
         optional_present = set(info["models"].keys()) & (REGISTRY.optional if REGISTRY else set())
         logger.debug(
             f"[OPT TIMEOUT] {msg_id}: firing after {OPTIONAL_TIMEOUT_MS}ms  "
@@ -134,12 +143,38 @@ async def _optional_timeout(msg_id: str, r) -> None:
         await _do_aggregation(msg_id, info, r)
 
 
+async def _model_reload_listener() -> None:
+    while True:
+        try:
+            pubsub = redis_client.redis.pubsub()
+            await pubsub.subscribe("model_reload_signal")
+            logger.info("[ModelReload] Subscribed to 'model_reload_signal' (TRAINER_EXTERNAL=true).")
+            async for message in pubsub.listen():
+                if message["type"] != "message":
+                    continue
+                try:
+                    payload   = json.loads(message["data"])
+                    new_model = load_meta_learner()
+                    if new_model is not None:
+                        on_model_reload(new_model)
+                        logger.info(
+                            "model_hot_reload",
+                            extra={
+                                "event":         "model_hot_reload",
+                                "test_accuracy": payload.get("test_accuracy"),
+                                "trained_at":    payload.get("trained_at"),
+                            },
+                        )
+                    else:
+                        logger.warning("[ModelReload] Signal received but load_meta_learner() returned None.")
+                except Exception as e:
+                    logger.warning(f"[ModelReload] Failed to process reload signal: {e}")
+        except Exception as conn_err:
+            logger.warning(f"[ModelReload] Pub/sub connection lost ({conn_err}), reconnecting in 5s...")
+            await asyncio.sleep(5)
+
+
 async def _registry_refresh_loop(registry: ModuleRegistry) -> None:
-    """
-    Background task: re-reads module_registry Hash every 30 s.
-    The initial 5 s delay gives services time to register on startup before
-    the first scheduled refresh.
-    """
     await asyncio.sleep(5)
     while True:
         try:
@@ -150,15 +185,14 @@ async def _registry_refresh_loop(registry: ModuleRegistry) -> None:
         await asyncio.sleep(30)
 
 
-# ── Core aggregation logic ─────────────────────────────────────────────────────
-
 async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     logger.debug(f"Aggregating results for {message_id}...")
 
     original_data = partial_results[0].get("original_data", {}) if partial_results else {}
 
-    model_outputs  = {}
-    context_vector = None
+    model_outputs    = {}
+    context_vector   = None
+    appraisal_scores = None
     for res in partial_results:
         model_name = res.get("model_name")
         if model_name == "context_engine":
@@ -168,10 +202,18 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
                     context_vector = json.loads(raw_cv) if isinstance(raw_cv, str) else raw_cv
                 except (json.JSONDecodeError, TypeError):
                     context_vector = None
+            try:
+                appraisal_scores = {
+                    "novelty":         float(res.get("appraisal_novelty",         0.0)),
+                    "goal_congruence": float(res.get("appraisal_goal_congruence", 0.0)),
+                    "coping":          float(res.get("appraisal_coping",          0.5)),
+                }
+            except (TypeError, ValueError):
+                pass
         else:
             model_outputs[model_name] = res.get("scores", {})
 
-    ce_available = context_vector is not None and len(context_vector) == CONTEXT_DIM
+    ce_available = context_vector is not None and len(context_vector) == CDM_CTX_DIM
     _nz2 = sum(1 for v in context_vector if v != 0.0) if context_vector else 0
     logger.debug(
         f"[DIAG-2] CE parse msg={message_id} "
@@ -183,9 +225,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         if received_dim > 0:
             logger.warning(
                 f"[SCHEMA MISMATCH] context_vector dim={received_dim}, "
-                f"expected {CONTEXT_DIM}. Injecting zeros."
+                f"expected {CDM_CTX_DIM}. Injecting zeros."
             )
-        context_vector = [0.0] * CONTEXT_DIM
+        context_vector = [0.0] * CDM_CTX_DIM
 
     conv_id     = original_data.get("conversation_id", "conv-1")
     prev_emotion = "neutral"
@@ -196,11 +238,60 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     except Exception as e:
         logger.warning(f"Failed to fetch prev_emotion for {conv_id}: {e}")
 
-    fv = build_feature_vector(model_outputs, context_vector=context_vector)
-    dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc, gate_alpha = \
-        predict_with_meta_learner(META_LEARNER, fv)
+    traj_prior = [0.0] * PRIOR_DIM
+    try:
+        raw_prior = await r.get(f"trajectory:{conv_id}:prior")
+        if raw_prior:
+            parsed = json.loads(raw_prior)
+            if len(parsed) == PRIOR_DIM:
+                traj_prior = parsed
+    except Exception as _tpe:
+        logger.debug(f"Could not load trajectory prior for {conv_id}: {_tpe}")
 
-    # apply_context_correction is a no-op stub in v2 (gating network handles this natively)
+    _orig_text    = original_data.get("original_text", "")
+    _conv_history = await get_conv_history(r, conv_id)
+
+    learned_sarcasm = (
+        SARCASM_MODEL.predict(_orig_text, _conv_history)
+        if SARCASM_MODEL is not None and _orig_text
+        else 0.0
+    )
+    logger.debug(f"[Sarcasm] {message_id}: learned={learned_sarcasm:.3f}")
+
+    goe_raw_scores = model_outputs.get("go_emotions", {})
+    vad_scores = {
+        "valence":   float(goe_raw_scores.get("vad_valence",   0.0)),
+        "arousal":   float(goe_raw_scores.get("vad_arousal",   0.0)),
+        "dominance": float(goe_raw_scores.get("vad_dominance", 0.0)),
+    }
+
+    sender_id = original_data.get("user_id", "")
+    dynamics_scores = {"inertia": 0.0, "contagion": 0.0}
+    try:
+        raw_inertia   = await r.get(f"conv:{conv_id}:inertia:{sender_id}")
+        raw_contagion = await r.get(f"conv:{conv_id}:contagion")
+        if raw_inertia:
+            dynamics_scores["inertia"]   = float(raw_inertia)
+        if raw_contagion:
+            dynamics_scores["contagion"] = float(raw_contagion)
+    except Exception as _dyn_err:
+        logger.debug(f"Could not read dynamics for {conv_id}: {_dyn_err}")
+
+    fv = build_feature_vector(
+        model_outputs,
+        context_vector=context_vector,
+        trajectory_prior=traj_prior,
+        sarcasm_score=learned_sarcasm,
+        vad_scores=vad_scores,
+        dynamics_scores=dynamics_scores,
+        appraisal_scores=appraisal_scores,
+    )
+    decision_trace = []
+    dominant_emotion, meta_confidence, final_scores, sarcasm_score, conflict_desc, gate_alpha = \
+        predict_with_meta_learner(META_LEARNER, fv, trace=decision_trace)
+
+    ekman_group = final_scores.pop("ekman_group", None)
+
     corrected_scores, ctx_correction_weight = apply_context_correction(
         final_scores, context_vector, prev_emotion=prev_emotion
     )
@@ -209,15 +300,32 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         dominant_emotion = max(final_scores, key=final_scores.get)
         meta_confidence  = final_scores[dominant_emotion]
 
-    # ── AI Confidence & Anomaly Validation Gatekeeper ───────────────────────────
     bert_scores = model_outputs.get("basic_bert", {})
     bert_max_prob = max([float(v) for v in bert_scores.values()]) if bert_scores else 0.0
 
-    goe_scores = model_outputs.get("go_emotions", {})
-    goe_max_prob = max([float(v) for v in goe_scores.values()]) if goe_scores else 0.0
+    goe_scores_raw = model_outputs.get("go_emotions", {})
+    goe_scores = {k: float(v) for k, v in goe_scores_raw.items() if k in _EMOTION_LABELS}
+    goe_max_prob = max(goe_scores.values()) if goe_scores else 0.0
 
     is_anomaly = False
     anomaly_reason = []
+
+    _goe_top_lbl  = max(goe_scores, key=goe_scores.get) if goe_scores else None
+    _bert_top_lbl = max(bert_scores, key=bert_scores.get) if bert_scores else None
+    _vader_cmp0   = float(model_outputs.get("vader", {}).get("vader_compound", 0.0))
+    _consensus_contra = False
+    if _goe_top_lbl and float(sarcasm_score) < 0.5 and meta_confidence < 0.20:
+        _pos_consensus = (_goe_top_lbl in _POS_EMOTIONS
+                          and (_bert_top_lbl == "joy" or _vader_cmp0 >= 0.20))
+        _neg_consensus = (_goe_top_lbl in _NEG_EMOTIONS
+                          and (_bert_top_lbl in ("anger", "disgust", "fear", "sadness")
+                               or _vader_cmp0 <= -0.20))
+        _consensus_contra = ((_pos_consensus and dominant_emotion in _NEG_EMOTIONS)
+                             or (_neg_consensus and dominant_emotion in _POS_EMOTIONS))
+    if _consensus_contra:
+        anomaly_reason.append(
+            f"Expert consensus (GoE {_goe_top_lbl} · BERT {_bert_top_lbl} · VADER {_vader_cmp0:+.2f}) "
+            f"contradicts near-flat meta '{dominant_emotion}' ({meta_confidence:.2f})")
 
     if bert_max_prob < 0.35 and "basic_bert" in model_outputs:
         anomaly_reason.append(f"Low BERT Confidence ({bert_max_prob:.2f})")
@@ -228,22 +336,117 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     if conflict_desc:
         anomaly_reason.append(f"Model Divergence: {conflict_desc}")
 
-    if (bert_max_prob < 0.35 and goe_max_prob < 0.20) or (meta_confidence < 0.45 and conflict_desc):
+    if (bert_max_prob < 0.35 and goe_max_prob < 0.20) or (meta_confidence < 0.45 and conflict_desc) or _consensus_contra:
         is_anomaly = True
         logger.warning(f"[ANOMALY DETECTED] {message_id}: {', '.join(anomaly_reason)}")
 
-        # Fallback to the most confident NLP model to preserve information
         original_conflict_desc = conflict_desc
+        _is_hyperbole = bool(conflict_desc and "Hyperbole" in conflict_desc)
         conflict_desc = "Anomaly Fallback: Dynamic Recovery"
-        if goe_max_prob >= bert_max_prob and goe_scores:
-            final_scores = goe_scores
-        elif bert_scores:
-            final_scores = bert_scores
-        else:
-            final_scores = {"neutral": 1.0}
 
-        dominant_emotion = max(final_scores, key=final_scores.get) if final_scores else "neutral"
-        meta_confidence = final_scores.get(dominant_emotion, 0.0)
+        _vader_cmp = float(model_outputs.get("vader", {}).get("vader_compound", 0.0))
+        _bert_top  = max(bert_scores, key=bert_scores.get) if bert_scores else None
+        _bert_valence_clash = _bert_top in _NEG_EMOTIONS and _vader_cmp >= 0.30
+        if goe_scores and (_is_hyperbole or _consensus_contra or goe_max_prob >= bert_max_prob or _bert_valence_clash):
+            raw_scores = goe_scores
+            _anomaly_src = "raw GoEmotions" + (
+                " (hyperbole → GoE preferred)" if _is_hyperbole
+                else (" (expert consensus outvotes flat meta)" if _consensus_contra and goe_max_prob < bert_max_prob
+                      else (" (BERT valence-clash with VADER)" if _bert_valence_clash and goe_max_prob < bert_max_prob else "")))
+        elif bert_scores:
+            raw_scores, _anomaly_src = bert_scores, "raw BERT"
+        else:
+            raw_scores, _anomaly_src = {"neutral": 1.0}, "neutral default"
+
+        _w_raw = min(0.85, max(0.35, 1.0 - float(meta_confidence) / 0.45))
+        _blended = {e: (1.0 - _w_raw) * float(final_scores.get(e, 0.0)) + _w_raw * float(raw_scores.get(e, 0.0))
+                    for e in set(final_scores) | set(raw_scores)}
+        _prev_dominant = dominant_emotion
+        dominant_emotion = max(_blended, key=_blended.get) if _blended else "neutral"
+
+        if (dominant_emotion in _NEG_EMOTIONS and _prev_dominant not in _NEG_EMOTIONS
+                and _vader_cmp >= 0.30 and float(sarcasm_score) < 0.5):
+            decision_trace.append({
+                "step": "Anomaly fallback", "status": "suppressed",
+                "detail": (f"{', '.join(anomaly_reason)} — blend wanted '{dominant_emotion}', but a "
+                           f"positive→negative flip against VADER {_vader_cmp:+.2f} needs sarcasm evidence "
+                           f"(combined {float(sarcasm_score):.2f} < 0.50) — meta verdict kept"),
+                "label": _prev_dominant, "confidence": round(float(meta_confidence), 4),
+            })
+            dominant_emotion = _prev_dominant
+            conflict_desc = original_conflict_desc
+            is_anomaly = False
+        else:
+            final_scores = _blended
+            meta_confidence = final_scores.get(dominant_emotion, 0.0)
+            decision_trace.append({
+                "step": "Anomaly fallback", "status": "applied",
+                "detail": f"{', '.join(anomaly_reason)} — blended {_w_raw:.0%} toward {_anomaly_src}",
+                "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+            })
+    else:
+        decision_trace.append({
+            "step": "Anomaly fallback", "status": "skipped",
+            "detail": (f"not triggered — BERT max {bert_max_prob:.2f}, GoE max {goe_max_prob:.2f}, "
+                       f"meta {meta_confidence:.2f}, conflict {'present' if conflict_desc else 'none'} "
+                       f"(needs BERT<0.35 & GoE<0.20, or meta<0.45 with a conflict)"),
+            "label": None, "confidence": None,
+        })
+
+    _impl_override = False
+    _expert_conflict = bool(conflict_desc and (
+        "Expert conflict" in conflict_desc or "Hyperbole" in conflict_desc))
+    if _expert_conflict or is_implicit_candidate(dominant_emotion, goe_scores, _orig_text, meta_confidence):
+        _route_why = ("expert conflict / hyperbole" if _expert_conflict
+                      else ("neutral prediction" if dominant_emotion == "neutral"
+                            else f"low meta confidence ({meta_confidence:.2f})"))
+        _impl_result  = await request_implicit_emotion(r, message_id, _orig_text, _conv_history)
+        _vader_compound = float(model_outputs.get("vader", {}).get("vader_compound", 0.0))
+        if _impl_result and should_override(dominant_emotion, meta_confidence, _impl_result,
+                                            goe_scores=goe_scores, vader_compound=_vader_compound):
+            _prev_dom        = dominant_emotion
+            dominant_emotion = _impl_result["emotion"]
+            meta_confidence  = float(_impl_result["confidence"])
+            final_scores     = _impl_result.get("scores", {dominant_emotion: meta_confidence})
+            _impl_override   = True
+            decision_trace.append({
+                "step": "Implicit-emotion arbiter", "status": "applied",
+                "detail": f"Routed ({_route_why}); {_impl_result.get('method','?')} overrode '{_prev_dom}'",
+                "label": dominant_emotion, "confidence": round(meta_confidence, 4),
+            })
+            logger.info(
+                f"[ImplicitEmotion] {message_id}: {_prev_dom} → {dominant_emotion} "
+                f"(conf={meta_confidence:.2f}, method={_impl_result.get('method','?')})"
+            )
+        elif _impl_result:
+            decision_trace.append({
+                "step": "Implicit-emotion arbiter", "status": "rejected",
+                "detail": (f"Routed ({_route_why}); {_impl_result.get('method','?')} suggested "
+                           f"'{_impl_result.get('emotion','?')}' ({float(_impl_result.get('confidence',0)):.2f}) "
+                           f"but did not clear the override margin"),
+                "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+            })
+        else:
+            decision_trace.append({
+                "step": "Implicit-emotion arbiter", "status": "info",
+                "detail": f"Routed ({_route_why}); no implicit signal returned",
+                "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+            })
+    else:
+        decision_trace.append({
+            "step": "Implicit-emotion arbiter", "status": "skipped",
+            "detail": (f"not routed — confidence {meta_confidence:.2f} ≥ 0.42, "
+                       f"prediction not neutral, no expert conflict"),
+            "label": None, "confidence": None,
+        })
+    meta_confidence = min(float(meta_confidence), 0.99)
+    decision_trace.append({
+        "step": "Final decision", "status": "final",
+        "detail": ("implicit-emotion-override" if _impl_override
+                   else ("meta-learner" if META_LEARNER is not None else "rule-based")),
+        "label": dominant_emotion, "confidence": round(float(meta_confidence), 4),
+    })
+    await store_message_for_history(r, conv_id, _orig_text)
 
     original_ts = original_data.get("timestamp")
     e2e_lat = (time.time() - float(original_ts)) * 1000 if original_ts else 0
@@ -253,7 +456,9 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         v = _ce_packet.get(key)
         return round(float(v), 4) if v is not None else round(float(context_vector[idx]), 4)
 
-    hist_val   = _named("ctx_hist_valence",    CTX_HIST_VALENCE)
+    hist_pos   = _named("ctx_hist_pos",         CTX_HIST_POS)
+    hist_neu   = _named("ctx_hist_neu",         CTX_HIST_NEU)
+    hist_neg   = _named("ctx_hist_neg",         CTX_HIST_NEG)
     resonance  = _named("ctx_topic_resonance", CTX_RESONANCE)
     volatility = _named("ctx_volatility",      CTX_VOLATILITY)
     cur_val    = _named("ctx_curr_valence",    CTX_CURR_VALENCE)
@@ -263,7 +468,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
         "Message ID":       message_id,
         "Dominant Emotion": f"'{dominant_emotion}' ({meta_confidence:.2%})",
         "Prev Emotion":     prev_emotion,
-        "CE Context":       f"cur:{cur_val:.3f} hist:{hist_val:.3f} vol:{volatility:.3f} ce={'yes' if ce_available else 'no'}",
+        "CE Context":       f"cur:{cur_val:.3f} hist_pos:{hist_pos:.3f} hist_neg:{hist_neg:.3f} vol:{volatility:.3f} ce={'yes' if ce_available else 'no'}",
         "Top 3":            ", ".join([f"{e}:{s:.2%}" for e, s in top_3]),
         "E2E Latency":      f"{e2e_lat:.2f}ms",
         "Agg Latency":      f"{agg_lat:.2f}ms",
@@ -282,7 +487,7 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
             "action":        "Meta-Learner nuance override applied.",
         }
 
-    logic_map  = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion)
+    logic_map  = calculate_feature_impacts(META_LEARNER, fv, dominant_emotion) if META_LEARNER is not None else {}
 
     logger.debug(
         f"[DIAG-4] pre-log msg={message_id} "
@@ -300,29 +505,42 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
 
     cdm_probs     = context_vector[0:N_CDM_STATES] if ce_available else [0.0] * N_CDM_STATES
     cdm_state_idx = cdm_probs.index(max(cdm_probs)) if ce_available else None
+    cdm_state_name = CDM_STATES[cdm_state_idx] if cdm_state_idx is not None else None
+
+    ekman_group    = _GOE_TO_EKMAN.get(dominant_emotion, "neutral")
+    plutchik_group = GOE_TO_PLUTCHIK.get(dominant_emotion, dominant_emotion)
 
     pipeline_log = {
         "models":                model_outputs,
         "aggregated":            final_scores,
         "dominant_selected":     dominant_emotion,
-        "decision_mode":         "meta-learner",
+        "decision_mode":         "implicit-emotion-override" if _impl_override else ("meta-learner" if META_LEARNER is not None else "rule-based"),
         "meta_confidence":       meta_confidence,
         "logic_map":             logic_map,
         "ctx_correction_weight": ctx_correction_weight,
         "ctx_weight_pct":        round(float(logic_map.get("Context", 0.0)), 4),
-        "gate_weights_alpha":    gate_alpha,  # [vader_w, bert_w, goe_w] or None
+        "gate_weights_alpha":    gate_alpha,
         "sarcasm_score":         float(sarcasm_score),
+        "inversion_applied":     (sarcasm_score > 0.5),
         "conflict":              conflict_desc,
+        "decision_trace":        decision_trace,
         "trajectory":            trajectory,
+        "vad":                   vad_scores,
+        "dynamics":              dynamics_scores,
+        "appraisal":             appraisal_scores,
+        "ekman_group":           ekman_group,
+        "plutchik_group":        plutchik_group,
         "context_snapshot": {
             "prev_emotion":         prev_emotion,
             "cur_valence":          cur_val,
-            "historical_valence":   hist_val,
+            "historical_pos":        hist_pos,
+            "historical_neu":        hist_neu,
+            "historical_neg":        hist_neg,
             "topic_resonance":      resonance,
             "volatility":           volatility,
             "ce_available":         ce_available,
             "cdm_state_probs":      [round(float(p), 4) for p in cdm_probs],
-            "cdm_current_state":    cdm_state_idx,
+            "cdm_current_state":    cdm_state_name,
             "cdm_residency":        round(float(context_vector[CTX_RESIDENCY]), 3) if ce_available else 0.0,
             "cdm_entry_abruptness": round(float(context_vector[CTX_ABRUPTNESS]), 3) if ce_available else 0.0,
             "cdm_available":        ce_available,
@@ -332,7 +550,8 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     vader_scalars = {k: v for k, v in model_outputs.get("vader", {}).items()}
 
     output_event                     = original_data.copy()
-    output_event["emotions"]         = json.dumps({**final_scores, **vader_scalars})
+    output_event["emotions"]         = json.dumps(final_scores)
+    output_event["vader"]            = json.dumps(vader_scalars)
     output_event["dominant_emotion"] = dominant_emotion
     output_event["pipeline_log"]     = json.dumps(pipeline_log)
     if reasoning:
@@ -360,12 +579,6 @@ async def aggregate_and_publish(message_id, partial_results, r, agg_lat=0):
     await redis_client.publish_event(OUTPUT_STREAM, output_event)
 
 
-# ── Pending aggregations dict ──────────────────────────────────────────────────
-# Structure per msg_id:
-#   arrival_timestamp : float     — when the first partial result arrived
-#   models            : dict      — model_name → full_packet
-#   aggregated        : bool      — True once aggregation has been claimed
-#   optional_task     : Task|None — the pending _optional_timeout coroutine
 pending_aggregations: dict = {}
 
 
@@ -375,11 +588,13 @@ async def main():
     await redis_client.connect()
     r = redis_client.redis
 
-    # ── Build and seed the module registry ────────────────────────────────────
     REGISTRY = ModuleRegistry(r, refresh_interval=30.0)
     await REGISTRY.refresh()
     REGISTRY.log_state(logger)
     asyncio.create_task(_registry_refresh_loop(REGISTRY))
+
+    if TRAINER_EXTERNAL:
+        asyncio.create_task(_model_reload_listener())
 
     try:
         await r.xgroup_create(INPUT_STREAM, GROUP_NAME, mkstream=True)
@@ -400,10 +615,7 @@ async def main():
 
     while True:
         try:
-            # Refresh registry cache if stale (cheap: just a time.time() check)
             await REGISTRY.maybe_refresh()
-
-            # PEL recovery: reclaim stale messages idle >30 s
             try:
                 _, stale, _ = await r.xautoclaim(
                     INPUT_STREAM, GROUP_NAME, CONSUMER_NAME,
@@ -426,22 +638,25 @@ async def main():
                         msg_id     = data.get("message_id")
                         model_name = data.get("model_name")
 
-                        # ── Ignore late arrivals for already-completed messages ──
                         if msg_id in _completed_ids:
                             await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
                             continue
 
-                        # ── Parse the incoming packet ──────────────────────────
                         if model_name == "context_engine":
                             full_packet = {
-                                "model_name":          model_name,
-                                "context_vector":      data.get("context_vector"),
-                                "original_data":       data.get("original_data"),
-                                "ctx_hist_valence":    data.get("ctx_hist_valence"),
-                                "ctx_topic_resonance": data.get("ctx_topic_resonance"),
-                                "ctx_volatility":      data.get("ctx_volatility"),
-                                "ctx_curr_valence":    data.get("ctx_curr_valence"),
-                                "ctx_dim":             data.get("ctx_dim"),
+                                "model_name":               model_name,
+                                "context_vector":           data.get("context_vector"),
+                                "original_data":            data.get("original_data"),
+                                "ctx_hist_pos":             data.get("ctx_hist_pos"),
+                                "ctx_hist_neu":             data.get("ctx_hist_neu"),
+                                "ctx_hist_neg":             data.get("ctx_hist_neg"),
+                                "ctx_topic_resonance":      data.get("ctx_topic_resonance"),
+                                "ctx_volatility":           data.get("ctx_volatility"),
+                                "ctx_curr_valence":         data.get("ctx_curr_valence"),
+                                "ctx_dim":                  data.get("ctx_dim"),
+                                "appraisal_novelty":        data.get("appraisal_novelty"),
+                                "appraisal_goal_congruence": data.get("appraisal_goal_congruence"),
+                                "appraisal_coping":         data.get("appraisal_coping"),
                             }
                         else:
                             scores_raw = data.get("scores")
@@ -468,7 +683,6 @@ async def main():
                             except Exception:
                                 pass
 
-                        # ── Accumulate ────────────────────────────────────────
                         if msg_id not in pending_aggregations:
                             pending_aggregations[msg_id] = {
                                 "arrival_timestamp": time.time(),
@@ -479,7 +693,6 @@ async def main():
 
                         pending_aggregations[msg_id]["models"][model_name] = full_packet
 
-                        # ── Publish partial result for frontend stream progress ─
                         if model_name != "context_engine":
                             orig    = full_packet.get("original_data")
                             conv_id = orig.get("conversation_id") if isinstance(orig, dict) else None
@@ -496,8 +709,7 @@ async def main():
                                 except Exception:
                                     pass
 
-                        # ── Registry-driven aggregation trigger ────────────────
-                        info            = pending_aggregations.get(msg_id)
+                        info = pending_aggregations.get(msg_id)
                         if not info or info["aggregated"]:
                             await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
                             continue
@@ -512,33 +724,20 @@ async def main():
                             await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
                             continue
 
-                        # All required models present.
                         if REGISTRY.all_optional_present(received_models):
-                            # Everything arrived — cancel timeout if scheduled, aggregate now.
                             task = info["optional_task"]
                             if task and not task.done():
                                 task.cancel()
                             info["aggregated"] = True
-                            logger.debug(
-                                f"[{msg_id}] all required + optional present — "
-                                f"aggregating immediately"
-                            )
+                            logger.debug(f"[{msg_id}] all required + optional present — aggregating")
                             await _do_aggregation(msg_id, info, r)
                         elif info["optional_task"] is None:
-                            # First time required is complete — start the optional timer.
-                            logger.debug(
-                                f"[{msg_id}] required complete, optional outstanding — "
-                                f"starting {OPTIONAL_TIMEOUT_MS}ms timer"
-                            )
-                            info["optional_task"] = asyncio.create_task(
-                                _optional_timeout(msg_id, r)
-                            )
-                        # else: timer already running, nothing to do this pass.
+                            logger.debug(f"[{msg_id}] required complete, optional outstanding — starting {OPTIONAL_TIMEOUT_MS}ms timer")
+                            info["optional_task"] = asyncio.create_task(_optional_timeout(msg_id, r))
 
                         await r.xack(INPUT_STREAM, GROUP_NAME, record_id)
 
-            # ── Stale cleanup (>60 s old, never completed) ─────────────────────
-            now        = time.time()
+            now = time.time()
             stale_keys = [
                 mid for mid, info in pending_aggregations.items()
                 if now - info["arrival_timestamp"] > 60
@@ -554,7 +753,15 @@ async def main():
                 )
 
         except Exception as e:
-            logger.log_exception("CENTRAL RESPONDER CRITICAL ERROR", e)
+            if "NOGROUP" in str(e):
+                try:
+                    await r.xgroup_create(INPUT_STREAM, GROUP_NAME, mkstream=True)
+                    logger.warning("Re-created consumer group after NOGROUP error.")
+                except Exception as cg_err:
+                    if "BUSYGROUP" not in str(cg_err):
+                        logger.error(f"Failed to re-create group: {cg_err}")
+            else:
+                logger.log_exception("CENTRAL RESPONDER CRITICAL ERROR", e)
             await asyncio.sleep(1)
 
 

@@ -1,8 +1,4 @@
-"""
-persistence_service/main.py — Entry point for the persistence worker.
-
-Reads from 4 Redis streams and dispatches each event type to its dedicated handler.
-"""
+"""persistence_service/main.py — Entry point for the persistence worker."""
 import asyncio
 import sys
 import os
@@ -37,8 +33,8 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 redis_client = RedisClient()
 
-_shutdown = False   # R1: set True on SIGTERM so the loop exits cleanly
-DLQ_STREAM = "failed_events_stream"  # R2: dead letter queue
+_shutdown = False
+DLQ_STREAM = "failed_events_stream"
 
 STREAMS = {
     "message_stream":             "persistence_group",
@@ -48,11 +44,13 @@ STREAMS = {
 }
 CONSUMER_NAME = "worker_1"
 
+MAX_DELIVERY_ATTEMPTS = 5
+RETRY_COUNTER_TTL     = 86400
+
 
 async def main():
     print("[persistence_service] main() loop starting", flush=True)
 
-    # R1: register SIGTERM so Docker stop finishes the current batch gracefully
     loop = asyncio.get_event_loop()
     def _handle_sigterm():
         global _shutdown
@@ -82,7 +80,6 @@ async def main():
 
     while True:
         try:
-            # PEL recovery: reclaim messages idle >30s per stream (handles crash-before-ACK)
             stale_messages = []
             for stream in STREAMS:
                 try:
@@ -116,7 +113,6 @@ async def main():
                         mlog.debug("persist_dispatch", extra={"event": "persist_dispatch"})
                         try:
                             if stream == "message_stream":
-                                # Pv2: strip null bytes that corrupt PostgreSQL text columns
                                 if "text" in data:
                                     data["text"] = data["text"].replace("\x00", "")
                                 await process_message_event(session, data)
@@ -141,21 +137,60 @@ async def main():
                                 },
                                 exc_info=True,
                             )
+
+                            retry_key = f"persistence:attempts:{stream}:{message_id}"
+                            attempt = 1
                             try:
-                                await r.xadd(DLQ_STREAM, {
-                                    "original_stream": stream,
-                                    "original_id":     message_id,
-                                    "message_id":      biz_mid or "",
-                                    "error_class":     type(e).__name__,
-                                    "error":           str(e)[:500],
-                                    "timestamp":       time.time(),
-                                }, maxlen=5000, approximate=True)
-                            except Exception as dlq_err:
-                                mlog.warning(
-                                    "dlq_write_failed",
-                                    extra={"event": "dlq_write_failed", "stream": stream, "error": str(dlq_err)},
+                                attempt = int(await r.incr(retry_key))
+                                await r.expire(retry_key, RETRY_COUNTER_TTL)
+                            except Exception:
+                                pass
+
+                            if attempt >= MAX_DELIVERY_ATTEMPTS:
+                                mlog.error(
+                                    "max_retries_exceeded",
+                                    extra={
+                                        "event":       "max_retries_exceeded",
+                                        "attempt":     attempt,
+                                        "error_class": type(e).__name__,
+                                        "error":       str(e)[:500],
+                                    },
                                 )
-                            to_ack.append((stream, message_id))
+                                try:
+                                    await r.xadd(DLQ_STREAM, {
+                                        "original_stream": stream,
+                                        "original_id":     message_id,
+                                        "message_id":      biz_mid or "",
+                                        "error_class":     type(e).__name__,
+                                        "error":           str(e)[:500],
+                                        "timestamp":       time.time(),
+                                        "attempt":         attempt,
+                                        "force_dlq":       "true",
+                                    }, maxlen=5000, approximate=True)
+                                except Exception:
+                                    pass
+                                to_ack.append((stream, message_id))
+                                try:
+                                    await r.delete(retry_key)
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    await r.xadd(DLQ_STREAM, {
+                                        "original_stream": stream,
+                                        "original_id":     message_id,
+                                        "message_id":      biz_mid or "",
+                                        "error_class":     type(e).__name__,
+                                        "error":           str(e)[:500],
+                                        "timestamp":       time.time(),
+                                        "attempt":         attempt,
+                                    }, maxlen=5000, approximate=True)
+                                    to_ack.append((stream, message_id))
+                                except Exception as dlq_err:
+                                    mlog.error(
+                                        "dlq_write_failed",
+                                        extra={"event": "dlq_write_failed", "stream": stream, "error": str(dlq_err)},
+                                    )
                         finally:
                             session.close()
 
@@ -175,10 +210,17 @@ async def main():
 
 
         except Exception as e:
-            logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)
+            if "NOGROUP" in str(e):
+                logger.warning("NOGROUP error in persistence worker — re-creating consumer groups.")
+                for stream, group in STREAMS.items():
+                    try:
+                        await r.xgroup_create(stream, group, mkstream=True)
+                    except Exception:
+                        pass
+            else:
+                logger.log_exception("PERSISTENCE WORKER FATAL ERROR", e)
             await asyncio.sleep(1)
 
-        # R1: exit cleanly after finishing a batch
         if _shutdown:
             logger.info("Graceful shutdown complete.")
             break

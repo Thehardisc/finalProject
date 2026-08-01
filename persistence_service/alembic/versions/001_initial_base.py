@@ -1,22 +1,14 @@
-"""Initial Base Migration
-
-Revision ID: 001_initial_base
-Revises:
-Create Date: 2026-04-17 11:40:00.000000
-
-"""
+"""Initial Base Migration"""
 from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
-# revision identifiers, used by Alembic.
 revision: str = '001_initial_base'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
-    # Create messages table
     op.create_table(
         'messages',
         sa.Column('message_id', sa.String(), nullable=False),
@@ -27,10 +19,8 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('message_id')
     )
     op.create_index(op.f('ix_messages_conversation_id'), 'messages', ['conversation_id'], unique=False)
-    # Index on timestamp for order-by in trainer SQL query
     op.create_index(op.f('ix_messages_timestamp'), 'messages', ['timestamp'], unique=False)
 
-    # Create emotion_analysis table
     op.create_table(
         'emotion_analysis',
         sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
@@ -44,7 +34,6 @@ def upgrade() -> None:
     )
     op.create_index(op.f('ix_emotion_analysis_message_id'), 'emotion_analysis', ['message_id'], unique=False)
 
-    # Create conversation_states table
     op.create_table(
         'conversation_states',
         sa.Column('conversation_id', sa.String(), nullable=False),

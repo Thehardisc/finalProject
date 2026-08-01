@@ -1,8 +1,6 @@
-import React, { useState } from 'react';
-import axios from 'axios';
+import { useState } from 'react';
+import { feedbackAPI } from '../api/client.js';
 import { EmotionPalette } from './EmotionPalette';
-
-const API_BASE = 'http://localhost:8001';
 
 const EMOTION_LABELS = [
   'admiration','amusement','anger','annoyance','approval','caring',
@@ -12,7 +10,6 @@ const EMOTION_LABELS = [
   'relief','remorse','sadness','surprise','neutral',
 ];
 
-// Russell circumplex approximations
 const AROUSAL = {
   anger:.88, excitement:.95, joy:.76, surprise:.86, fear:.80,
   annoyance:.65, admiration:.58, amusement:.55, confusion:.48,
@@ -51,32 +48,57 @@ function computeVAD(bertEmotions, valence) {
 function Gauge({ label, value, lo, hi, color }) {
   const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-        <span style={{ fontSize: '0.77rem', fontWeight: 600, color: '#374151' }}>{label}</span>
-        <span style={{ fontSize: '0.72rem', color: '#9ca3af' }}>{pct}%</span>
+        <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--ig-txt2)' }}>{label}</span>
+        <span style={{ fontSize: '0.70rem', color: 'var(--ig-txt3)' }}>{pct}%</span>
       </div>
-      <div style={{ position: 'relative', height: 6, borderRadius: 3, background: 'rgba(0,0,0,.08)' }}>
+      <div style={{ position: 'relative', height: 5, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.07)' }}>
         <div style={{
           position: 'absolute', top: 0, left: 0, height: '100%',
-          width: `${pct}%`, background: `rgb(${color})`, borderRadius: 3,
+          width: `${pct}%`,
+          background: `linear-gradient(90deg, rgba(${color},0.9), rgba(${color},0.5))`,
+          borderRadius: 3,
+          boxShadow: `0 0 6px rgba(${color},0.4)`,
           transition: 'width .55s cubic-bezier(.34,1.2,.64,1)',
         }} />
         <div style={{
           position: 'absolute', top: '50%', left: `${pct}%`,
           transform: 'translate(-50%,-50%)',
-          width: 12, height: 12, borderRadius: '50%',
-          background: `rgb(${color})`, border: '2.5px solid #fff',
-          boxShadow: `0 0 6px rgba(${color},.5)`,
+          width: 11, height: 11, borderRadius: '50%',
+          background: `rgb(${color})`,
+          boxShadow: `0 0 8px rgba(${color},0.8)`,
           transition: 'left .55s cubic-bezier(.34,1.2,.64,1)',
         }} />
       </div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-        <span style={{ fontSize: '0.62rem', color: '#b0b7c3' }}>{lo}</span>
-        <span style={{ fontSize: '0.62rem', color: '#b0b7c3' }}>{hi}</span>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+        <span style={{ fontSize: '0.60rem', color: 'rgba(var(--ig-ink-rgb),0.40)' }}>{lo}</span>
+        <span style={{ fontSize: '0.60rem', color: 'rgba(var(--ig-ink-rgb),0.40)' }}>{hi}</span>
       </div>
     </div>
   );
+}
+
+function generateAutoInsight(data) {
+  if (!data) return null;
+  const parts = [];
+  const sarcasm = data.sarcasm_score ?? data.llm_sarcasm_score ?? 0;
+  const shift   = data.context_shift;
+  const traj    = data.lstm_trajectory;
+  const snap    = data.context_snapshot;
+  const v       = data.final_valence ?? 0;
+  const emo     = data.final_dominant_emotion;
+
+  if (sarcasm > 0.40) parts.push(`Sarcasm likely (${Math.round(sarcasm * 100)}%) — positive surface, negative intent.`);
+  if (shift?.significance === 'High') parts.push(`Mood shift: ${shift.from} → ${shift.to}.`);
+  if (traj?.top_predicted && traj.top_predicted !== emo) parts.push(`Trajectory predicts ${traj.top_predicted} next.`);
+  const vol = snap?.volatility ?? 0;
+  if (vol > 0.65) parts.push(`High volatility (${Math.round(vol * 100)}%).`);
+  else if (v > 0.4) parts.push(`Positive tone (valence ${v.toFixed(2)}).`);
+  else if (v < -0.3) parts.push(`Negative tone (valence ${v.toFixed(2)}).`);
+  if (snap?.cdm_current_state) parts.push(`State: ${snap.cdm_current_state}.`);
+
+  return parts.length ? parts.join(' ') : null;
 }
 
 export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
@@ -86,70 +108,79 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 
   const data = msg?.analysis?.data;
   if (!data) return (
-    <div style={{ padding: 24, color: '#9ca3af', fontSize: '0.85rem', textAlign: 'center' }}>
+    <div style={{ padding: 24, color: 'var(--ig-txt3)', fontSize: '0.85rem', textAlign: 'center', background: 'var(--ig-rail-bg)', height: '100%' }}>
       No analysis available for this message yet.
-      <button onClick={onClose} style={{ display: 'block', margin: '16px auto 0', background: 'none', border: 'none', color: '#0077ff', cursor: 'pointer', fontWeight: 600 }}>← Back</button>
+      <button onClick={onClose} style={{ display: 'block', margin: '16px auto 0', background: 'none', border: 'none', color: 'rgb(139,92,246)', cursor: 'pointer', fontWeight: 600 }}>← Back</button>
     </div>
   );
 
-  const emotions   = data.bert_emotions || [];
-  const topEmos    = [...emotions].sort((a, b) => b.score - a.score).slice(0, 8);
-  const totalScore = topEmos.reduce((s, e) => s + e.score, 0) || 1;
-  const vad        = computeVAD(emotions, data.final_valence);
-  const domRgb     = EmotionPalette[data.final_dominant_emotion?.toLowerCase()] || EmotionPalette.neutral;
-  const logicMap   = data.logic_map || {};
+  const emotions    = data.bert_emotions || [];
+  const topEmos     = [...emotions].sort((a, b) => b.score - a.score).slice(0, 8);
+  const totalScore  = topEmos.reduce((s, e) => s + e.score, 0) || 1;
+  const vad         = computeVAD(emotions, data.final_valence);
+  const domRgb      = EmotionPalette[data.final_dominant_emotion?.toLowerCase()] || EmotionPalette.neutral;
+  const logicMap    = data.logic_map || {};
+  const sarcasmScore = data.sarcasm_score ?? data.llm_sarcasm_score ?? 0;
+  const displayInsight = msg?.analysis?.ai_insight || generateAutoInsight(data);
 
   const submitFeedback = async () => {
     if (!selected || !data.id) return;
     setLoading(true);
     try {
-      await axios.post(`${API_BASE}/message/${data.id}/feedback`, { label: selected });
+      await feedbackAPI.post(data.id, selected);
       setSent(true);
       onFeedbackSent?.(data.id, selected);
     } catch {}
     finally { setLoading(false); }
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto' }}>
+  const BG    = 'var(--ig-rail-bg)';
+  const BORDER = 'rgba(var(--ig-ink-rgb),0.09)';
+  const MUTED  = 'var(--ig-txt3)';
+  const TEXT   = 'var(--ig-txt)';
 
-      {/* ── Header (sticky) ── */}
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflowY: 'auto', background: BG }}>
+
       <div style={{
-        padding: '14px 14px 10px', borderBottom: '1px solid rgba(0,0,0,.07)',
+        padding: '14px 14px 10px', borderBottom: `1px solid ${BORDER}`,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        position: 'sticky', top: 0, background: '#fff', zIndex: 5,
+        position: 'sticky', top: 0, background: BG, zIndex: 5,
       }}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: '0.82rem', color: '#1c1c2e' }}>ML Analysis</div>
-          <div style={{ fontSize: '0.67rem', color: '#9ca3af', marginTop: 2 }}>
+          <div style={{ fontWeight: 700, fontSize: '0.82rem', color: TEXT }}>Message Analysis</div>
+          <div style={{ fontSize: '0.67rem', color: MUTED, marginTop: 2 }}>
             {String(data.id).startsWith('demo') ? 'demo sample' : `msg:${String(data.id).substring(0, 8)}…`}
           </div>
         </div>
         <button onClick={onClose} style={{
-          background: '#f3f4f6', border: 'none', borderRadius: '50%',
+          background: 'rgba(var(--ig-ink-rgb),0.06)', border: 'none', borderRadius: '50%',
           width: 26, height: 26, cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#6b7280', fontSize: '0.85rem', flexShrink: 0,
+          color: MUTED, fontSize: '0.85rem', flexShrink: 0,
         }}>✕</button>
       </div>
 
       <div style={{ padding: '14px' }}>
 
-        {/* ── Dominant + confidence ── */}
         <div style={{
-          background: `rgba(${domRgb},.08)`, border: `1px solid rgba(${domRgb},.20)`,
+          background: `radial-gradient(ellipse at top, rgba(${domRgb},.16) 0%, rgba(${domRgb},.04) 80%)`,
+          border: `1px solid rgba(${domRgb},.22)`,
           borderRadius: 12, padding: '13px', marginBottom: 16,
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}>
             <div>
-              <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Dominant</div>
-              <div style={{ fontSize: '1.08rem', fontWeight: 800, color: `rgb(${domRgb})`, textTransform: 'capitalize' }}>
+              <div style={{ fontSize: '0.63rem', color: MUTED, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Dominant</div>
+              <div style={{ fontSize: '1.08rem', fontWeight: 800, textTransform: 'capitalize',
+                background: `linear-gradient(135deg, rgb(${domRgb}), rgba(${domRgb},0.6))`,
+                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+              }}>
                 {data.final_dominant_emotion || 'Neutral'}
               </div>
             </div>
             {data.meta_confidence != null && (
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Confidence</div>
+                <div style={{ fontSize: '0.63rem', color: MUTED, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 4 }}>Confidence</div>
                 <div style={{ fontSize: '1.08rem', fontWeight: 800, color: `rgb(${domRgb})` }}>
                   {(data.meta_confidence * 100).toFixed(0)}%
                 </div>
@@ -167,18 +198,55 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
             </div>
           )}
 
-          {msg?.analysis?.ai_insight && (
+          {displayInsight && (
             <div style={{
-              marginTop: 8, padding: '8px 10px', background: 'rgba(0,0,0,.03)',
-              borderRadius: 6, fontSize: '0.72rem', color: '#374151', lineHeight: 1.55,
+              marginTop: 8, padding: '8px 10px',
+              background: 'rgba(var(--ig-ink-rgb),0.04)',
+              borderRadius: 6, fontSize: '0.72rem',
+              color: 'var(--ig-txt3)', lineHeight: 1.55,
               fontStyle: 'italic',
             }}>
-              "{msg.analysis.ai_insight}"
+              "{displayInsight}"
             </div>
           )}
         </div>
 
-        {/* ── Emotion breakdown ── */}
+        {sarcasmScore > 0.05 && (
+          <div style={{ marginBottom: 16 }}>
+            <div style={sectionTitle}>Sarcasm Detector</div>
+            <div style={{
+              background: sarcasmScore > 0.4 ? 'rgba(245,158,11,0.08)' : 'rgba(var(--ig-ink-rgb),0.03)',
+              border: sarcasmScore > 0.4 ? '1px solid rgba(245,158,11,0.25)' : '1px solid rgba(var(--ig-ink-rgb),0.07)',
+              borderRadius: 10, padding: '10px 12px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600, color: sarcasmScore > 0.4 ? '#d97706' : 'var(--ig-txt3)' }}>
+                  {sarcasmScore > 0.6 ? 'High' : sarcasmScore > 0.4 ? 'Moderate' : 'Low'} likelihood
+                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {data.inversion_applied && (
+                    <span style={{
+                      padding: '2px 7px', borderRadius: 99, fontSize: '0.62rem', fontWeight: 700,
+                      background: 'rgba(245,158,11,0.15)', color: '#fbbf24',
+                      border: '1px solid rgba(245,158,11,0.30)',
+                    }}>⟲ Polarity inverted</span>
+                  )}
+                  <span style={{ fontSize: '0.82rem', fontWeight: 800, color: sarcasmScore > 0.4 ? '#d97706' : 'var(--ig-txt3)' }}>
+                    {Math.round(sarcasmScore * 100)}%
+                  </span>
+                </div>
+              </div>
+              <div style={{ height: 5, borderRadius: 3, background: 'rgba(var(--ig-ink-rgb),0.07)' }}>
+                <div style={{
+                  height: '100%', width: `${sarcasmScore * 100}%`,
+                  background: sarcasmScore > 0.4 ? 'linear-gradient(90deg,#f59e0b,#d97706)' : 'rgba(var(--ig-ink-rgb),0.30)',
+                  borderRadius: 3, transition: 'width .6s cubic-bezier(.34,1.2,.64,1)',
+                }} />
+              </div>
+            </div>
+          </div>
+        )}
+
         <div style={{ marginBottom: 16 }}>
           <div style={sectionTitle}>Emotion Weights</div>
           {topEmos.map(({ label, score }) => {
@@ -187,15 +255,15 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
             return (
               <div key={label} style={{ marginBottom: 9 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <span style={{ fontSize: '0.78rem', fontWeight: 500, color: '#374151', textTransform: 'capitalize' }}>{label}</span>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 500, color: TEXT, textTransform: 'capitalize' }}>{label}</span>
                   <span style={{ fontSize: '0.72rem', fontWeight: 700, color: `rgb(${rgb})` }}>{pct.toFixed(0)}%</span>
                 </div>
-                <div style={{ height: 5, borderRadius: 3, background: 'rgba(0,0,0,.07)' }}>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.06)' }}>
                   <div style={{
-                    height: '100%',
-                    width: `${pct}%`,
-                    background: `linear-gradient(90deg, rgb(${rgb}), rgba(${rgb},.60))`,
-                    borderRadius: 3,
+                    height: '100%', width: `${pct}%`,
+                    background: `linear-gradient(90deg, rgba(${rgb},0.9), rgba(${rgb},0.45))`,
+                    borderRadius: 2,
+                    boxShadow: `0 0 5px rgba(${rgb},0.3)`,
                     transition: 'width .6s cubic-bezier(.34,1.2,.64,1)',
                   }} />
                 </div>
@@ -204,7 +272,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           })}
         </div>
 
-        {/* ── VAD Gauges ── */}
         <div style={{ marginBottom: 16 }}>
           <div style={sectionTitle}>VAD Dimensions</div>
           <Gauge label="Valence"   value={vad.v} lo="Negative"   hi="Positive"  color="52,199,89"  />
@@ -212,23 +279,22 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           <Gauge label="Dominance" value={vad.d} lo="Submissive" hi="Dominant"  color="162,67,220" />
         </div>
 
-        {/* ── Model contributions ── */}
         {Object.keys(logicMap).length > 0 && (
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Model Contributions</div>
             {Object.entries(logicMap).map(([model, v]) => (
               <div key={model} style={{ marginBottom: 8 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{model}</span>
-                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: v >= 0 ? '#0077ff' : '#ef4444' }}>
+                  <span style={{ fontSize: '0.75rem', color: 'var(--ig-txt2)' }}>{model}</span>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: v >= 0 ? '#60a5fa' : '#ef4444' }}>
                     {v >= 0 ? '+' : ''}{(v * 100).toFixed(0)}%
                   </span>
                 </div>
-                <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,.07)', overflow: 'hidden' }}>
+                <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.06)', overflow: 'hidden' }}>
                   <div style={{
                     height: '100%',
                     width: `${Math.min(Math.abs(v) * 100, 100)}%`,
-                    background: v >= 0 ? 'linear-gradient(90deg,#0077ff,#7000ff)' : '#ef4444',
+                    background: v >= 0 ? 'linear-gradient(90deg,#34d399,#10b981)' : '#ef4444',
                     borderRadius: 2, transition: 'width .5s ease',
                   }} />
                 </div>
@@ -237,51 +303,60 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         )}
 
-        {/* ── Context Engine snapshot ── */}
         {data.context_snapshot && (
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Context Engine</div>
             <div style={{
-              background: 'rgba(0,119,255,0.05)',
-              border: '1px solid rgba(0,119,255,0.15)',
+              background: 'rgba(6,182,212,0.05)',
+              border: '1px solid rgba(6,182,212,0.13)',
               borderRadius: 12, padding: '12px 14px',
             }}>
-              {/* Valence arc */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
                 <div style={{
                   padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
-                  background: 'rgba(0,0,0,0.06)', color: '#374151', textTransform: 'capitalize',
+                  background: 'rgba(var(--ig-ink-rgb),0.06)', color: 'var(--ig-txt3)', textTransform: 'capitalize',
                 }}>
                   {data.context_snapshot.prev_emotion || 'none'}
                 </div>
-                <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>→</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--ig-txt3)' }}>→</div>
                 <div style={{
                   padding: '3px 9px', borderRadius: 99, fontSize: '0.71rem', fontWeight: 700,
-                  background: `rgba(${domRgb},0.15)`, color: `rgb(${domRgb})`, textTransform: 'capitalize',
+                  background: `rgba(${domRgb},0.14)`, color: `rgb(${domRgb})`, textTransform: 'capitalize',
                 }}>
                   {data.final_dominant_emotion}
                 </div>
               </div>
 
-              {/* Stats grid */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 }}>
                 {[
-                  { label: 'Avg Valence', value: data.context_snapshot.avg_valence?.toFixed(3), color: data.context_snapshot.avg_valence >= 0 ? '#16a34a' : '#dc2626' },
-                  { label: 'Topic Resonance', value: `${((data.context_snapshot.topic_resonance || 0) * 100).toFixed(0)}%`, color: '#7c3aed' },
-                  { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#d97706' },
-                  { label: 'Episodic Memory', value: data.context_snapshot.ce_available ? '✓ active' : '✗ off', color: data.context_snapshot.ce_available ? '#16a34a' : '#9ca3af' },
+                  { label: 'Valence', value: data.context_snapshot.cur_valence?.toFixed(3), color: (data.context_snapshot.cur_valence ?? 0) >= 0 ? '#4ade80' : '#f87171' },
+                  { label: 'Topic Fit', value: `${((data.context_snapshot.topic_resonance || 0) * 100).toFixed(0)}%`, color: '#a78bfa' },
+                  { label: 'Volatility', value: `${((data.context_snapshot.volatility || 0) * 100).toFixed(0)}%`, color: '#fbbf24' },
+                  { label: 'Episodic', value: data.context_snapshot.ce_available ? 'active' : 'off', color: data.context_snapshot.ce_available ? '#4ade80' : 'var(--ig-txt3)' },
                 ].map(({ label, value, color }) => (
-                  <div key={label} style={{ padding: '7px 10px', background: 'rgba(255,255,255,0.7)', borderRadius: 8 }}>
-                    <div style={{ fontSize: '0.63rem', color: '#9ca3af', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
+                  <div key={label} style={{ padding: '7px 10px', background: 'rgba(var(--ig-ink-rgb),0.04)', borderRadius: 8 }}>
+                    <div style={{ fontSize: '0.60rem', color: 'var(--ig-txt3)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '.06em', marginBottom: 3 }}>{label}</div>
                     <div style={{ fontSize: '0.82rem', fontWeight: 700, color }}>{value ?? '—'}</div>
                   </div>
                 ))}
               </div>
+
+              {data.context_snapshot.cdm_current_state && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <div style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(139,92,246,0.14)', border: '1px solid rgba(139,92,246,0.22)', fontSize: '0.68rem', fontWeight: 700, color: '#a78bfa' }}>
+                    CDM: {data.context_snapshot.cdm_current_state}
+                  </div>
+                  {data.context_snapshot.cdm_entry_abruptness > 0.5 && (
+                    <div style={{ padding: '3px 9px', borderRadius: 99, background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.18)', fontSize: '0.68rem', fontWeight: 700, color: '#f87171' }}>
+                      Abrupt {Math.round(data.context_snapshot.cdm_entry_abruptness * 100)}%
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
 
-        {/* ── LSTM Trajectory / State Machine ── */}
         {data.lstm_trajectory?.model_available && (
           <div style={{ marginBottom: 16 }}>
             <div style={sectionTitle}>Trajectory — Next Predicted</div>
@@ -299,22 +374,24 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 }}>
                   → {data.lstm_trajectory.top_predicted}
                 </div>
-                <span style={{ fontSize: '0.70rem', color: '#9ca3af' }}>most likely next emotion</span>
+                <span style={{ fontSize: '0.70rem', color: 'var(--ig-txt3)' }}>most likely next emotion</span>
               </div>
 
-              {Object.entries(data.lstm_trajectory.predicted_next || {}).map(([emo, score]) => {
-                const rgb = EmotionPalette[emo.toLowerCase()] || '112,0,255';
+              {Object.entries(data.lstm_trajectory.predicted_next || {})
+                .sort((a, b) => b[1] - a[1]).slice(0, 5)
+                .map(([emo, score]) => {
+                const rgb = EmotionPalette[emo.toLowerCase()] || '139,92,246';
                 return (
                   <div key={emo} style={{ marginBottom: 7 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                      <span style={{ fontSize: '0.74rem', color: '#374151', textTransform: 'capitalize' }}>{emo}</span>
+                      <span style={{ fontSize: '0.74rem', color: 'var(--ig-txt2)', textTransform: 'capitalize', fontWeight: 500 }}>{emo}</span>
                       <span style={{ fontSize: '0.70rem', fontWeight: 700, color: `rgb(${rgb})` }}>{(score * 100).toFixed(0)}%</span>
                     </div>
-                    <div style={{ height: 5, borderRadius: 3, background: 'rgba(0,0,0,0.07)' }}>
+                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(var(--ig-ink-rgb),0.06)' }}>
                       <div style={{
                         height: '100%', width: `${score * 100}%`,
-                        background: `linear-gradient(90deg, rgba(${rgb},0.8), rgba(${rgb},0.4))`,
-                        borderRadius: 3, transition: 'width 0.6s cubic-bezier(0.34,1.2,0.64,1)',
+                        background: `linear-gradient(90deg, rgba(${rgb},0.85), rgba(${rgb},0.38))`,
+                        borderRadius: 2, transition: 'width 0.6s cubic-bezier(0.34,1.2,0.64,1)',
                       }} />
                     </div>
                   </div>
@@ -324,10 +401,9 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
           </div>
         )}
 
-        {/* ── Human-in-the-loop ── */}
         <div style={{
-          background: '#f8f9fa', borderRadius: 12, padding: '13px',
-          border: '1px solid rgba(0,0,0,.06)',
+          background: 'rgba(var(--ig-ink-rgb),0.03)', borderRadius: 12, padding: '13px',
+          border: '1px solid rgba(var(--ig-ink-rgb),0.07)',
         }}>
           <div style={sectionTitle}>Correct the Model</div>
           {sent ? (
@@ -345,8 +421,8 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 onChange={e => setSelected(e.target.value)}
                 style={{
                   width: '100%', padding: '9px 12px',
-                  background: '#fff', border: '1px solid rgba(0,0,0,.12)',
-                  borderRadius: 8, fontSize: '0.84rem', color: '#1c1c2e',
+                  background: 'rgba(var(--ig-ink-rgb),0.06)', border: '1px solid rgba(var(--ig-ink-rgb),0.12)',
+                  borderRadius: 8, fontSize: '0.84rem', color: 'var(--ig-txt)',
                   outline: 'none', marginBottom: 9, cursor: 'pointer',
                   appearance: 'none',
                 }}
@@ -361,9 +437,9 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
                 disabled={!selected || loading}
                 style={{
                   width: '100%', padding: '10px',
-                  background: selected ? 'linear-gradient(135deg,#0077ff,#7000ff)' : '#e5e7eb',
+                  background: selected ? 'linear-gradient(135deg,#5b21b6,#6d28d9)' : 'rgba(var(--ig-ink-rgb),0.06)',
                   border: 'none', borderRadius: 8,
-                  color: selected ? '#fff' : '#9ca3af',
+                  color: selected ? '#fff' : 'var(--ig-txt3)',
                   fontWeight: 700, fontSize: '0.84rem',
                   cursor: selected ? 'pointer' : 'default',
                   transition: 'background .2s',
@@ -381,6 +457,6 @@ export default function AnalysisDrawer({ msg, onClose, onFeedbackSent }) {
 }
 
 const sectionTitle = {
-  fontSize: '0.69rem', fontWeight: 700, color: '#1c1c2e',
-  textTransform: 'uppercase', letterSpacing: '.07em', marginBottom: 10,
+  fontSize: '0.58rem', fontWeight: 700, color: 'rgba(var(--ig-ink-rgb),0.38)',
+  textTransform: 'uppercase', letterSpacing: '.11em', marginBottom: 10,
 };

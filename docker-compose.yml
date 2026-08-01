@@ -1,11 +1,3 @@
-# Bound container log size — prevents unbounded disk growth on long-running deploys.
-# Each service references this via `logging: *log-rotation`.
-x-log-rotation: &log-rotation
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "3"
-
 services:
   redis:
     image: redis:7-alpine
@@ -19,8 +11,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-    restart: unless-stopped
-    logging: *log-rotation
     networks:
       - emotion_net
 
@@ -41,8 +31,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
-    logging: *log-rotation
 
   ingestion_service:
     build:
@@ -56,7 +44,6 @@ services:
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -65,9 +52,13 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost}
-    restart: unless-stopped
-    logging: *log-rotation
+      ALLOWED_ORIGINS: ${FRONTEND_URL:-http://localhost:5173},http://localhost:5173,http://localhost,http://127.0.0.1:5173,http://127.0.0.1
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: ingestion_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   preprocessing_service:
     build:
@@ -79,34 +70,39 @@ services:
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-    restart: unless-stopped
-    logging: *log-rotation
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: preprocessing_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   vader_service:
     build:
       context: .
       dockerfile: vader_service/Dockerfile
-
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-    restart: unless-stopped
-    logging: *log-rotation
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: vader_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   goemotions_service:
     build:
@@ -118,17 +114,21 @@ services:
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: goemotions_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
       - hf_cache:/root/.cache/huggingface
-    mem_limit: 2g
-    restart: unless-stopped
-    logging: *log-rotation
+      - ./logs/live:/app/logs
+      # Model dir so the service picks up samlowe_finetuned when the trainer
+      # produces it (no-op until then).
+      - ./.cache:/app/models
 
 
   bert_service:
@@ -141,50 +141,109 @@ services:
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: bert_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
       - hf_cache:/root/.cache/huggingface
-    mem_limit: 2g
-    restart: unless-stopped
-    logging: *log-rotation
+      - ./logs/live:/app/logs
 
   central_responder_service:
     build:
       context: .
       dockerfile: central_responder_service/Dockerfile
-    # Prometheus /metrics scrape endpoint
-    ports:
-      - "9090:9090"
+    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
       context_engine_service:
         condition: service_healthy
+      trainer_service:
+        condition: service_started
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-      # ── Periodic retraining (background thread inside this container) ────
+      MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
+      TRAINER_EXTERNAL: "true"
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: central_responder_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+      IMPLICIT_EMOTION_ENABLED: ${IMPLICIT_EMOTION_ENABLED:-true}
+      IMPLICIT_TIMEOUT_MS: ${IMPLICIT_TIMEOUT_MS:-300}
+      IMPLICIT_MIN_WORDS: ${IMPLICIT_MIN_WORDS:-4}
+      IMPLICIT_GOE_NEUTRAL_CAP: ${IMPLICIT_GOE_NEUTRAL_CAP:-0.90}
+      IMPLICIT_LOW_CONF_THRESHOLD: ${IMPLICIT_LOW_CONF_THRESHOLD:-0.42}
+      IMPLICIT_LOW_CONF_MARGIN: ${IMPLICIT_LOW_CONF_MARGIN:-0.10}
+      IMPLICIT_CONF_THRESHOLD: ${IMPLICIT_CONF_THRESHOLD:-0.50}
+      OPTIONAL_TIMEOUT_MS: ${OPTIONAL_TIMEOUT_MS:-1000}
+    volumes:
+      - ./.cache:/app/models
+      - hf_cache:/root/.cache/huggingface
+      - ./logs/live:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/metrics', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  trainer_service:
+    build:
+      context: .
+      dockerfile: central_responder_service/Dockerfile
+    restart: on-failure
+    command: ["python", "-m", "trainer"]
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    networks:
+      - emotion_net
+    environment:
+      REDIS_HOST: redis
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      REDIS_PORT: 6379
       RETRAIN_INTERVAL_SECONDS: ${RETRAIN_INTERVAL_SECONDS:-1800}
       ACCURACY_GATE: ${ACCURACY_GATE:-0.40}
-      MAX_SAMPLES: ${MAX_SAMPLES:-2500}
+      MAX_EMPATHETIC_SAMPLES: ${MAX_EMPATHETIC_SAMPLES:-25000}
+      MIN_DB_SAMPLES: ${MIN_DB_SAMPLES:-50}
       MODEL_PATH: ${MODEL_PATH:-/app/models/meta_weights.pkl}
+      DB_HOST: db
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-emotion_db}
+      HF_DATASETS_OFFLINE: "0"
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: trainer_service
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - ./central_responder_service/models:/app/models # use host directory directly
+      - ./.cache:/app/models
+      - ./conversation_state_learner/training_data:/app/training_data:ro
       - hf_cache:/root/.cache/huggingface
-    mem_limit: 2g
-    restart: unless-stopped
-    logging: *log-rotation
+      - ./logs/live:/app/logs
+    healthcheck:
+      test: ["CMD-SHELL", "kill -0 1 2>/dev/null || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   llm_reasoning_service:
     build:
@@ -196,34 +255,44 @@ services:
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       LLM_PROVIDER: ${LLM_PROVIDER:-RULE_BASED}
-    restart: unless-stopped
-    logging: *log-rotation
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      LLM_INSIGHT_MODEL: ${LLM_INSIGHT_MODEL:-claude-haiku-4-5-20251001}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: llm_reasoning_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   aggregation_service:
     build:
       context: .
       dockerfile: aggregation_service/Dockerfile
+    restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
-    restart: unless-stopped
-    logging: *log-rotation
+      CONVERSATION_IDLE_MINUTES: ${CONVERSATION_IDLE_MINUTES:-30}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: aggregation_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
+    volumes:
+      - ./logs/live:/app/logs
 
   persistence_service:
     build:
@@ -237,17 +306,19 @@ services:
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
       REDIS_PORT: 6379
       DB_HOST: db
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: persistence_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - ./central_responder_service/models:/app/models:ro # Read-only access to readiness marker
-    restart: unless-stopped
-    logging: *log-rotation
+      - ./.cache:/app/models:ro
+      - ./logs/live:/app/logs
 
   api_service:
     build:
@@ -269,7 +340,6 @@ services:
     networks:
       - emotion_net
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -278,7 +348,6 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-60}
       RATE_LIMIT_WINDOW: ${RATE_LIMIT_WINDOW:-60}
-      # DB credentials (used by asyncpg in analytics/messages endpoints)
       DB_HOST: db
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
@@ -286,25 +355,29 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_EXPIRY_HOURS: ${JWT_EXPIRY_HOURS:-24}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost,http://127.0.0.1,http://127.0.0.1:5173}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_DEMO_MODEL: ${AI_DEMO_MODEL:-claude-sonnet-5}
+      ALLOWED_ORIGINS: ${FRONTEND_URL:-http://localhost:5173},http://localhost:5173,http://localhost,http://127.0.0.1:5173,http://127.0.0.1
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: api_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     volumes:
-      - ./central_responder_service/models:/app/models:ro
-    restart: unless-stopped
-    logging: *log-rotation
+      - ./.cache:/app/models:ro
+      - ./logs/live:/app/logs
 
 
   frontend_service:
     build:
-      context: ./frontend_service
+      context: frontend_service
+      args:
+        VITE_API_URL: ${API_URL:-http://localhost:8001}
     ports:
       - "5173:80"
     depends_on:
-      api_service:
-        condition: service_started
+      - api_service
     networks:
       - emotion_net
-    restart: unless-stopped
-    logging: *log-rotation
 
   qdrant:
     image: qdrant/qdrant:v1.7.0
@@ -312,27 +385,28 @@ services:
       - "6333:6333"
     networks:
       - emotion_net
-    # qdrant images ship without curl; bash's /dev/tcp probe works on any base image
     healthcheck:
       test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
-    restart: unless-stopped
-    logging: *log-rotation
 
   context_engine_service:
     build:
       context: .
       dockerfile: context_engine_service/Dockerfile
+    restart: unless-stopped
     environment:
-      TZ: ${TZ}
       REDIS_HOST: redis
-      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
       QDRANT_HOST: qdrant
+      TRAIN_HMM_ON_STARTUP: "true"
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       LOG_FORMAT: ${LOG_FORMAT:-TEXT}
+      PYTHONUNBUFFERED: "1"
+      SERVICE_NAME: context_engine_service
+      LOG_DIR: /app/logs
+      TZ: ${TZ:-Asia/Jerusalem}
     depends_on:
       redis:
         condition: service_healthy
@@ -340,14 +414,15 @@ services:
         condition: service_healthy
     networks:
       - emotion_net
+    volumes:
+      - ./.cache:/app/models
+      - ./logs/live:/app/logs
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8008/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 60s
-    restart: unless-stopped
-    logging: *log-rotation
 
 networks:
   emotion_net:

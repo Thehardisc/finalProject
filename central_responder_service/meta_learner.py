@@ -1,257 +1,216 @@
-"""
-meta_learner.py v2.0 — Attention-based Mixture-of-Experts Meta-Learner.
-
-Architecture: GatingEnsembleNet
-  Three NLP expert encoders (VADER, BERT, GoEmotions) are independently
-  projected to a shared d-dimensional space. The 23-dim context vector
-  drives a learned soft gate α ∈ ℝ³ that routes attention over the experts.
-  An additive context residual ensures context contributes beyond routing.
-  No hardcoded thresholds — all gating is learned end-to-end.
-
-Public API (unchanged from v1):
-  load_meta_learner()          → GatingNetworkWrapper | sklearn Pipeline | None
-  build_feature_vector()       → np.ndarray [1, 62]
-  predict_with_meta_learner()  → (emotion, confidence, scores, sarcasm, conflict)
-  calculate_feature_impacts()  → {block: attribution}
-  apply_context_correction()   → passthrough stub (superseded by native gating)
-"""
-
+import io
 import os
 import pickle
 import json
 import numpy as np
-from typing import Optional, Tuple, List
+
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.preprocessing import StandardScaler
+
 
 from shared.utils.logger import get_logger
 from shared.constants import (
-    EMOTION_LABELS, VADER_KEYS, BERT_LABELS,
-    FEATURE_DIM, CONTEXT_DIM, ML_DIM, CTX_HMM_CONF,
+    EMOTION_LABELS,
+    VADER_KEYS,
+    BERT_LABELS,
+    FEATURE_DIM,
+    CONTEXT_DIM,
+    CDM_CTX_DIM,
+    PRIOR_DIM,
+    ML_DIM,
+    CTX_CDM_PROBS,
+    CTX_RESIDENCY,
+    CTX_TRANSITION,
+    CTX_COHERENCE,
+    CTX_ENTROPY,
+    CTX_RESONANCE,
+    CTX_HMM_CONF,
+    CTX_MSG_LENGTH,
+    CTX_LATENCY_MS,
+    CTX_HMM_EMISSION,
+    CTX_HMM_ENTROPY,
+    CTX_HMM_NEXT3,
+    CTX_INTENT_STAB,
+    CTX_CURR_VALENCE,
 )
 
 logger = get_logger("meta_learner")
 
-# ── Architecture hyperparameters ────────────────────────────────────────────────
-D_MODEL  = 64
-DROPOUT  = 0.25
+D_MODEL = 64
+DROPOUT = 0.25
 
-# ── Legacy context-correction constants (kept for API compat — not used by gating) ─
-_MAX_CTX_WEIGHT   = float(os.environ.get("CONTEXT_WEIGHT",          "0.45"))
-_MISMATCH_CTX_CAP = float(os.environ.get("CONTEXT_WEIGHT_MISMATCH", "0.65"))
+CTX_WEIGHT_CAP = float(os.environ.get("CTX_WEIGHT_CAP", "0.20"))
 
-_POSITIVE_EMOTIONS = frozenset({
-    'admiration', 'amusement', 'approval', 'caring', 'curiosity',
-    'desire', 'excitement', 'gratitude', 'joy', 'love',
-    'optimism', 'pride', 'relief',
-})
-_NEGATIVE_EMOTIONS = frozenset({
-    'anger', 'annoyance', 'disapproval', 'disgust', 'disappointment',
-    'embarrassment', 'fear', 'grief', 'nervousness', 'remorse', 'sadness',
-})
-_PREV_EMOTION_VALENCE: dict = {
-    'anger': -0.8, 'annoyance': -0.6, 'disapproval': -0.7, 'disgust': -0.8,
-    'disappointment': -0.6, 'embarrassment': -0.5, 'fear': -0.7, 'grief': -0.9,
-    'nervousness': -0.5, 'remorse': -0.7, 'sadness': -0.7,
-    'admiration': 0.8, 'amusement': 0.6, 'approval': 0.6, 'caring': 0.7,
-    'curiosity': 0.3, 'desire': 0.5, 'excitement': 0.8, 'gratitude': 0.8,
-    'joy': 0.9, 'love': 0.9, 'optimism': 0.7, 'pride': 0.7,
-    'relief': 0.6, 'neutral': 0.0, 'confusion': -0.1,
-    'realization': 0.1, 'surprise': 0.2,
+_CDM_KEEP = np.ones(CDM_CTX_DIM, dtype=np.float32)
+for _masked in (CTX_CDM_PROBS, CTX_RESIDENCY, CTX_TRANSITION, CTX_COHERENCE,
+                CTX_ENTROPY, CTX_RESONANCE, CTX_HMM_CONF, CTX_HMM_ENTROPY,
+                CTX_HMM_EMISSION, CTX_HMM_NEXT3, CTX_INTENT_STAB):
+    _CDM_KEEP[_masked] = 0.0
+
+
+def apply_context_mask(X):
+    """Zero label-leaked CDM/HMM state columns of feature array(s) in place.
+
+    Accepts [FEATURE_DIM] or [N, FEATURE_DIM]. Idempotent — used both by
+    build_feature_vector (fresh vectors) and trainer/cycle.py (cached vectors
+    built before the mask existed).
+    """
+    X = np.asarray(X)
+    if X.ndim == 1:
+        X[ML_DIM:ML_DIM + CDM_CTX_DIM] *= _CDM_KEEP
+    else:
+        X[:, ML_DIM:ML_DIM + CDM_CTX_DIM] *= _CDM_KEEP
+    return X
+
+_GOE_TO_EKMAN = {
+    "admiration": "joy",    "amusement": "joy",       "anger": "anger",
+    "annoyance":  "anger",  "approval":  "joy",       "caring": "joy",
+    "confusion":  "surprise","curiosity": "surprise",  "desire": "joy",
+    "disappointment": "sadness", "disapproval": "disgust", "disgust": "disgust",
+    "embarrassment": "fear","excitement": "joy",       "fear": "fear",
+    "gratitude":  "joy",    "grief": "sadness",       "joy": "joy",
+    "love":       "joy",    "nervousness": "fear",    "optimism": "joy",
+    "pride":      "joy",    "realization": "surprise", "relief": "joy",
+    "remorse":    "sadness","sadness": "sadness",     "surprise": "surprise",
+    "neutral":    "neutral",
 }
+
+_EMOTION_VAD = {
+    'admiration':     ( 0.72,  0.28,  0.52), 'amusement':      ( 0.76,  0.54,  0.42),
+    'anger':          (-0.64,  0.82,  0.62), 'annoyance':      (-0.48,  0.54,  0.42),
+    'approval':       ( 0.60,  0.28,  0.44), 'caring':         ( 0.74,  0.28,  0.36),
+    'confusion':      (-0.14,  0.36, -0.16), 'curiosity':      ( 0.38,  0.52,  0.30),
+    'desire':         ( 0.56,  0.70,  0.38), 'disappointment': (-0.62,  0.30, -0.32),
+    'disapproval':    (-0.52,  0.44,  0.36), 'disgust':        (-0.72,  0.54,  0.44),
+    'embarrassment':  (-0.42,  0.48, -0.40), 'excitement':     ( 0.72,  0.90,  0.52),
+    'fear':           (-0.72,  0.78, -0.64), 'gratitude':      ( 0.84,  0.28,  0.30),
+    'grief':          (-0.86, -0.20, -0.60), 'joy':            ( 0.90,  0.72,  0.60),
+    'love':           ( 0.88,  0.52,  0.44), 'nervousness':    (-0.44,  0.72, -0.50),
+    'optimism':       ( 0.76,  0.48,  0.52), 'pride':          ( 0.76,  0.58,  0.72),
+    'realization':    ( 0.20,  0.46,  0.16), 'relief':         ( 0.68, -0.30,  0.32),
+    'remorse':        (-0.60, -0.24, -0.44), 'sadness':        (-0.72, -0.40, -0.54),
+    'surprise':       ( 0.26,  0.72,  0.16), 'neutral':        ( 0.00,  0.00,  0.00),
+}
+_VAD_ARRAY = np.array([_EMOTION_VAD[k] for k in EMOTION_LABELS], dtype=np.float32)
 
 DEFAULT_MODEL_PATH = os.environ.get("MODEL_PATH", "/app/models/meta_weights.pkl")
 DEFAULT_META_PATH  = DEFAULT_MODEL_PATH.replace(".pkl", "_meta.json")
 
 
-# ── Neural architecture ─────────────────────────────────────────────────────────
+class _CPUUnpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module == "torch.storage" and name == "_load_from_bytes":
+            return lambda b: torch.load(io.BytesIO(b), map_location="cpu", weights_only=False)
+        return super().find_class(module, name)
+
+
+def _compute_vad_from_goe(goe_vec):
+    total = goe_vec.sum()
+    if total < 1e-6:
+        return 0.0, 0.0, 0.0
+    vad = (goe_vec / total) @ _VAD_ARRAY
+    return tuple(float(np.clip(v, -1.0, 1.0)) for v in vad)
+
+
+def _compute_inertia(goe_vec, prior_vec):
+    norm_g, norm_p = float(np.linalg.norm(goe_vec)), float(np.linalg.norm(prior_vec))
+    if norm_g < 1e-6 or norm_p < 1e-6:
+        return 0.0
+    return float(np.clip(np.dot(goe_vec, prior_vec) / (norm_g * norm_p), -1.0, 1.0))
+
+
+def _compute_novelty(goe_vec, prior_vec):
+    norm_g = float(np.linalg.norm(goe_vec))
+    if norm_g < 1e-6:
+        return 0.0
+    norm_p = float(np.linalg.norm(prior_vec))
+    if norm_p < 1e-6:
+        p = goe_vec / norm_g
+        return float(np.clip(-np.sum(p * np.log(p + 1e-9)) / np.log(len(EMOTION_LABELS)), 0.0, 1.0))
+    return float(np.clip(1.0 - np.dot(goe_vec, prior_vec) / (norm_g * norm_p), 0.0, 1.0))
+
 
 class GatingEnsembleNet(nn.Module):
-    """
-    Bayesian Context-First architecture for 28-class emotion classification.
-
-    Forward pass:
-        ctx_weight = sigmoid(ctx_alpha * hmm_conf - ctx_bias)   per-sample [0,1]
-        ctx_logits = CtxPriorHead(enc_ctx_expert(x_c))          P(emotion | history)
-        nlp_logits = NLPHead(Σ_k α_k · enc_k(x_k))             P(emotion | text)
-        logits     = ctx_weight * ctx_logits + (1-ctx_weight) * nlp_logits / nlp_temp
-
-    When hmm_conf → 1.0 (HMM certain):  ctx_weight → high  → context dominates
-    When hmm_conf → 0.0 (cold start):   ctx_weight → ~0.12 → NLP dominates
-
-    ctx_alpha, ctx_bias, nlp_temp are learnable — the network adapts the
-    confidence curve to the actual quality of the HMM signal in the training data.
-    """
-
-    def __init__(
-        self,
-        n_classes: int = len(EMOTION_LABELS),
-        d: int = D_MODEL,
-        dropout: float = DROPOUT,
-    ):
+    def __init__(self, n_classes=len(EMOTION_LABELS), d=D_MODEL, dropout=DROPOUT):
         super().__init__()
-
-        # NLP modality encoders
-        self.enc_vader = self._make_encoder(4,  d)
-        self.enc_bert  = self._make_encoder(7,  d)
-        self.enc_goe   = self._make_encoder(28, d)
-
-        # Context routing encoder: heavy dropout resists synthetic-data leakage.
-        # Used to route the NLP gate and provide the context residual.
-        self.enc_context = nn.Sequential(
-            nn.Linear(CONTEXT_DIM, d * 2),
-            nn.LayerNorm(d * 2),
-            nn.GELU(),
+        self.enc_vader      = self._make_encoder(4,  d)
+        self.enc_bert       = self._make_encoder(7,  d)
+        self.enc_goe        = self._make_encoder(28, d)
+        self.enc_vad        = self._make_encoder(3,  d)
+        self.enc_context    = nn.Sequential(
+            nn.Linear(CONTEXT_DIM, d * 2), nn.LayerNorm(d * 2), nn.GELU(),
             nn.Dropout(dropout + 0.15),
-            nn.Linear(d * 2, d),
-            nn.GELU(),
+            nn.Linear(d * 2, d), nn.GELU(),
         )
-
-        # Context expert encoder: lighter, learns emotion-predictive representation.
         self.enc_ctx_expert = self._make_encoder(CONTEXT_DIM, d)
-
-        # Context prior head: enc_ctx_expert → emotion prior logits
-        self.ctx_prior_head = nn.Sequential(
-            nn.LayerNorm(d),
-            nn.Linear(d, n_classes),
+        self.ctx_prior_head = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, n_classes))
+        self.gate_nlp       = nn.Sequential(nn.Linear(d, 32), nn.GELU(), nn.Linear(32, 4))
+        self.nlp_head       = nn.Sequential(
+            nn.LayerNorm(d), nn.Linear(d, d * 2), nn.GELU(),
+            nn.Dropout(dropout), nn.Linear(d * 2, n_classes),
         )
-
-        # NLP gate: routes attention over 3 NLP experts [vader, bert, goe]
-        self.gate_nlp = nn.Sequential(
-            nn.Linear(d, 32),
-            nn.GELU(),
-            nn.Linear(32, 3),
-        )
-
-        # NLP likelihood head
-        self.nlp_head = nn.Sequential(
-            nn.LayerNorm(d),
-            nn.Linear(d, d * 2),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(d * 2, n_classes),
-        )
-
-        # Context residual: contributes to NLP repr for smoother convergence
         self.ctx_residual = nn.Linear(d, d)
-
-        # Bayesian combination parameters (all learnable)
-        # ctx_weight = sigmoid(ctx_alpha * hmm_conf - ctx_bias)
-        # defaults: hmm_conf=0 → sigmoid(-2)≈0.12, hmm_conf=1 → sigmoid(1)≈0.73
-        self.ctx_alpha = nn.Parameter(torch.tensor(3.0))
-        self.ctx_bias  = nn.Parameter(torch.tensor(2.0))
+        self.ctx_alpha = nn.Parameter(torch.tensor(2.0))
+        self.ctx_bias  = nn.Parameter(torch.tensor(2.5))
         self.nlp_temp  = nn.Parameter(torch.tensor(1.5))
 
     @staticmethod
-    def _make_encoder(in_dim: int, out_dim: int) -> nn.Sequential:
-        return nn.Sequential(
-            nn.Linear(in_dim, out_dim),
-            nn.LayerNorm(out_dim),
-            nn.GELU(),
-        )
+    def _make_encoder(in_dim, out_dim):
+        return nn.Sequential(nn.Linear(in_dim, out_dim), nn.LayerNorm(out_dim), nn.GELU())
 
-    def forward(
-        self,
-        x: torch.Tensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Args:
-            x: [B, FEATURE_DIM]
-               x[:,  0:4]       — VADER
-               x[:,  4:11]      — BERT
-               x[:, 11:ML_DIM]  — GoEmotions
-               x[:, ML_DIM:]    — Context (CONTEXT_DIM dims)
+    def forward(self, x):
+        x_v, x_b, x_g = x[:, 0:4], x[:, 4:11], x[:, 11:39]
+        x_vad, x_c    = x[:, 39:42], x[:, 42:]
 
-        Returns:
-            logits:       [B, n_classes]
-            gate_weights: [B, 4]  [vader, bert, goe, context] — sum to 1 per sample
-        """
-        x_v = x[:, 0:4]
-        x_b = x[:, 4:11]
-        x_g = x[:, 11:ML_DIM]
-        x_c = x[:, ML_DIM:FEATURE_DIM]
+        hmm_conf      = x_c[:, CTX_HMM_CONF].unsqueeze(1).clamp(0.0, 1.0)
+        ctx_weight    = torch.sigmoid(
+            self.ctx_alpha.clamp(0.5, 4.0) * hmm_conf - self.ctx_bias.clamp(1.0, 4.0)
+        ).clamp(max=CTX_WEIGHT_CAP)
+        ctx_available = (x_c.abs().sum(dim=1, keepdim=True) > 0.01).float()
 
-        # HMM confidence — drives context vs NLP balance
-        hmm_conf   = x_c[:, CTX_HMM_CONF].unsqueeze(1).clamp(0.0, 1.0)  # [B, 1]
-        ctx_weight = torch.sigmoid(
-            self.ctx_alpha.clamp(0.5, 6.0) * hmm_conf
-            - self.ctx_bias.clamp(0.5, 4.0)
-        )  # [B, 1]
-
-        # Context path
         c_h              = self.enc_context(x_c)
-        e_c              = self.enc_ctx_expert(x_c)
-        ctx_prior_logits = self.ctx_prior_head(e_c)           # [B, n_classes]
+        ctx_prior_logits = self.ctx_prior_head(self.enc_ctx_expert(x_c))
 
-        # NLP path
-        e_v       = self.enc_vader(x_v)
-        e_b       = self.enc_bert(x_b)
-        e_g       = self.enc_goe(x_g)
-        alpha_nlp = F.softmax(self.gate_nlp(c_h), dim=-1)    # [B, 3]
-        nlp_mix   = (alpha_nlp.unsqueeze(-1) * torch.stack([e_v, e_b, e_g], dim=1)).sum(dim=1)
-        nlp_repr  = nlp_mix + 0.3 * self.ctx_residual(c_h)
-        nlp_logits = self.nlp_head(nlp_repr) / self.nlp_temp.clamp(0.5, 3.0)  # [B, n_classes]
-
-        # Bayesian logit averaging — equivalent to geometric mean of distributions
-        logits = ctx_weight * ctx_prior_logits + (1.0 - ctx_weight) * nlp_logits
-
-        # Gate weights for logging: NLP experts share (1-ctx_weight), context gets ctx_weight
-        nlp_w     = 1.0 - ctx_weight                          # [B, 1]
-        alpha_out = torch.cat([
-            alpha_nlp * nlp_w,  # [B, 3]: vader, bert, goe weighted by NLP fraction
-            ctx_weight,         # [B, 1]: context weight
-        ], dim=1)               # [B, 4]
-
+        e_v, e_b, e_g, e_vad = (
+            self.enc_vader(x_v), self.enc_bert(x_b), self.enc_goe(x_g), self.enc_vad(x_vad)
+        )
+        ctx_gate_raw = F.softmax(self.gate_nlp(c_h * ctx_available), dim=-1)
+        goe_capped   = ctx_gate_raw[:, 2:3].clamp(max=0.50)
+        others       = torch.cat([ctx_gate_raw[:, :2], ctx_gate_raw[:, 3:]], dim=1)
+        others       = others / others.sum(dim=1, keepdim=True).clamp(min=1e-8) * (1.0 - goe_capped)
+        ctx_gate     = torch.cat([others[:, :2], goe_capped, others[:, 2:]], dim=1)
+        alpha_nlp    = ctx_gate * ctx_available + (1.0 - ctx_available) / 4.0
+        nlp_mix      = (alpha_nlp.unsqueeze(-1) * torch.stack([e_v, e_b, e_g, e_vad], dim=1)).sum(dim=1)
+        nlp_logits   = (
+            self.nlp_head(nlp_mix + 0.3 * ctx_available * self.ctx_residual(c_h))
+            / self.nlp_temp.clamp(0.5, 3.0)
+        )
+        logits    = ctx_weight * ctx_prior_logits + (1.0 - ctx_weight) * nlp_logits
+        alpha_out = torch.cat([alpha_nlp * (1.0 - ctx_weight), ctx_weight], dim=1)
         return logits, alpha_out
 
 
 class GatingNetworkWrapper:
-    """
-    sklearn-compatible wrapper around GatingEnsembleNet.
-
-    Exposes .predict(X), .predict_proba(X), .classes_ — identical interface
-    to the previous sklearn MLPClassifier Pipeline, so every existing caller
-    (calculate_feature_impacts, load_meta_learner probe, main.py) works
-    without modification.
-
-    An additional .get_gate_weights(X) method returns α [n, 3] for the
-    Pipeline Inspector / interpretability logging.
-    """
-
-    def __init__(
-        self,
-        model: GatingEnsembleNet,
-        classes: List[str],
-        scaler: StandardScaler,
-    ):
+    def __init__(self, model, classes, scaler):
         self.model_   = model
         self.classes_ = np.array(classes)
         self.scaler_  = scaler
         self._device  = next(model.parameters()).device
 
-    # ── sklearn interface ──────────────────────────────────────────────────────
-
-    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+    def predict_proba(self, X):
         X_s = self.scaler_.transform(X.reshape(-1, FEATURE_DIM))
         t   = torch.tensor(X_s, dtype=torch.float32, device=self._device)
         self.model_.eval()
         with torch.no_grad():
             logits, _ = self.model_(t)
-            # Apply calibration temperature if stored
-            T = getattr(self, '_temperature', 1.0)
-            proba = F.softmax(logits / T, dim=-1).cpu().numpy()
-        return proba  # [n, n_classes]
+            return F.softmax(logits / getattr(self, '_temperature', 1.0), dim=-1).cpu().numpy()
 
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X):
         return self.classes_[self.predict_proba(X).argmax(axis=1)]
 
-    # ── Extended API ───────────────────────────────────────────────────────────
-
-    def get_gate_weights(self, X: np.ndarray) -> np.ndarray:
-        """Return α routing weights [n, 4] — order: [vader, bert, goe, context]."""
+    def get_gate_weights(self, X):
         X_s = self.scaler_.transform(X.reshape(-1, FEATURE_DIM))
         t   = torch.tensor(X_s, dtype=torch.float32, device=self._device)
         self.model_.eval()
@@ -260,34 +219,21 @@ class GatingNetworkWrapper:
         return alpha.cpu().numpy()
 
 
-# ── Public API ──────────────────────────────────────────────────────────────────
-
-def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
-    """
-    Load the trained model from disk.
-
-    Accepts both:
-      - GatingNetworkWrapper  (v2 — preferred)
-      - sklearn Pipeline      (v1 — backward compat while transitioning)
-
-    Returns None on any failure — caller falls back to rule-based mode.
-    """
+def load_meta_learner(model_path=DEFAULT_MODEL_PATH):
     try:
         if not os.path.exists(model_path):
             logger.warning(f"No model file at '{model_path}'. Fallback mode.")
             return None
-
         with open(model_path, 'rb') as f:
-            model = pickle.load(f)
-
+            model = _CPUUnpickler(f).load()
         if not hasattr(model, 'predict_proba'):
             logger.warning("Loaded object has no predict_proba. Fallback mode.")
             return None
-
-        # Dimension probe — catches stale pkl files after FEATURE_DIM changes
+        if isinstance(model, GatingNetworkWrapper):
+            model.model_.cpu()
+            model._device = torch.device("cpu")
         try:
-            dummy = np.zeros((1, FEATURE_DIM))
-            model.predict(dummy)
+            model.predict(np.zeros((1, FEATURE_DIM)))
         except Exception as e:
             logger.warning(f"Model incompatible with {FEATURE_DIM}-dim probe: {e}. Deleting stale pkl.")
             try:
@@ -295,120 +241,268 @@ def load_meta_learner(model_path: str = DEFAULT_MODEL_PATH) -> Optional[object]:
             except OSError:
                 pass
             return None
-
         _log_metadata()
-
-        # Load calibration temperature from meta.json if available
         if isinstance(model, GatingNetworkWrapper):
             try:
-                meta_path = model_path.replace(".pkl", "_meta.json") if isinstance(model_path, str) else str(model_path).replace(".pkl", "_meta.json")
-                with open(meta_path) as f:
+                with open(str(model_path).replace(".pkl", "_meta.json")) as f:
                     meta = json.load(f)
-                T = float(meta.get("calibration_temperature", 1.0))
-                model._temperature = T
-                logger.info(f"   Calibration T   : {T:.4f}")
+                model._temperature = float(meta.get("calibration_temperature", 1.0))
+                logger.info(f"   Calibration T: {model._temperature:.4f}")
             except Exception:
                 model._temperature = 1.0
-            logger.info("Meta-learner v2 (GatingEnsembleNet + Bayesian ctx-first) loaded.")
+            logger.info("Meta-learner v2 (GatingEnsembleNet) loaded.")
         else:
             logger.info("Meta-learner v1 (sklearn Pipeline) loaded — retrain to upgrade.")
-
         return model
-
     except Exception as e:
         logger.warning(f"Failed to load model: {e}. Fallback mode.")
         return None
 
 
 def build_feature_vector(
-    model_outputs: dict,
-    context_vector: list = None,
-) -> np.ndarray:
-    """
-    Assemble a fixed 62-dim float32 feature vector.
-
-    Layout:
-      [0:4]   VADER (4)
-      [4:11]  BERT Ekman (7)
-      [11:39] GoEmotions (28)
-      [39:62] Context Engine (23)
-    """
+    model_outputs, context_vector=None, trajectory_prior=None,
+    sarcasm_score=0.0, vad_scores=None, dynamics_scores=None, appraisal_scores=None,
+):
     vader_scores      = model_outputs.get("vader",       {})
     bert_scores       = model_outputs.get("basic_bert",  {})
     goemotions_scores = model_outputs.get("go_emotions", {})
 
-    vec = []
-    for k in VADER_KEYS:
-        vec.append(float(vader_scores.get(k, 0.0)))
-    for k in BERT_LABELS:
-        vec.append(float(bert_scores.get(k, 0.0)))
-    for k in EMOTION_LABELS:
-        vec.append(float(goemotions_scores.get(k, 0.0)))
+    def _sf(v, d=0.0):
+        try:
+            f = float(v)
+            return f if np.isfinite(f) else d
+        except Exception:
+            return d
 
-    ctx = (
-        context_vector
-        if (context_vector and len(context_vector) == CONTEXT_DIM)
-        else [0.0] * CONTEXT_DIM
-    )
-    vec.extend(ctx)
+    goe_vec  = np.array([_sf(goemotions_scores.get(k, 0.0)) for k in EMOTION_LABELS], dtype=np.float32)
+    compound = _sf(vader_scores.get("vader_compound", 0.0))
 
+    vec  = [_sf(vader_scores.get(k, 0.0))   for k in VADER_KEYS]
+    vec += [_sf(bert_scores.get(k, 0.0))    for k in BERT_LABELS]
+    vec += goe_vec.tolist()
+
+    if vad_scores is not None:
+        valence   = float(np.clip(vad_scores.get("valence",   0.0), -1.0, 1.0))
+        arousal   = float(np.clip(vad_scores.get("arousal",   0.0), -1.0, 1.0))
+        dominance = float(np.clip(vad_scores.get("dominance", 0.0), -1.0, 1.0))
+    else:
+        valence, arousal, dominance = _compute_vad_from_goe(goe_vec)
+    vec += [valence, arousal, dominance]
+
+    cdm = list(context_vector if (context_vector is not None and len(context_vector) == CDM_CTX_DIM) else [0.0] * CDM_CTX_DIM)
+    cdm[CTX_MSG_LENGTH]   = min(float(cdm[CTX_MSG_LENGTH])  / 500.0,  3.0)
+    cdm[CTX_LATENCY_MS]   = min(float(cdm[CTX_LATENCY_MS])  / 2000.0, 3.0)
+    cdm[CTX_HMM_EMISSION] = float(np.clip(cdm[CTX_HMM_EMISSION], 0.0, 1.0))
+    cdm = [float(v) * float(k) for v, k in zip(cdm, _CDM_KEEP)]
+
+    prior_list = trajectory_prior if (trajectory_prior is not None and len(trajectory_prior) == PRIOR_DIM) else [0.0] * PRIOR_DIM
+    prior_vec  = np.array(prior_list, dtype=np.float32)
+    sarc       = float(np.clip(sarcasm_score, 0.0, 1.0))
+
+    if dynamics_scores is not None:
+        inertia   = float(np.clip(dynamics_scores.get("inertia",   0.0), -1.0, 1.0))
+        contagion = float(np.clip(dynamics_scores.get("contagion", 0.0), -1.0, 1.0))
+    else:
+        inertia   = _compute_inertia(goe_vec, prior_vec)
+        contagion = float(np.clip(compound * float(cdm[CTX_CURR_VALENCE]), -1.0, 1.0))
+
+    if appraisal_scores is not None:
+        novelty         = float(np.clip(appraisal_scores.get("novelty",         0.0),  0.0, 1.0))
+        goal_congruence = float(np.clip(appraisal_scores.get("goal_congruence", 0.0), -1.0, 1.0))
+        coping          = float(np.clip(appraisal_scores.get("coping",          0.5),  0.0, 1.0))
+    else:
+        novelty         = _compute_novelty(goe_vec, prior_vec)
+        goal_congruence = float(np.clip(valence, -1.0, 1.0))
+        coping          = float(np.clip((compound + 1.0) / 2.0, 0.0, 1.0))
+
+    vec += cdm + prior_list + [sarc, inertia, contagion, novelty, goal_congruence, coping]
     return np.array(vec, dtype=np.float32).reshape(1, -1)
 
 
-def predict_with_meta_learner(
-    model,
-    feature_vector: np.ndarray,
-) -> Tuple[str, float, dict, float, Optional[str], Optional[list]]:
-    """
-    Run inference with the meta-learner.
+def _t(trace, step, status, detail, label=None, confidence=None):
+    if trace is not None:
+        trace.append({
+            "step": step, "status": status, "detail": detail,
+            "label": label, "confidence": round(float(confidence), 4) if confidence is not None else None,
+        })
 
-    Args:
-        model:          GatingNetworkWrapper or sklearn Pipeline
-        feature_vector: [1, 62] from build_feature_vector()
 
-    Returns:
-        (dominant_emotion, confidence, all_scores, sarcasm_score, conflict_desc, gate_alpha)
-        gate_alpha is [vader_w, bert_w, goe_w] for v2, None for v1/fallback.
-        On any error returns ("neutral", 0.0, {}, 0.0, None, None).
-    """
+def predict_with_meta_learner(model, feature_vector, trace=None):
     if model is None:
-        goe = feature_vector[0, 11:ML_DIM]
+        goe = feature_vector[0, 11:39]
         if goe.max() > 0:
             idx    = int(goe.argmax())
             scores = {e: float(goe[i]) for i, e in enumerate(EMOTION_LABELS)}
+            _t(trace, "Rule-based fallback", "applied",
+               "No meta-learner loaded — raw GoEmotions argmax used",
+               EMOTION_LABELS[idx], goe[idx])
             return EMOTION_LABELS[idx], float(goe[idx]), scores, 0.0, None, None
-        return "neutral", 1.0, {"neutral": 1.0}, 0.0, None, None
+        bert = feature_vector[0, 4:11]
+        if bert.max() > 0:
+            idx    = int(bert.argmax())
+            label  = BERT_LABELS[idx]
+            scores = {e: float(bert[i]) for i, e in enumerate(BERT_LABELS)}
+            _t(trace, "Rule-based fallback", "applied",
+               "No meta-learner and no GoE signal — raw BERT argmax used",
+               label, bert[idx])
+            return label, float(bert[idx]), scores, 0.0, None, None
+        _t(trace, "Rule-based fallback", "applied",
+           "No meta-learner and no model signal at all — neutral guess (low confidence)",
+           "neutral", 0.5)
+        return "neutral", 0.5, {"neutral": 0.5}, 0.0, None, None
 
     try:
-        pred_label = model.predict(feature_vector)[0]
-        proba      = model.predict_proba(feature_vector)[0]
+        model_input = feature_vector.copy()
+        model_input[0, ML_DIM + CDM_CTX_DIM + PRIOR_DIM] = 0.0
+        pred_label = model.predict(model_input)[0]
+        proba      = model.predict_proba(model_input)[0]
         classes    = model.classes_
+        all_scores = {str(k): float(v) for k, v in zip(classes, proba)}
+        confidence = float(proba[list(classes).index(pred_label)])
 
-        all_scores   = {str(k): float(v) for k, v in zip(classes, proba)}
-        label_idx    = list(classes).index(pred_label)
-        confidence   = float(proba[label_idx])
+        goe_raw  = feature_vector[0, 11:39]
+        goe_max  = float(goe_raw.max())
+        goe_top  = EMOTION_LABELS[int(goe_raw.argmax())]
+        bert_raw = feature_vector[0, 4:11]
+        bert_max = float(bert_raw.max())
+        bert_top = BERT_LABELS[int(bert_raw.argmax())]
+        _compound     = float(feature_vector[0, 3])
+        _sarcasm_slot = float(feature_vector[0, 110])
+
+        def _top3(sc):
+            return " · ".join(f"{k} {v:.2f}" for k, v in
+                              sorted(((k, v) for k, v in sc.items() if k != "ekman_group"),
+                                     key=lambda x: -x[1])[:3])
+
+        _t(trace, "Model inputs", "info",
+           f"VADER compound {_compound:+.2f} · BERT top {bert_top} {bert_max:.2f} · "
+           f"GoE top {goe_top} {goe_max:.2f} · sarcasm-classifier {_sarcasm_slot:.2f}")
 
         gate_alpha = None
-        # ── DIAG-3: gate weights — promoted to WARNING so they always appear ──
         if isinstance(model, GatingNetworkWrapper):
             alpha      = model.get_gate_weights(feature_vector)[0]
             gate_alpha = [round(float(a), 4) for a in alpha]
-            ctx_vec    = feature_vector[0, ML_DIM:]  # context block [ML_DIM:FEATURE_DIM]
-            ctx_L2     = float(np.linalg.norm(ctx_vec))
-            ctx_mean   = float(np.mean(ctx_vec))
-            ctx_max    = float(np.max(np.abs(ctx_vec)))
-            logger.debug(
-                f"[DIAG-3] Gate α — vader:{alpha[0]:.3f}  bert:{alpha[1]:.3f}  "
-                f"goe:{alpha[2]:.3f}  ctx:{alpha[3]:.3f}  (sum={sum(alpha):.3f})  "
-                f"ctx_L2={ctx_L2:.4f}  ctx_mean={ctx_mean:.4f}  ctx_max={ctx_max:.4f}"
-            )
-        else:
-            logger.debug(
-                f"[DIAG-3] Model type={type(model).__name__} — NOT GatingNetworkWrapper; "
-                f"no gate α available (stale pkl?)"
-            )
+            vad_str    = f"  vad:{alpha[3]:.3f}" if len(alpha) > 4 else ""
+            logger.debug(f"[Gate] vader:{alpha[0]:.3f} bert:{alpha[1]:.3f} goe:{alpha[2]:.3f}{vad_str} ctx:{alpha[-1]:.3f}")
+            _names = ["VADER", "BERT", "GoE", "VAD", "Context"][:len(gate_alpha)]
+            _dom_gate = _names[int(max(range(len(gate_alpha)), key=lambda i: gate_alpha[i]))]
+            _t(trace, "Ensemble gates", "info",
+               " · ".join(f"{n} {a:.2f}" for n, a in zip(_names, gate_alpha))
+               + f" — {_dom_gate} weighted highest (ctx capped at {CTX_WEIGHT_CAP:.2f}, GoE gate capped at 0.50)")
 
-        sarcasm_score, conflict_desc = detect_emotional_conflicts(feature_vector)
+        _flat = " — ⚠ near-flat distribution, verdict is low-signal" if confidence < 0.30 else ""
+        _t(trace, "Meta-learner (GatingEnsembleNet)", "info",
+           f"top: {_top3(all_scores)}{_flat}", pred_label, confidence)
+
+        guard_conflict = None
+
+        if goe_max >= 0.75 and pred_label != goe_top:
+            blend   = min(goe_max * 0.80, 0.65)
+            target  = {e: float(goe_raw[i]) for i, e in enumerate(EMOTION_LABELS)}
+            blended = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target[e] for e in EMOTION_LABELS}
+            _prev = pred_label
+            pred_label = max(blended, key=blended.get)
+            confidence, all_scores = blended[pred_label], blended
+            logger.warning(f"[NLP-guard/GoE] {goe_top}({goe_max:.2f}) → {pred_label}({confidence:.2f})")
+            _t(trace, "NLP-guard / GoEmotions", "applied",
+               f"Raw GoE {goe_top} ({goe_max:.2f}) ≥ 0.75 contradicted meta '{_prev}' — blended {blend:.0%} toward GoE",
+               pred_label, confidence)
+
+        elif (bert_top in EMOTION_LABELS) and bert_max >= 0.80 and pred_label != bert_top:
+            _bert_subtypes = {
+                "joy":     {"joy","amusement","excitement","admiration","love","approval","caring","gratitude","optimism","pride","desire","relief"},
+                "sadness": {"sadness","grief","remorse","disappointment"},
+                "anger":   {"anger","annoyance","disapproval"},
+                "fear":    {"fear","nervousness"},
+                "neutral": {"neutral","realization"},
+                "surprise":{"surprise","realization","confusion"},
+                "disgust": {"disgust","disapproval"},
+            }
+            vader_compound = float(feature_vector[0, 3])
+            consensus      = pred_label == goe_top and goe_max >= 0.50
+            cross_conflict = goe_max >= 0.60 and _GOE_TO_EKMAN.get(goe_top, "neutral") != bert_top
+            valence_veto   = bert_top in {"fear", "anger", "sadness", "disgust"} and vader_compound >= 0.30
+            if consensus or cross_conflict or valence_veto:
+                if cross_conflict:
+                    guard_conflict = "Expert conflict: BERT contradicts GoEmotions (possible hyperbole)"
+                _reasons = [r for r, on in (("meta+GoE consensus", consensus),
+                                            ("cross-expert conflict", cross_conflict),
+                                            ("positive-valence veto", valence_veto)) if on]
+                _t(trace, "NLP-guard / BERT", "suppressed",
+                   f"BERT {bert_top} ({bert_max:.2f}) wanted to override, stood down: {', '.join(_reasons)}",
+                   pred_label, confidence)
+                logger.debug(
+                    f"[NLP-guard/BERT] suppressed (consensus={consensus} cross={cross_conflict} "
+                    f"valence={valence_veto}) bert={bert_top}({bert_max:.2f}) goe={goe_top}({goe_max:.2f})")
+            elif pred_label not in _bert_subtypes.get(bert_top, {bert_top}):
+                blend   = min(bert_max * 0.70, 0.55)
+                target  = {e: (1.0 if e == bert_top else 0.0) for e in EMOTION_LABELS}
+                blended = {e: (1.0 - blend) * all_scores.get(e, 0.0) + blend * target[e] for e in EMOTION_LABELS}
+                _prev = pred_label
+                pred_label = max(blended, key=blended.get)
+                confidence, all_scores = blended[pred_label], blended
+                logger.warning(f"[NLP-guard/BERT] {bert_top}({bert_max:.2f}) → {pred_label}({confidence:.2f})")
+                _t(trace, "NLP-guard / BERT", "applied",
+                   f"Raw BERT {bert_top} ({bert_max:.2f}) ≥ 0.80 outside meta '{_prev}' family — blended {blend:.0%} toward BERT",
+                   pred_label, confidence)
+            else:
+                _t(trace, "NLP-guard / BERT", "skipped",
+                   f"BERT {bert_top} ({bert_max:.2f}) confident, but meta '{pred_label}' is within the {bert_top} family — no override needed")
+
+        else:
+            _goe_why  = ("meta already agrees with GoE" if pred_label == goe_top
+                         else f"GoE max {goe_max:.2f} < 0.75 threshold")
+            _bert_why = ("meta already agrees with BERT" if pred_label == bert_top
+                         else (f"BERT max {bert_max:.2f} < 0.80 threshold" if bert_max < 0.80
+                               else f"BERT top '{bert_top}' is not a GoE label"))
+            _t(trace, "NLP-guards", "skipped", f"GoE guard: {_goe_why} · BERT guard: {_bert_why}")
+
+        heuristic_sarcasm, conflict_desc = detect_emotional_conflicts(feature_vector)
+        learned_sarcasm = float(feature_vector[0, ML_DIM + CDM_CTX_DIM + PRIOR_DIM])
+        _goe_block = feature_vector[0, 11:39]
+        neg_cue = float(max(_goe_block[2], _goe_block[3], _goe_block[9],
+                            _goe_block[10], _goe_block[11]))
+        if learned_sarcasm >= 0.5 and heuristic_sarcasm >= 0.5:
+            sarcasm_score = max(learned_sarcasm, heuristic_sarcasm)
+        elif learned_sarcasm >= 0.75 and neg_cue >= 0.15:
+            sarcasm_score = learned_sarcasm
+        else:
+            sarcasm_score = 0.65 * learned_sarcasm + 0.35 * heuristic_sarcasm
+            if neg_cue < 0.15:
+                sarcasm_score = min(sarcasm_score, 0.50)
+        if heuristic_sarcasm > 0 or learned_sarcasm > 0:
+            _t(trace, "Sarcasm evidence", "info",
+               f"classifier {learned_sarcasm:.2f} · heuristic {heuristic_sarcasm:.2f} "
+               f"· neg-cue {neg_cue:.2f} → combined {sarcasm_score:.2f} (inversion needs > 0.50)")
+        if conflict_desc is None and guard_conflict:
+            conflict_desc = guard_conflict
+        if conflict_desc:
+            _t(trace, "Conflict detector", "info", conflict_desc)
+
+        if sarcasm_score > 0.5:
+            _POS = [EMOTION_LABELS.index(e) for e in ("joy","amusement","admiration","approval","excitement","love","optimism","pride","caring","gratitude") if e in EMOTION_LABELS]
+            _NEG = [EMOTION_LABELS.index(e) for e in ("annoyance","disappointment","anger","disapproval","disgust","grief","remorse","sadness") if e in EMOTION_LABELS]
+            inv  = min((sarcasm_score - 0.5) * 2.0, 1.0) * 0.6
+            probs = np.array([all_scores.get(e, 0.0) for e in EMOTION_LABELS], dtype=np.float32)
+            for pos, neg in zip(_POS, _NEG):
+                t = probs[pos] * inv
+                probs[neg] += t; probs[pos] -= t
+            probs = np.clip(probs, 0.0, None)
+            s = probs.sum()
+            if s > 1e-6:
+                probs /= s
+            all_scores = {e: float(probs[i]) for i, e in enumerate(EMOTION_LABELS)}
+            _prev = pred_label
+            pred_label = max(all_scores, key=all_scores.get)
+            confidence = all_scores[pred_label]
+            _t(trace, "Sarcasm inversion", "applied",
+               f"Sarcasm score {sarcasm_score:.2f} > 0.5 — shifted {inv:.0%} of positive mass onto paired negatives ('{_prev}' → '{pred_label}')",
+               pred_label, confidence)
+        else:
+            _t(trace, "Sarcasm inversion", "skipped",
+               f"conflict score {sarcasm_score:.2f} ≤ 0.50 — scores unchanged")
+
+        all_scores["ekman_group"] = _GOE_TO_EKMAN.get(pred_label, "neutral")
         return pred_label, confidence, all_scores, sarcasm_score, conflict_desc, gate_alpha
 
     except Exception as e:
@@ -416,119 +510,54 @@ def predict_with_meta_learner(
         return "neutral", 0.0, {}, 0.0, None, None
 
 
-def detect_emotional_conflicts(vec: np.ndarray) -> Tuple[float, Optional[str]]:
-    """
-    Heuristic sarcasm / cognitive-dissonance detector.
-
-    Uses index-based access to the flat feature vector — indices mirror the
-    VADER_KEYS / BERT_LABELS / EMOTION_LABELS ordering in build_feature_vector.
-    Returns (sarcasm_score [0.0–1.0], conflict_description | None).
-    """
+def detect_emotional_conflicts(vec):
     try:
         v = vec.flatten()
-
-        # VADER block [0:4]: neg=0, neu=1, pos=2, compound=3
-        v_pos = float(v[2])
-        v_cmp = float(v[3])
-
-        # BERT Ekman [4:11]: anger=4, disgust=5, fear=6, joy=7, neutral=8, sadness=9, surprise=10
-        bert_joy     = float(v[7])
-        bert_neutral = float(v[8])
-
-        # GoEmotions [11:39] — EMOTION_LABELS ordering
-        # annoyance=idx3, disapproval=idx10, disgust=idx11
-        emo_annoyance   = float(v[11 + 3])
-        emo_disapproval = float(v[11 + 10])
-        emo_disgust     = float(v[11 + 11])
-
-        neg_emo     = max(emo_annoyance, emo_disapproval, emo_disgust)
-        pos_text    = (v_pos + bert_joy) / 2.0
-        sarcasm_score = 0.0
-        conflict_desc = None
-
+        v_pos, v_cmp     = float(v[2]), float(v[3])
+        bert_joy         = float(v[7])
+        bert_neutral     = float(v[8])
+        neg_emo = max(float(v[11 + 3]), float(v[11 + 10]), float(v[11 + 11]))
+        pos_text = (v_pos + bert_joy) / 2.0
         if pos_text > 0.6 and neg_emo > 0.4:
-            sarcasm_score = min(pos_text, neg_emo) * 1.2
-            conflict_desc = (
-                "Cognitive Dissonance: high-fidelity positive text "
-                "paired with dismissive visual cues."
-            )
-        elif v_cmp > 0.8 and neg_emo > 0.2:
-            sarcasm_score = 0.5 + neg_emo
-            conflict_desc = (
-                "Sarcasm detected: semantic praise contradicts visual frustration."
-            )
-        elif bert_neutral > 0.7 and (emo_annoyance > 0.1 or emo_disapproval > 0.1):
-            sarcasm_score = 0.4
-            conflict_desc = (
-                "Passive-aggression suspected: formal 'Neutral' text "
-                "with underlying emoji tension."
-            )
-
-        return min(sarcasm_score, 1.0), conflict_desc
-
+            return min(1.0, min(pos_text, neg_emo) * 1.2), "Cognitive Dissonance: positive text with dismissive cues."
+        if v_cmp > 0.8 and neg_emo > 0.2:
+            return min(1.0, 0.5 + neg_emo), "Sarcasm detected: semantic praise contradicts frustration."
+        if bert_neutral > 0.7 and neg_emo > 0.1:
+            return 0.4, "Passive-aggression: formal neutral text with underlying tension."
+        bert_negative = max(float(v[4]), float(v[5]), float(v[6]), float(v[9]))
+        goe_raw       = v[11:39]
+        goe_top       = EMOTION_LABELS[int(goe_raw.argmax())]
+        if bert_negative > 0.5 and v_cmp > 0.3 and _GOE_TO_EKMAN.get(goe_top) == "joy":
+            return 0.3, "Hyperbole: negative wording with positive intent."
+        return 0.0, None
     except Exception:
         return 0.0, None
 
 
-def calculate_feature_impacts(
-    model,
-    feature_vector: np.ndarray,
-    predicted_emotion: str,
-) -> dict:
-    """
-    Block-level feature attribution via leave-one-out sensitivity.
-
-    Measures Δproba when each modality block is zeroed.  Four forward passes;
-    negligible latency.  Model-agnostic — works for both v1 and v2.
-    """
+def calculate_feature_impacts(model, feature_vector, predicted_emotion):
     try:
         classes = list(model.classes_)
         if predicted_emotion not in classes:
             return {}
-        class_idx  = classes.index(predicted_emotion)
-        base_proba = float(model.predict_proba(feature_vector)[0][class_idx])
-
-        blocks = {
-            "VADER":      slice(0,      4),
-            "BERT":       slice(4,      11),
-            "GoEmotions": slice(11,     ML_DIM),
-            "Context":    slice(ML_DIM, FEATURE_DIM),
-        }
+        idx        = classes.index(predicted_emotion)
+        base_proba = float(model.predict_proba(feature_vector)[0][idx])
+        blocks = {"VADER": slice(0, 4), "BERT": slice(4, 11), "GoEmotions": slice(11, ML_DIM), "Context": slice(ML_DIM, FEATURE_DIM)}
         impacts = {}
         for name, sl in blocks.items():
-            x_masked          = feature_vector.copy()
-            x_masked[0, sl]   = 0.0
-            masked_proba      = float(model.predict_proba(x_masked)[0][class_idx])
-            impacts[name]     = abs(base_proba - masked_proba)
-
+            m = feature_vector.copy(); m[0, sl] = 0.0
+            impacts[name] = abs(base_proba - float(model.predict_proba(m)[0][idx]))
         total = sum(impacts.values())
-        if total > 0:
-            return {k: round(v / total, 4) for k, v in impacts.items()}
-        return {k: 0.25 for k in impacts}
-
+        return {k: round(v / total, 4) for k, v in impacts.items()} if total > 0 else {k: 0.25 for k in impacts}
     except Exception as e:
         logger.warning(f"Failed to calculate impacts: {e}")
         return {}
 
 
-def apply_context_correction(
-    scores: dict,
-    context_vector: list,
-    prev_emotion: str = "neutral",
-) -> Tuple[dict, float]:
-    """
-    Passthrough stub — superseded by native context gating in GatingEnsembleNet.
-
-    The v2 network learns valence-based routing end-to-end; post-hoc additive
-    blending with hard thresholds is no longer needed.  This stub is kept so
-    main.py compiles without modification during Phase 2 migration.
-    """
+def apply_context_correction(scores, context_vector, prev_emotion="neutral"):
     return scores, 0.0
 
 
-# ── Private helpers ─────────────────────────────────────────────────────────────
-
-def _log_metadata() -> None:
+def _log_metadata():
     try:
         if os.path.exists(DEFAULT_META_PATH):
             with open(DEFAULT_META_PATH) as f:
