@@ -32,7 +32,6 @@ output_utf8.txt
 .env
 docs/*
 agents/
-!docs/.env.example
 
 # ── IDE / OS ───────────────────────────────────
 .DS_Store
