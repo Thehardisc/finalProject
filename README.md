@@ -232,7 +232,6 @@ api_service/                 REST + WebSocket API, auth
 frontend_service/            React app
 shared/                      cross-service constants, module registry, logging
 qa_suite/                    functional + non-functional test suite
-agents/                      dev-tooling multi-agent CLI (not a runtime service)
 conversation_state_learner/  offline trajectory/sarcasm training + data collection
 docs/                        architecture notes, development journal, capstone report
 ```
