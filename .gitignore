@@ -10,7 +10,8 @@ htmlcov/
 coverage.xml
 venv/
 .venv/
-qa_suite/qa_calibration_prompt.md
+qa_suite/*.md
+
 # ── Node / Frontend ────────────────────────────
 node_modules/
 frontend_service/dist/
